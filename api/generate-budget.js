@@ -1,3 +1,31 @@
+function extrairTextoResposta(data) {
+  if (typeof data?.output_text === "string" && data.output_text.trim()) {
+    return data.output_text.trim();
+  }
+
+  const partes = [];
+
+  if (Array.isArray(data?.output)) {
+    for (const item of data.output) {
+      if (Array.isArray(item?.content)) {
+        for (const content of item.content) {
+          if (typeof content?.text === "string") partes.push(content.text);
+          if (typeof content?.output_text === "string") partes.push(content.output_text);
+        }
+      }
+    }
+  }
+
+  return partes.join("\n").trim();
+}
+
+function limparJson(texto) {
+  return String(texto || "")
+    .replace(/```json/gi, "")
+    .replace(/```/g, "")
+    .trim();
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Método não permitido." });
@@ -25,10 +53,12 @@ export default async function handler(req, res) {
 
         return {
           id: emp.id,
-          nome: emp.nome,
+          nome: emp.nome || "",
+          nomeFantasia: emp.nomeFantasia || "",
           tom: emp.tom || "",
           dnaLinguagem: emp.dnaLinguagem || "",
           estruturaOrcamento: emp.estruturaOrcamento || "",
+          diferenciais: emp.diferenciais || "",
           valorGlobal: s.valorGlobal || "",
         };
       })
@@ -51,7 +81,7 @@ Cada empresa possui regras próprias cadastradas nos campos "dnaLinguagem" e "es
 Você deve respeitar rigorosamente as regras de cada empresa.
 Não misture estilos entre empresas.
 
-REGRAS GERAIS:
+REGRAS GERAIS OBRIGATÓRIAS:
 - Não inventar informações.
 - Não criar datas.
 - Não criar prazos.
@@ -62,8 +92,10 @@ REGRAS GERAIS:
 - Não usar linguagem promocional.
 - Não fugir da estrutura cadastrada.
 - Usar apenas as informações fornecidas pelo usuário.
-- Se alguma informação não foi fornecida, não preencher com suposição.
+- Se alguma informação não foi fornecida, deixe o campo vazio ou escreva apenas o que for tecnicamente seguro.
 - Gerar cada orçamento de forma individual, respeitando a personalidade da empresa correspondente.
+- O valor global deve ser usado somente se estiver informado na seleção da empresa.
+- Não criar prazo de execução, validade, garantia ou data de emissão.
 
 CLIENTE / DESTINATÁRIO:
 ${cliente}
@@ -77,7 +109,7 @@ ${obs || "Não informado."}
 EMPRESAS SELECIONADAS:
 ${JSON.stringify(empresasSelecionadas, null, 2)}
 
-RETORNE SOMENTE JSON VÁLIDO, SEM MARKDOWN, NESTE FORMATO:
+RETORNE SOMENTE JSON VÁLIDO, SEM MARKDOWN, NESTE FORMATO EXATO:
 
 {
   "itens": [
@@ -105,7 +137,7 @@ RETORNE SOMENTE JSON VÁLIDO, SEM MARKDOWN, NESTE FORMATO:
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "gpt-4.1-mini",
+        model: process.env.OPENAI_BUDGET_MODEL || "gpt-4.1-mini",
         input: prompt,
         temperature: 0.2,
       }),
@@ -119,10 +151,7 @@ RETORNE SOMENTE JSON VÁLIDO, SEM MARKDOWN, NESTE FORMATO:
       });
     }
 
-    const outputText =
-      data.output_text ||
-      data.output?.[0]?.content?.[0]?.text ||
-      "";
+    const outputText = extrairTextoResposta(data);
 
     if (!outputText) {
       return res.status(500).json({
@@ -133,12 +162,7 @@ RETORNE SOMENTE JSON VÁLIDO, SEM MARKDOWN, NESTE FORMATO:
     let parsed;
 
     try {
-      parsed = JSON.parse(
-        outputText
-          .replace(/```json/g, "")
-          .replace(/```/g, "")
-          .trim()
-      );
+      parsed = JSON.parse(limparJson(outputText));
     } catch {
       return res.status(500).json({
         error: "A IA retornou um formato inválido.",
@@ -146,8 +170,20 @@ RETORNE SOMENTE JSON VÁLIDO, SEM MARKDOWN, NESTE FORMATO:
       });
     }
 
-    return res.status(200).json(parsed);
+    if (!parsed.empresas || typeof parsed.empresas !== "object") {
+      return res.status(500).json({
+        error: "A IA não retornou os orçamentos por empresa.",
+        raw: parsed,
+      });
+    }
+
+    return res.status(200).json({
+      itens: Array.isArray(parsed.itens) ? parsed.itens : [],
+      empresas: parsed.empresas,
+    });
   } catch (error) {
+    console.error("Erro em generate-budget:", error);
+
     return res.status(500).json({
       error: error.message || "Erro interno ao gerar orçamento.",
     });
