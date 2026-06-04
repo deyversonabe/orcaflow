@@ -61,7 +61,7 @@ async function logOp(acao, nome, id) {
 }
 
 const uid = () => `emp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-const orcNum = () => `ORC-${new Date().getFullYear()}-${String(Math.floor(Math.random() * 9000) + 1000)}`;
+const orcNum = () => `ORC-${String(Math.floor(Math.random() * 900000) + 100000)}`;
 const brl = (v) => (parseFloat(v) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 const tsFmt = (iso) => {
   try {
@@ -419,6 +419,8 @@ function Toast({ toast }) {
 }
 
 function OrcaFlowLogo({ onClick }) {
+  const [logoErro, setLogoErro] = useState(false);
+
   return (
     <button
       onClick={onClick}
@@ -426,6 +428,7 @@ function OrcaFlowLogo({ onClick }) {
       style={{
         display: "flex",
         alignItems: "center",
+        gap: 9,
         background: "transparent",
         border: 0,
         cursor: "pointer",
@@ -435,16 +438,34 @@ function OrcaFlowLogo({ onClick }) {
       onMouseEnter={(e) => (e.currentTarget.style.transform = "translateY(-1px)")}
       onMouseLeave={(e) => (e.currentTarget.style.transform = "none")}
     >
-      <img
-        src="/logo-orcaflow.png"
-        alt="OrçaFlow"
-        style={{
-          height: 42,
-          width: "auto",
-          objectFit: "contain",
-          display: "block",
-        }}
-      />
+      {!logoErro && (
+        <img
+          src="/logo-orcaflow.png"
+          alt="OrçaFlow"
+          onError={() => setLogoErro(true)}
+          style={{
+            height: 42,
+            width: "auto",
+            objectFit: "contain",
+            display: "block",
+          }}
+        />
+      )}
+
+      {logoErro && (
+        <span
+          style={{
+            fontSize: 21,
+            fontWeight: 950,
+            letterSpacing: -0.5,
+            color: BRAND.text,
+            lineHeight: 1,
+          }}
+        >
+          Orça<span style={{ color: BRAND.green }}>Flow</span>
+          <span style={{ color: BRAND.blue, fontSize: 12, marginLeft: 4 }}>AI</span>
+        </span>
+      )}
     </button>
   );
 }
@@ -892,8 +913,6 @@ function ModalEmpresa({ empresa, onSave, onCancel, salvando, pushToast }) {
 }
 
 function OrcamentoDoc({ emp, dados, editando, onChange }) {
-  const hoje = new Date().toLocaleDateString("pt-BR");
-  const validade = new Date(Date.now() + 30 * 86400000).toLocaleDateString("pt-BR");
   const difs = (emp.diferenciais || "").split(",").map((d) => d.trim()).filter(Boolean);
 
   const F = ({ campo, multiline }) => {
@@ -925,7 +944,7 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
           <div style={{ position: "absolute", top: 10, right: 18, background: "rgba(0,0,0,.58)", backdropFilter: "blur(4px)", borderRadius: 9, padding: "8px 13px", textAlign: "right" }}>
             <div style={{ fontSize: 8, color: "rgba(255,255,255,.72)", letterSpacing: 1.5 }}>PROPOSTA COMERCIAL</div>
             <div style={{ fontSize: 13, fontWeight: 900, color: "#fff", fontFamily: "monospace" }}>{dados.numero}</div>
-            <div style={{ fontSize: 8, color: "rgba(255,255,255,.65)" }}>{hoje} · válido até {validade}</div>
+            
           </div>
         </div>
       ) : (
@@ -937,7 +956,7 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
           <div style={{ textAlign: "right", background: "rgba(0,0,0,.18)", borderRadius: 10, padding: "11px 16px" }}>
             <div style={{ fontSize: 8, color: "rgba(255,255,255,.65)", letterSpacing: 1.5 }}>PROPOSTA COMERCIAL</div>
             <div style={{ fontSize: 15, fontWeight: 900, color: "#fff", fontFamily: "monospace" }}>{dados.numero}</div>
-            <div style={{ fontSize: 8, color: "rgba(255,255,255,.6)" }}>Emitido: {hoje} · Válido: {validade}</div>
+            
           </div>
         </div>
       )}
@@ -949,7 +968,11 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
         </div>
 
         <div style={{ marginBottom: 18 }}><span style={secLbl}>APRESENTAÇÃO</span><div style={{ lineHeight: 1.85 }}><F campo="intro" multiline /></div></div>
+        {(dados.campos?.objetivo || editando) && <div style={{ marginBottom: 18 }}><span style={secLbl}>OBJETIVO</span><div style={{ lineHeight: 1.85 }}><F campo="objetivo" multiline /></div></div>}
         <div style={{ marginBottom: 18 }}><span style={secLbl}>ESCOPO DO SERVIÇO</span><div style={{ lineHeight: 1.85 }}><F campo="escopo" multiline /></div></div>
+        {(dados.campos?.materiais || editando) && <div style={{ marginBottom: 18 }}><span style={secLbl}>MATERIAIS E EQUIPAMENTOS</span><div style={{ lineHeight: 1.85 }}><F campo="materiais" multiline /></div></div>}
+        {(dados.campos?.consideracoes || editando) && <div style={{ marginBottom: 18 }}><span style={secLbl}>CONSIDERAÇÕES TÉCNICAS</span><div style={{ lineHeight: 1.85 }}><F campo="consideracoes" multiline /></div></div>}
+        {(dados.campos?.recursos || editando) && <div style={{ marginBottom: 18 }}><span style={secLbl}>RECURSOS OPERACIONAIS</span><div style={{ lineHeight: 1.85 }}><F campo="recursos" multiline /></div></div>}
 
         {dados.itensIA?.length > 0 && (
           <div style={{ marginBottom: 18 }}>
@@ -983,7 +1006,7 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
           <div>
             <div style={{ width: 170, borderBottom: `1px solid ${emp.corPrimaria || BRAND.green2}44`, marginBottom: 7 }} />
             <div style={{ fontFamily: emp.fonteCorpo, fontSize: (Number(emp.tamanhoCorpo) || 12) - 1, fontWeight: 800, color: emp.corTexto || "#0F172A" }}>{emp.assinatura || emp.nome}</div>
-            <div style={{ fontFamily: emp.fonteCorpo, fontSize: (Number(emp.tamanhoCorpo) || 12) - 2, color: "#64748B" }}>Data: {hoje}</div>
+            
           </div>
           {emp.logo && <img src={emp.logo} style={{ maxHeight: 36, maxWidth: 110, objectFit: "contain", opacity: 0.18 }} alt="" />}
         </div>
@@ -1016,6 +1039,8 @@ export default function App() {
   const [activeTab, setActiveTab] = useState(null);
   const [editando, setEditando] = useState(false);
   const [step, setStep] = useState("montagem");
+  const [transcrevendo, setTranscrevendo] = useState(false);
+  const refAudio = useRef(null);
   const MAX = 3;
 
   const handleSalvar = async (form) => {
@@ -1072,6 +1097,69 @@ export default function App() {
       .filter((l) => l.length > 15)
       .slice(0, 6);
     return linhas.length >= 3 ? linhas : ["Levantamento e alinhamento das necessidades", "Execução dos serviços descritos", "Fornecimento de recursos operacionais necessários", "Testes, validação e entrega final"];
+  };
+
+  const anexarAudioTranscrever = async (file) => {
+    if (!file) return;
+
+    const nome = (file.name || "").toLowerCase();
+    const formatosPermitidos = [".ogg", ".opus", ".mp3", ".wav", ".m4a", ".mp4", ".webm"];
+    const formatoValido = formatosPermitidos.some((ext) => nome.endsWith(ext));
+
+    if (!formatoValido) {
+      pushToast("Formato inválido. Envie .ogg, .opus, .mp3, .wav, .m4a, .mp4 ou .webm.", "erro");
+      return;
+    }
+
+    const limiteMB = 25;
+    if (file.size > limiteMB * 1024 * 1024) {
+      pushToast(`Arquivo muito grande. Limite máximo: ${limiteMB} MB.`, "erro");
+      return;
+    }
+
+    setTranscrevendo(true);
+    setIaStatus("Transcrevendo áudio...");
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const response = await fetch("/api/transcribe", {
+        method: "POST",
+        body: formData,
+      });
+
+      let data = {};
+      try {
+        data = await response.json();
+      } catch {
+        throw new Error("A resposta da transcrição veio inválida.");
+      }
+
+      if (!response.ok) {
+        throw new Error(data.error || "Falha ao transcrever o arquivo.");
+      }
+
+      const textoTranscrito = String(data.text || "").trim();
+
+      if (!textoTranscrito) {
+        throw new Error("A transcrição voltou vazia.");
+      }
+
+      setTexto((atual) => {
+        const textoAtual = String(atual || "").trim();
+        if (!textoAtual) return textoTranscrito;
+        return `${textoAtual}\n\n${textoTranscrito}`;
+      });
+
+      pushToast("Áudio transcrito com sucesso. Revise o texto antes de gerar o orçamento.", "ok");
+    } catch (error) {
+      console.error("Erro na transcrição:", error);
+      pushToast(error.message || "Erro ao transcrever áudio.", "erro");
+    } finally {
+      setTranscrevendo(false);
+      setIaStatus("");
+    }
   };
 
   const handleGerar = async () => {
@@ -1253,7 +1341,38 @@ export default function App() {
           </div>
 
           <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column" }}>
-            {step === "montagem" && <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 14, maxWidth: 820 }}><div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 14, padding: "15px 17px" }}><div style={{ fontSize: 9, fontWeight: 900, color: BRAND.green, letterSpacing: 2, marginBottom: 10 }}>📋 DADOS DO ORÇAMENTO</div><div style={{ fontSize: 9, color: BRAND.dim, fontWeight: 800, letterSpacing: 1, marginBottom: 6 }}>CLIENTE / EMPRESA DESTINATÁRIA *</div><input value={cliente} onChange={(e) => setCliente(e.target.value)} placeholder="Ex: Grupo Industrial Martins S.A." style={INP} /></div><div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 14, padding: "15px 17px" }}><div style={{ fontSize: 9, fontWeight: 900, color: BRAND.green, letterSpacing: 2, marginBottom: 6 }}>✍️ DESCRIÇÃO DO SERVIÇO *</div><div style={{ fontSize: 11, color: BRAND.dim, marginBottom: 10, lineHeight: 1.6 }}>Descreva o serviço com detalhes para montar o orçamento.</div><textarea value={texto} onChange={(e) => setTexto(e.target.value)} rows={8} placeholder="Descreva o serviço completo aqui..." style={{ ...INP, resize: "vertical", minHeight: 160, lineHeight: 1.75 }} /><div style={{ display: "flex", justifyContent: "space-between", marginTop: 6 }}><span style={{ fontSize: 10, color: texto.length > 60 ? BRAND.green : BRAND.dim }}>{texto.length > 60 ? "✓ Suficiente para análise" : "⚠ Adicione mais detalhes"}</span><span style={{ fontSize: 10, color: BRAND.dim }}>{texto.length} chars</span></div></div><div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 14, padding: "14px 17px" }}><div style={{ fontSize: 9, fontWeight: 900, color: BRAND.dim, letterSpacing: 2, marginBottom: 8 }}>📌 OBSERVAÇÕES OPCIONAIS</div><textarea value={obs} onChange={(e) => setObs(e.target.value)} rows={2} placeholder="Prazos, condições especiais, restrições..." style={{ ...INP, resize: "vertical" }} /></div></div>}
+            {step === "montagem" && <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 14, maxWidth: 820 }}><div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 14, padding: "15px 17px" }}><div style={{ fontSize: 9, fontWeight: 900, color: BRAND.green, letterSpacing: 2, marginBottom: 10 }}>📋 DADOS DO ORÇAMENTO</div><div style={{ fontSize: 9, color: BRAND.dim, fontWeight: 800, letterSpacing: 1, marginBottom: 6 }}>CLIENTE / EMPRESA DESTINATÁRIA *</div><input value={cliente} onChange={(e) => setCliente(e.target.value)} placeholder="Ex: Grupo Industrial Martins S.A." style={INP} /></div><div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 14, padding: "15px 17px" }}><div style={{ fontSize: 9, fontWeight: 900, color: BRAND.green, letterSpacing: 2, marginBottom: 6 }}>✍️ DESCRIÇÃO DO SERVIÇO *</div><div style={{ fontSize: 11, color: BRAND.dim, marginBottom: 10, lineHeight: 1.6 }}>Descreva o serviço com detalhes para montar o orçamento.</div><textarea value={texto} onChange={(e) => setTexto(e.target.value)} rows={8} placeholder="Descreva o serviço completo aqui..." style={{ ...INP, resize: "vertical", minHeight: 160, lineHeight: 1.75 }} />
+                <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                  <input
+                    ref={refAudio}
+                    type="file"
+                    accept=".ogg,.opus,.mp3,.wav,.m4a,.mp4,.webm,audio/*,video/mp4,video/webm"
+                    style={{ display: "none" }}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = "";
+                      anexarAudioTranscrever(file);
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => refAudio.current?.click()}
+                    disabled={transcrevendo}
+                    style={{
+                      padding: "8px 13px",
+                      borderRadius: 9,
+                      border: `1px solid ${BRAND.blue2}55`,
+                      background: transcrevendo ? BRAND.border2 : `${BRAND.blue2}18`,
+                      color: transcrevendo ? BRAND.dim : "#93C5FD",
+                      cursor: transcrevendo ? "not-allowed" : "pointer",
+                      fontSize: 12,
+                      fontWeight: 850,
+                    }}
+                  >
+                    {transcrevendo ? "Transcrevendo áudio..." : "📎 Anexar áudio/vídeo"}
+                  </button>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6 }}><span style={{ fontSize: 10, color: texto.length > 60 ? BRAND.green : BRAND.dim }}>{texto.length > 60 ? "✓ Suficiente para análise" : "⚠ Adicione mais detalhes"}</span><span style={{ fontSize: 10, color: BRAND.dim }}>{texto.length} chars</span></div></div><div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 14, padding: "14px 17px" }}><div style={{ fontSize: 9, fontWeight: 900, color: BRAND.dim, letterSpacing: 2, marginBottom: 8 }}>📌 OBSERVAÇÕES OPCIONAIS</div><textarea value={obs} onChange={(e) => setObs(e.target.value)} rows={2} placeholder="Condições especiais, restrições ou observações complementares..." style={{ ...INP, resize: "vertical" }} /></div></div>}
 
             {step === "preview" && <div style={{ padding: "16px 18px" }}><div style={{ display: "flex", gap: 6, marginBottom: 13, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}><div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{empsSel.map((emp) => <button key={emp.id} onClick={() => setActiveTab(emp.id)} style={{ padding: "7px 14px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 850, border: `2px solid ${activeTab === emp.id ? emp.corPrimaria || BRAND.green2 : BRAND.border2}`, background: activeTab === emp.id ? `${emp.corPrimaria || BRAND.green2}1e` : BRAND.panel, color: activeTab === emp.id ? "#fff" : BRAND.dim }}>{emp.nome}</button>)}</div><button onClick={() => setEditando((v) => !v)} style={{ padding: "7px 13px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 850, border: `1px solid ${editando ? BRAND.warn : BRAND.border2}`, background: editando ? `${BRAND.warn}14` : "transparent", color: editando ? "#FBBF24" : BRAND.dim }}>{editando ? "✏ Editando" : "✏ Editar"}</button></div>{activeTab && orcamentos[activeTab] && (() => { const emp = empresas.find((e) => e.id === activeTab); return emp ? <OrcamentoDoc emp={emp} dados={orcamentos[activeTab]} editando={editando} onChange={(c, v) => fieldChange(activeTab, c, v)} /> : null; })()}</div>}
 
