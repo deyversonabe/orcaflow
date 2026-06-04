@@ -85,17 +85,42 @@ const TONS = [
 ];
 
 const FONTES = [
+  { id: "Arial", label: "Arial", cat: "Sans" },
+  { id: "Arial Narrow", label: "Arial Narrow", cat: "Sans" },
+  { id: "Arial Black", label: "Arial Black", cat: "Sans" },
+  { id: "Calibri", label: "Calibri", cat: "Sans" },
+  { id: "Calibri Light", label: "Calibri Light", cat: "Sans" },
+  { id: "Cambria", label: "Cambria", cat: "Serif" },
+  { id: "Candara", label: "Candara", cat: "Sans" },
+  { id: "Century Gothic", label: "Century Gothic", cat: "Sans" },
+  { id: "Consolas", label: "Consolas", cat: "Mono" },
+  { id: "Constantia", label: "Constantia", cat: "Serif" },
+  { id: "Corbel", label: "Corbel", cat: "Sans" },
+  { id: "Courier New", label: "Courier New", cat: "Mono" },
+  { id: "Garamond", label: "Garamond", cat: "Serif" },
   { id: "Georgia", label: "Georgia", cat: "Serif" },
-  { id: "Palatino Linotype", label: "Palatino", cat: "Serif" },
+  { id: "Helvetica", label: "Helvetica", cat: "Sans" },
+  { id: "Lucida Console", label: "Lucida Console", cat: "Mono" },
+  { id: "Lucida Sans Unicode", label: "Lucida Sans Unicode", cat: "Sans" },
+  { id: "Palatino Linotype", label: "Palatino Linotype", cat: "Serif" },
+  { id: "Segoe UI", label: "Segoe UI", cat: "Sans" },
+  { id: "Segoe UI Light", label: "Segoe UI Light", cat: "Sans" },
+  { id: "Tahoma", label: "Tahoma", cat: "Sans" },
   { id: "Times New Roman", label: "Times New Roman", cat: "Serif" },
   { id: "Trebuchet MS", label: "Trebuchet MS", cat: "Sans" },
   { id: "Verdana", label: "Verdana", cat: "Sans" },
-  { id: "Tahoma", label: "Tahoma", cat: "Sans" },
-  { id: "Century Gothic", label: "Century Gothic", cat: "Sans" },
-  { id: "Courier New", label: "Courier New", cat: "Mono" },
 ];
-const T_TITULO = [18, 20, 22, 24, 26, 28, 32, 36];
-const T_CORPO = [10, 11, 12, 13, 14, 15, 16];
+
+const T_TITULO = [
+  8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+  21, 22, 23, 24, 25, 26, 27, 28, 30, 32, 34, 36, 38,
+  40, 42, 44, 46, 48, 50, 54, 60, 66, 72
+];
+
+const T_CORPO = [
+  8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+  21, 22, 23, 24, 26, 28, 30, 32, 36
+];
 
 function empVazio() {
   return {
@@ -401,10 +426,8 @@ function OrcaFlowLogo({ onClick }) {
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 10,
         background: "transparent",
         border: 0,
-        color: BRAND.text,
         cursor: "pointer",
         padding: 0,
         transition: "all .25s ease",
@@ -412,28 +435,74 @@ function OrcaFlowLogo({ onClick }) {
       onMouseEnter={(e) => (e.currentTarget.style.transform = "translateY(-1px)")}
       onMouseLeave={(e) => (e.currentTarget.style.transform = "none")}
     >
-      <span
+      <img
+        src="/logo-orcaflow.png"
+        alt="OrçaFlow"
         style={{
-          width: 34,
-          height: 34,
-          borderRadius: 12,
-          background: `linear-gradient(135deg, ${BRAND.green}, ${BRAND.blue2})`,
+          height: 42,
+          width: "auto",
+          objectFit: "contain",
+          display: "block",
+        }}
+      />
+    </button>
+  );
+}
+
+function Lbl({ c, err }) {
+  return (
+    <div
+      style={{
+        fontSize: 10,
+        fontWeight: 800,
+        color: err ? BRAND.danger : "#6B7A90",
+        letterSpacing: 1.15,
+        marginBottom: 6,
+      }}
+    >
+      {c}
+      {err && ` — ${err}`}
+    </div>
+  );
+}
+
+function Sec({ t, children, action }) {
+  return (
+    <div style={{ marginBottom: 21 }}>
+      <div
+        style={{
           display: "flex",
+          justifyContent: "space-between",
           alignItems: "center",
-          justifyContent: "center",
-          boxShadow: `0 0 22px ${BRAND.green2}44`,
-          transform: "rotate(45deg)",
-          flexShrink: 0,
+          gap: 10,
+          fontSize: 10,
+          fontWeight: 900,
+          color: BRAND.green,
+          letterSpacing: 2,
+          marginBottom: 12,
+          paddingBottom: 7,
+          borderBottom: `1px solid ${BRAND.border}`,
         }}
       >
-        <span style={{ transform: "rotate(-45deg)", fontWeight: 900, fontSize: 15 }}>📄</span>
-      </span>
-      <span style={{ display: "flex", alignItems: "baseline", gap: 2 }}>
-        <span style={{ color: "#fff", fontSize: 19, fontWeight: 950, letterSpacing: "-.8px" }}>Orça</span>
-        <span style={{ color: BRAND.green, fontSize: 19, fontWeight: 950, letterSpacing: "-.8px" }}>Flow</span>
-        <span style={{ color: BRAND.blue, fontSize: 10, fontWeight: 800, marginLeft: 3 }}>AI</span>
-      </span>
-    </button>
+        <span>{t}</span>
+        {action}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function Row({ children }) {
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "1fr 1fr",
+        gap: 12,
+      }}
+    >
+      {children}
+    </div>
   );
 }
 
@@ -527,36 +596,6 @@ function ModalEmpresa({ empresa, onSave, onCancel, salvando, pushToast }) {
   };
   const TXT = { ...INP, resize: "vertical", lineHeight: 1.65 };
 
-  const Lbl = ({ c, err }) => (
-    <div style={{ fontSize: 10, fontWeight: 800, color: err ? BRAND.danger : "#6B7A90", letterSpacing: 1.15, marginBottom: 6 }}>
-      {c}
-      {err && ` — ${err}`}
-    </div>
-  );
-  const Sec = ({ t, children, action }) => (
-    <div style={{ marginBottom: 21 }}>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          gap: 10,
-          fontSize: 10,
-          fontWeight: 900,
-          color: BRAND.green,
-          letterSpacing: 2,
-          marginBottom: 12,
-          paddingBottom: 7,
-          borderBottom: `1px solid ${BRAND.border}`,
-        }}
-      >
-        <span>{t}</span>
-        {action}
-      </div>
-      {children}
-    </div>
-  );
-  const Row = ({ children }) => <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>{children}</div>;
 
   const ABAS = [
     ["dados", "📋 Dados"],
@@ -1037,30 +1076,79 @@ export default function App() {
 
   const handleGerar = async () => {
     if (!canGerar || gerando) return;
+
     setGerando(true);
-    setIaStatus("Montando orçamentos…");
-    const itens = gerarItens(texto);
-    const novos = {};
-    for (const s of selecao) {
-      const e = empresas.find((x) => x.id === s.empId);
-      novos[s.empId] = {
-        numero: orcNum(),
-        valorGlobal: s.valorGlobal,
-        itensIA: itens,
-        campos: {
-          cliente,
-          intro: `Apresentamos a presente proposta comercial para ${cliente}, elaborada conforme as informações fornecidas e alinhada ao perfil ${e?.tom || "profissional"} da empresa ${e?.nome || "selecionada"}.`,
-          escopo: texto,
-          fechamento: obs || "Permanecemos à disposição para eventuais esclarecimentos e alinhamentos necessários para continuidade do processo.",
+    setIaStatus("Gerando orçamentos com IA...");
+
+    try {
+      const response = await fetch("/api/generate-budget", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
         },
-      };
+        body: JSON.stringify({
+          cliente,
+          texto,
+          obs,
+          empresas,
+          selecao,
+        }),
+      });
+
+      let data = {};
+
+      try {
+        data = await response.json();
+      } catch {
+        throw new Error("A IA retornou uma resposta inválida.");
+      }
+
+      if (!response.ok) {
+        throw new Error(data.error || "Erro ao gerar orçamento com IA.");
+      }
+
+      const novos = {};
+
+      for (const s of selecao) {
+        const ed = data.empresas?.[s.empId] || {};
+
+        novos[s.empId] = {
+          numero: orcNum(),
+          empresaId: s.empId,
+          valorGlobal: s.valorGlobal || "",
+          criadoEm: new Date().toISOString(),
+          itensIA: Array.isArray(data.itens) ? data.itens : [],
+          retornoIA: ed,
+          campos: {
+            cliente,
+            intro: ed.intro || "",
+            objetivo: ed.objetivo || "",
+            escopo: ed.escopo || texto,
+            materiais: ed.materiais || "",
+            consideracoes: ed.consideracoes || "",
+            recursos: ed.recursos || "",
+            fechamento: ed.fechamento || "",
+          },
+        };
+      }
+
+      setOrcamentos(novos);
+
+      if (selecao.length > 0) {
+        setActiveTab(selecao[0].empId);
+      }
+
+      await incOrcamentos(selecao.length);
+
+      pushToast("Orçamentos gerados com IA. Revise antes de exportar.", "ok");
+      setStep("preview");
+    } catch (error) {
+      console.error("Erro ao gerar orçamento:", error);
+      pushToast(error.message || "Erro ao gerar orçamento com IA.", "erro");
+    } finally {
+      setGerando(false);
+      setIaStatus("");
     }
-    await incOrcamentos(selecao.length);
-    setOrcamentos(novos);
-    setActiveTab(selecao[0].empId);
-    setGerando(false);
-    setIaStatus("");
-    setStep("preview");
   };
 
   const fieldChange = (empId, campo, val) => setOrcamentos((prev) => ({ ...prev, [empId]: { ...prev[empId], campos: { ...prev[empId].campos, [campo]: val } } }));
