@@ -311,6 +311,36 @@ async function lerTextoPDF(file) {
   return texto;
 }
 
+async function pdfParaImagemTimbrado(file) {
+  const pdfjsLib = await import(
+    /* @vite-ignore */ "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs"
+  );
+
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
+
+  const buffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+  const page = await pdf.getPage(1);
+
+  const viewport = page.getViewport({ scale: 3 });
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+
+  ctx.fillStyle = "#FFFFFF";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  await page.render({
+    canvasContext: ctx,
+    viewport,
+  }).promise;
+
+  return canvas.toDataURL("image/png", 1);
+}
+
 function useDB() {
   const [empresas, setEmpresas] = useState([]);
   const [status, setStatus] = useState("carregando");
@@ -585,6 +615,59 @@ function ModalEmpresa({ empresa, onSave, onCancel, salvando, pushToast }) {
     };
     reader.onerror = () => alert("Erro ao ler arquivo.");
     reader.readAsDataURL(file);
+  };
+
+  const uploadPapelTimbrado = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+
+    if (!file) return;
+
+    const nome = file.name.toLowerCase();
+    const isPdf = file.type === "application/pdf" || nome.endsWith(".pdf");
+    const isImage = file.type.startsWith("image/");
+
+    if (!isPdf && !isImage) {
+      pushToast("Envie o papel timbrado em PDF, PNG ou JPG.", "erro");
+      return;
+    }
+
+    if (file.size > 8 * 1024 * 1024) {
+      pushToast("Arquivo muito grande. Envie até 8 MB.", "erro");
+      return;
+    }
+
+    try {
+      if (isPdf) {
+        pushToast("Convertendo papel timbrado PDF em imagem...", "aviso");
+        const imagem = await pdfParaImagemTimbrado(file);
+
+        set("papelTimbrado", imagem);
+        set("papelTimbradoNome", file.name);
+        set("altoCabecalho", 120);
+        set("altoRodape", 110);
+
+        pushToast("Papel timbrado em PDF convertido com sucesso.", "ok");
+        return;
+      }
+
+      const reader = new FileReader();
+
+      reader.onload = (ev) => {
+        set("papelTimbrado", ev.target.result);
+        set("papelTimbradoNome", file.name);
+        pushToast("Papel timbrado anexado com sucesso.", "ok");
+      };
+
+      reader.onerror = () => {
+        pushToast("Erro ao ler o papel timbrado.", "erro");
+      };
+
+      reader.readAsDataURL(file);
+    } catch (error) {
+      console.error(error);
+      pushToast("Erro ao converter o PDF do papel timbrado.", "erro");
+    }
   };
 
   const importarCartao = async (e) => {
@@ -879,11 +962,17 @@ function ModalEmpresa({ empresa, onSave, onCancel, salvando, pushToast }) {
                         <>
                           <div style={{ fontSize: 28, opacity: 0.35, marginBottom: 6 }}>📑</div>
                           <div style={{ fontSize: 12, color: BRAND.muted }}>Enviar papel timbrado</div>
-                          <div style={{ fontSize: 10, color: BRAND.dim, marginTop: 2 }}>PNG · JPG · A4 · max 2 MB</div>
+                          <div style={{ fontSize: 10, color: BRAND.dim, marginTop: 2 }}>PDF · PNG · JPG · A4 · max 8 MB</div>
                         </>
                       )}
                     </div>
-                    <input ref={refPapel} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => uploadImagem("papelTimbrado", "papelTimbradoNome", e)} />
+                    <input
+                      ref={refPapel}
+                      type="file"
+                      accept="image/*,application/pdf,.pdf"
+                      style={{ display: "none" }}
+                      onChange={uploadPapelTimbrado}
+                    />
                     {form.papelTimbrado && (
                       <>
                         <button onClick={() => { set("papelTimbrado", null); set("papelTimbradoNome", ""); }} style={{ marginTop: 7, width: "100%", padding: "6px", borderRadius: 8, border: `1px solid ${BRAND.danger}55`, background: "transparent", color: BRAND.danger, cursor: "pointer", fontSize: 11 }}>Remover timbrado</button>
@@ -959,17 +1048,17 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
       padding: "7px 10px",
       fontFamily: emp.fonteCorpo,
       fontSize: Number(emp.tamanhoCorpo) || 12,
-      color: emp.corTexto || "#0F172A",
+      color: "#000000",
       background: emp.corFundo || "#fff",
       outline: "none",
       lineHeight: 1.75,
       boxSizing: "border-box",
     };
-    if (!editando) return <span style={{ fontFamily: emp.fonteCorpo, fontSize: Number(emp.tamanhoCorpo) || 12, color: emp.corTexto || "#0F172A" }}>{val}</span>;
+    if (!editando) return <span style={{ fontFamily: emp.fonteCorpo, fontSize: Number(emp.tamanhoCorpo) || 12, color: "#000000" }}>{val}</span>;
     return multiline ? <textarea value={val} rows={3} onChange={(e) => onChange(campo, e.target.value)} style={{ ...base, resize: "vertical", minHeight: 58 }} /> : <input value={val} onChange={(e) => onChange(campo, e.target.value)} style={base} />;
   };
 
-  const secLbl = { fontSize: 9, fontWeight: 900, color: emp.corPrimaria || BRAND.green2, letterSpacing: 2.2, fontFamily: "sans-serif", marginBottom: 7, display: "block" };
+  const secLbl = { fontSize: 9, fontWeight: 900, color: "#000000", letterSpacing: 2.2, fontFamily: "sans-serif", marginBottom: 7, display: "block" };
 
   return (
     <div style={{ background: emp.corFundo || "#fff", border: "1px solid #E2E8F0", borderRadius: 14, overflow: "hidden", boxShadow: "0 10px 44px rgba(0,0,0,.2)", animation: "ofCardIn .28s ease both" }}>
@@ -999,7 +1088,7 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
       <div style={{ padding: "25px 30px" }}>
         <div style={{ marginBottom: 18, padding: "12px 15px", background: `${emp.corPrimaria || BRAND.green2}14`, borderRadius: 9, borderLeft: `4px solid ${emp.corPrimaria || BRAND.green2}` }}>
           <span style={secLbl}>DESTINATÁRIO</span>
-          <div style={{ fontFamily: emp.fonteCorpo, fontSize: (Number(emp.tamanhoCorpo) || 12) + 1, fontWeight: 800, color: emp.corTexto || "#0F172A" }}><F campo="cliente" /></div>
+          <div style={{ fontFamily: emp.fonteCorpo, fontSize: (Number(emp.tamanhoCorpo) || 12) + 1, fontWeight: 800, color: "#000000" }}><F campo="cliente" /></div>
         </div>
 
         <div style={{ marginBottom: 18 }}><span style={secLbl}>APRESENTAÇÃO</span><div style={{ lineHeight: 1.85 }}><F campo="intro" multiline /></div></div>
@@ -1017,7 +1106,7 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
               <tbody>
                 {dados.itensIA.map((it, i) => (
                   <tr key={i} style={{ background: i % 2 === 0 ? `${emp.corPrimaria || BRAND.green2}0a` : emp.corFundo || "#fff", borderBottom: `1px solid ${emp.corPrimaria || BRAND.green2}18` }}>
-                    <td style={{ padding: "10px 13px", fontFamily: emp.fonteCorpo, fontSize: Number(emp.tamanhoCorpo) || 12, color: emp.corTexto || "#0F172A" }}>{it}</td>
+                    <td style={{ padding: "10px 13px", fontFamily: emp.fonteCorpo, fontSize: Number(emp.tamanhoCorpo) || 12, color: "#000000" }}>{it}</td>
                     <td style={{ padding: "10px 13px", textAlign: "center" }}><span style={{ padding: "3px 9px", borderRadius: 12, background: `${emp.corPrimaria || BRAND.green2}18`, color: emp.corSecundaria || BRAND.blue2, fontSize: 8.5, fontWeight: 800 }}>Incluído</span></td>
                   </tr>
                 ))}
@@ -1040,7 +1129,7 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
         <div style={{ borderTop: `2px solid ${emp.corPrimaria || BRAND.green2}`, paddingTop: 16, display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
           <div>
             <div style={{ width: 170, borderBottom: `1px solid ${emp.corPrimaria || BRAND.green2}44`, marginBottom: 7 }} />
-            <div style={{ fontFamily: emp.fonteCorpo, fontSize: (Number(emp.tamanhoCorpo) || 12) - 1, fontWeight: 800, color: emp.corTexto || "#0F172A" }}>{emp.assinatura || emp.nome}</div>
+            <div style={{ fontFamily: emp.fonteCorpo, fontSize: (Number(emp.tamanhoCorpo) || 12) - 1, fontWeight: 800, color: "#000000" }}>{emp.assinatura || emp.nome}</div>
             
           </div>
           {emp.logo && <img src={emp.logo} style={{ maxHeight: 36, maxWidth: 110, objectFit: "contain", opacity: 0.18 }} alt="" />}
@@ -1802,42 +1891,60 @@ export default function App() {
 
       const marginX = 48;
       const maxW = pageW - marginX * 2;
-      let y = 64;
+      const topMargin = Math.max(Number(emp.altoCabecalho) || 120, 72);
+      const bottomMargin = Math.max(Number(emp.altoRodape) || 90, 58);
+      let y = topMargin;
 
       const addBase = () => {
         if (emp.papelTimbrado) {
           try {
-            pdf.addImage(emp.papelTimbrado, imageTypeFromDataUrl(emp.papelTimbrado), 0, 0, pageW, pageH);
+            pdf.addImage(
+              emp.papelTimbrado,
+              imageTypeFromDataUrl(emp.papelTimbrado),
+              0,
+              0,
+              pageW,
+              pageH,
+              undefined,
+              "FAST"
+            );
           } catch (e) {
             console.warn("Não foi possível aplicar o papel timbrado:", e);
           }
-          y = Math.max(Number(emp.altoCabecalho) || 120, 86);
-        } else {
-          pdf.setFillColor(emp.corPrimaria || BRAND.green2);
-          pdf.rect(0, 0, pageW, 92, "F");
-
-          if (emp.logo) {
-            try {
-              pdf.addImage(emp.logo, imageTypeFromDataUrl(emp.logo), marginX, 22, 90, 46);
-            } catch (e) {
-              console.warn("Não foi possível aplicar a logo:", e);
-            }
-          }
-
-          pdf.setFont(titleFont, "bold");
-          pdf.setFontSize(13);
-          pdf.setTextColor(255, 255, 255);
-          pdf.text(emp.nome || "Proposta Comercial", emp.logo ? marginX + 105 : marginX, 45);
-
-          pdf.setFont("helvetica", "bold");
-          pdf.setFontSize(10);
-          pdf.text(dados.numero || orcNum(), pageW - marginX, 44, { align: "right" });
-          y = 122;
+          y = topMargin;
+          return;
         }
+
+        // Fallback quando não houver timbrado cadastrado.
+        pdf.setFillColor(255, 255, 255);
+        pdf.rect(0, 0, pageW, pageH, "F");
+
+        if (emp.logo) {
+          try {
+            pdf.addImage(emp.logo, imageTypeFromDataUrl(emp.logo), marginX, 28, 95, 48, undefined, "FAST");
+          } catch (e) {
+            console.warn("Não foi possível aplicar a logo:", e);
+          }
+        }
+
+        pdf.setDrawColor(0, 0, 0);
+        pdf.setLineWidth(0.6);
+        pdf.line(marginX, 92, pageW - marginX, 92);
+
+        pdf.setFont(titleFont, "bold");
+        pdf.setFontSize(13);
+        pdf.setTextColor(0, 0, 0);
+        pdf.text(emp.nome || "Proposta Comercial", emp.logo ? marginX + 110 : marginX, 52);
+
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(10);
+        pdf.setTextColor(0, 0, 0);
+        pdf.text(dados.numero || orcNum(), pageW - marginX, 52, { align: "right" });
+        y = 122;
       };
 
       const ensure = (h = 60) => {
-        if (y + h > pageH - Math.max(Number(emp.altoRodape) || 60, 58)) {
+        if (y + h > pageH - bottomMargin) {
           pdf.addPage();
           addBase();
         }
@@ -1850,17 +1957,17 @@ export default function App() {
         ensure(70);
         pdf.setFont("helvetica", "bold");
         pdf.setFontSize(10);
-        pdf.setTextColor(22, 163, 74);
+        pdf.setTextColor(0, 0, 0);
         pdf.text(String(titulo).toUpperCase(), marginX, y);
         y += 18;
 
         pdf.setFont(bodyFont, "normal");
         pdf.setFontSize(bodySize);
-        pdf.setTextColor(15, 23, 42);
+        pdf.setTextColor(0, 0, 0);
 
         const linhas = pdf.splitTextToSize(valor, maxW);
         for (const linha of linhas) {
-          ensure(18);
+          ensure(bodySize + 8);
           pdf.text(linha, marginX, y);
           y += bodySize + 5;
         }
@@ -1871,7 +1978,7 @@ export default function App() {
 
       pdf.setFont(titleFont, "bold");
       pdf.setFontSize(titleSize);
-      pdf.setTextColor(15, 23, 42);
+      pdf.setTextColor(0, 0, 0);
       pdf.text("PROPOSTA COMERCIAL", marginX, y);
       y += 28;
 
@@ -1891,12 +1998,12 @@ export default function App() {
         ensure(72);
         pdf.setFont("helvetica", "bold");
         pdf.setFontSize(11);
-        pdf.setTextColor(22, 163, 74);
+        pdf.setTextColor(0, 0, 0);
         pdf.text("VALOR GLOBAL", marginX, y);
         y += 20;
         pdf.setFont(titleFont, "bold");
         pdf.setFontSize(Math.max(16, Math.min(titleSize, 24)));
-        pdf.setTextColor(15, 23, 42);
+        pdf.setTextColor(0, 0, 0);
         pdf.text(brl(dados.valorGlobal), marginX, y);
         y += 28;
       }
@@ -1904,19 +2011,20 @@ export default function App() {
       writeSection("Fechamento", dados.campos?.fechamento);
 
       ensure(70);
-      pdf.setDrawColor(22, 163, 74);
+      pdf.setDrawColor(0, 0, 0);
+      pdf.setLineWidth(0.5);
       pdf.line(marginX, y + 10, marginX + 180, y + 10);
       y += 28;
       pdf.setFont(bodyFont, "bold");
       pdf.setFontSize(bodySize);
-      pdf.setTextColor(15, 23, 42);
+      pdf.setTextColor(0, 0, 0);
       pdf.text(emp.assinatura || emp.nome || "Responsável", marginX, y);
 
       const rodape = emp.rodape || `${emp.nome || ""}${emp.cnpj ? ` | ${emp.cnpj}` : ""}${emp.email ? ` | ${emp.email}` : ""}${emp.telefone ? ` | ${emp.telefone}` : ""}`;
-      if (rodape) {
+      if (rodape && !emp.papelTimbrado) {
         pdf.setFont(bodyFont, "normal");
         pdf.setFontSize(8);
-        pdf.setTextColor(71, 85, 105);
+        pdf.setTextColor(0, 0, 0);
         pdf.text(pdf.splitTextToSize(rodape, pageW - 70), pageW / 2, pageH - 28, { align: "center" });
       }
 
@@ -1927,6 +2035,7 @@ export default function App() {
       pushToast(error.message || "Erro ao baixar PDF.", "erro");
     }
   };
+
 
   const baixarTodosPDF = async () => {
     for (const emp of empsSel) {
