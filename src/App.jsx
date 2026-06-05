@@ -19,6 +19,36 @@ const KEY_USERS = "orcaflow_users";
 const KEY_SESSION = "orcaflow_session";
 const KEY_RESET = "orcaflow_reset_senha";
 
+const ADMIN_PADRAO = {
+  id: "admin-master",
+  nome: "admin",
+  senha: "260310",
+  tipo: "admin",
+  perfil: "Administrador",
+  ativo: true,
+  criadoEm: new Date().toISOString(),
+};
+
+const usuariosBase = [
+  ADMIN_PADRAO,
+  {
+    id: "user-michel",
+    nome: "Michel",
+    senha: "123456",
+    tipo: "usuario",
+    perfil: "Usuário",
+    ativo: true,
+    criadoEm: new Date().toISOString(),
+  },
+];
+
+function isAdminProtegido(usuario) {
+  return (
+    usuario?.id === "admin-master" ||
+    String(usuario?.nome || "").toLowerCase() === "admin"
+  );
+}
+
 const BRAND = {
   bg: "#050B14",
   panel: "#0A1525",
@@ -1504,8 +1534,32 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
   };
 
   const salvarUsuarios = (nova) => {
-    setUsuarios(nova);
-    store.set(KEY_USERS, nova);
+    const normalizada = [...nova].map((u) => {
+      if (isAdminProtegido(u)) {
+        return {
+          ...u,
+          id: "admin-master",
+          nome: "admin",
+          senha: "260310",
+          tipo: "admin",
+          perfil: "Administrador",
+          ativo: true,
+        };
+      }
+
+      return {
+        ...u,
+        tipo: u.tipo || "usuario",
+        perfil: u.perfil || "Usuário",
+        ativo: u.ativo !== false,
+      };
+    });
+
+    const existeAdmin = normalizada.some((u) => isAdminProtegido(u));
+    const final = existeAdmin ? normalizada : [ADMIN_PADRAO, ...normalizada];
+
+    setUsuarios(final);
+    store.set(KEY_USERS, final);
   };
 
   const criarUsuario = () => {
@@ -1513,21 +1567,57 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
       pushToast("Informe nome e senha para criar o perfil.", "erro");
       return;
     }
+
+    if (String(nome).trim().toLowerCase() === "admin") {
+      pushToast("O usuário administrador já existe e é protegido.", "erro");
+      return;
+    }
+
     const novo = {
       id: `user_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       nome: nome.trim(),
       senha,
       tipo: "usuario",
+      perfil: "Usuário",
       ativo: true,
       criadoEm: new Date().toISOString(),
     };
+
     salvarUsuarios([...usuarios, novo]);
     setNome("");
     setSenha("");
     pushToast("Perfil criado com sucesso.", "ok");
   };
 
-  const alterar = (id, campo, valor) => salvarUsuarios(usuarios.map((u) => (u.id === id ? { ...u, [campo]: valor } : u)));
+  const editarUsuario = (usuario) => {
+    if (isAdminProtegido(usuario)) {
+      pushToast("Usuário administrador protegido.", "erro");
+      return false;
+    }
+
+    return true;
+  };
+
+  const alterar = (id, campo, valor) => {
+    const usuario = usuarios.find((u) => u.id === id);
+
+    if (!editarUsuario(usuario)) return;
+
+    salvarUsuarios(usuarios.map((u) => (u.id === id ? { ...u, [campo]: valor } : u)));
+  };
+
+  const excluirUsuario = (id) => {
+    const usuario = usuarios.find((u) => u.id === id);
+
+    if (isAdminProtegido(usuario)) {
+      pushToast("O usuário administrador não pode ser removido.", "erro");
+      return;
+    }
+
+    const novaLista = usuarios.filter((u) => u.id !== id);
+    salvarUsuarios(novaLista);
+    pushToast("Usuário removido com sucesso.", "ok");
+  };
 
   const entrarComo = (u) => {
     if (!u.ativo) {
@@ -1581,17 +1671,18 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
 
       <div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 16, overflow: "hidden" }}>
         {usuarios.map((u) => (
-          <div key={u.id} style={{ display: "grid", gridTemplateColumns: "1fr .7fr .7fr .7fr", gap: 8, alignItems: "center", padding: "11px 14px", borderBottom: `1px solid ${BRAND.border2}` }}>
+          <div key={u.id} style={{ display: "grid", gridTemplateColumns: "1fr .7fr .7fr .7fr .55fr", gap: 8, alignItems: "center", padding: "11px 14px", borderBottom: `1px solid ${BRAND.border2}` }}>
             <div>
               <div style={{ fontSize: 13, fontWeight: 900 }}>{u.nome}</div>
-              <div style={{ fontSize: 10, color: BRAND.dim }}>{u.tipo} · {u.ativo ? "ativo" : "cancelado"}</div>
+              <div style={{ fontSize: 10, color: BRAND.dim }}>{u.perfil || u.tipo} · {u.ativo ? "ativo" : "cancelado"}</div>
             </div>
-            <select value={u.tipo} disabled={u.id === "admin"} onChange={(e) => alterar(u.id, "tipo", e.target.value)} style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, color: BRAND.text, borderRadius: 9, padding: 8, fontSize: 12 }}>
+            <select value={u.tipo} disabled={isAdminProtegido(u)} onChange={(e) => alterar(u.id, "tipo", e.target.value)} style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, color: BRAND.text, borderRadius: 9, padding: 8, fontSize: 12 }}>
               <option value="admin">admin</option>
               <option value="usuario">usuario</option>
             </select>
-            <button disabled={u.id === "admin"} onClick={() => alterar(u.id, "ativo", !u.ativo)} style={{ padding: 8, borderRadius: 9, border: `1px solid ${u.ativo ? BRAND.danger : BRAND.green2}55`, background: "transparent", color: u.ativo ? BRAND.danger : BRAND.green, fontWeight: 850, cursor: u.id === "admin" ? "not-allowed" : "pointer" }}>{u.ativo ? "Cancelar" : "Ativar"}</button>
+            <button disabled={isAdminProtegido(u)} onClick={() => alterar(u.id, "ativo", !u.ativo)} style={{ padding: 8, borderRadius: 9, border: `1px solid ${u.ativo ? BRAND.danger : BRAND.green2}55`, background: "transparent", color: u.ativo ? BRAND.danger : BRAND.green, fontWeight: 850, cursor: isAdminProtegido(u) ? "not-allowed" : "pointer" }}>{u.ativo ? "Cancelar" : "Ativar"}</button>
             <button onClick={() => entrarComo(u)} style={{ padding: 8, borderRadius: 9, border: `1px solid ${BRAND.blue2}55`, background: `${BRAND.blue2}12`, color: "#93C5FD", fontWeight: 850, cursor: "pointer" }}>Usar perfil</button>
+            <button disabled={isAdminProtegido(u)} onClick={() => excluirUsuario(u.id)} style={{ padding: 8, borderRadius: 9, border: `1px solid ${BRAND.danger}55`, background: "transparent", color: BRAND.danger, fontWeight: 850, cursor: isAdminProtegido(u) ? "not-allowed" : "pointer" }}>Excluir</button>
           </div>
         ))}
       </div>
@@ -1621,15 +1712,65 @@ export default function App() {
   useEffect(() => {
     (async () => {
       const salvos = (await store.get(KEY_USERS)) || [];
-      const base = salvos.length ? salvos : [{ id: "admin", nome: "admin", senha: "260310", tipo: "admin", ativo: true, criadoEm: new Date().toISOString() }];
-      if (!salvos.length) await store.set(KEY_USERS, base);
+
+      let base = Array.isArray(salvos) && salvos.length ? [...salvos] : [...usuariosBase];
+
+      const existeAdmin = base.some(
+        (u) => String(u.nome || "").toLowerCase() === "admin"
+      );
+
+      if (!existeAdmin) {
+        base.unshift(ADMIN_PADRAO);
+      }
+
+      base = base.map((u) => {
+        if (String(u.nome || "").toLowerCase() === "admin") {
+          return {
+            ...u,
+            id: "admin-master",
+            nome: "admin",
+            senha: "260310",
+            tipo: "admin",
+            perfil: "Administrador",
+            ativo: true,
+          };
+        }
+
+        return {
+          ...u,
+          tipo: u.tipo || "usuario",
+          perfil: u.perfil || "Usuário",
+          ativo: u.ativo !== false,
+        };
+      });
+
+      const existeMichel = base.some(
+        (u) => String(u.nome || "").toLowerCase() === "michel"
+      );
+
+      if (!existeMichel) {
+        base.push({
+          id: "user-michel",
+          nome: "Michel",
+          senha: "123456",
+          tipo: "usuario",
+          perfil: "Usuário",
+          ativo: true,
+          criadoEm: new Date().toISOString(),
+        });
+      }
+
+      await store.set(KEY_USERS, base);
       setUsuarios(base);
+
       const sessao = await store.get(KEY_SESSION);
       const userSessao = base.find((u) => u.id === sessao && u.ativo);
+
       if (userSessao) {
         setUsuarioAtual(userSessao);
         setAutenticado(true);
       }
+
       setCrm((await store.get(KEY_CRM)) || []);
     })();
   }, []);
