@@ -1,5 +1,3 @@
-Corrigir e me de copia e cole proto 
-
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
 // ─────────────────────────────────────────────────────────────────────────────
