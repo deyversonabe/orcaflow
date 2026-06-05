@@ -14,6 +14,9 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 const KEY_EMP = "orcaflow_empresas";
 const KEY_LOG = "orcaflow_log";
 const KEY_META = "orcaflow_meta";
+const KEY_CRM = "orcaflow_crm_orcamentos";
+const KEY_USERS = "orcaflow_users";
+const KEY_SESSION = "orcaflow_session";
 
 const BRAND = {
   bg: "#050B14",
@@ -31,6 +34,55 @@ const BRAND = {
   danger: "#F87171",
   warn: "#F59E0B",
 };
+
+const UI = {
+  title: 14,
+  text: 12,
+  small: 10,
+};
+
+function safeFileName(v = "arquivo") {
+  return String(v)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 80) || "arquivo";
+}
+
+function imageTypeFromDataUrl(dataUrl = "") {
+  if (String(dataUrl).includes("image/png")) return "PNG";
+  if (String(dataUrl).includes("image/webp")) return "WEBP";
+  return "JPEG";
+}
+
+function mapPdfFont(font = "") {
+  const f = String(font).toLowerCase();
+  if (f.includes("times") || f.includes("georgia") || f.includes("garamond") || f.includes("cambria") || f.includes("constantia") || f.includes("palatino")) return "times";
+  if (f.includes("courier") || f.includes("consolas") || f.includes("lucida console")) return "courier";
+  return "helvetica";
+}
+
+function diasAte(data) {
+  if (!data) return null;
+  const hoje = new Date();
+  hoje.setHours(0, 0, 0, 0);
+  const alvo = new Date(data + "T00:00:00");
+  if (Number.isNaN(alvo.getTime())) return null;
+  return Math.ceil((alvo.getTime() - hoje.getTime()) / 86400000);
+}
+
+function gerarTextoWhatsPendencias(lista, empresas = []) {
+  const pendentes = lista.filter((o) => o.status !== "Finalizado");
+  if (!pendentes.length) return "Não há orçamentos pendentes no momento.";
+  const linhas = pendentes.map((o, i) => {
+    const emp = empresas.find((e) => e.id === o.empresaId)?.nome || o.empresaNome || "Empresa";
+    const dt = o.proximoContato ? ` | próximo contato: ${new Date(o.proximoContato + "T00:00:00").toLocaleDateString("pt-BR")}` : "";
+    return `${i + 1}. ${o.cliente || "Cliente"} — ${emp} — ${o.numero || "sem número"} — ${brl(o.valorGlobal)} — ${o.status}${dt}`;
+  });
+  return `Relatório de orçamentos pendentes\n\n${linhas.join("\n")}\n\nOrçaFlow CRM`;
+}
 
 const store = {
   async get(key) {
@@ -1001,6 +1053,244 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
   );
 }
 
+
+function CRMPanel({ crm, setCrm, empresas, pushToast, usuarioAtual }) {
+  const [busca, setBusca] = useState("");
+  const [statusFiltro, setStatusFiltro] = useState("Todos");
+  const [empresaFiltro, setEmpresaFiltro] = useState("Todas");
+  const [whats, setWhats] = useState("");
+
+  const isAdmin = usuarioAtual?.tipo === "admin";
+  const visiveisPorUsuario = isAdmin ? crm : crm.filter((o) => o.userId === usuarioAtual?.id);
+  const lista = visiveisPorUsuario.filter((o) => {
+    const alvo = `${o.cliente || ""} ${o.empresaNome || ""} ${o.numero || ""} ${o.status || ""}`.toLowerCase();
+    const okBusca = !busca || alvo.includes(busca.toLowerCase());
+    const okStatus = statusFiltro === "Todos" || o.status === statusFiltro;
+    const okEmpresa = empresaFiltro === "Todas" || o.empresaId === empresaFiltro;
+    return okBusca && okStatus && okEmpresa;
+  });
+
+  const totais = {
+    aberto: visiveisPorUsuario.filter((o) => o.status === "Aberto").length,
+    andamento: visiveisPorUsuario.filter((o) => o.status === "Andamento").length,
+    finalizado: visiveisPorUsuario.filter((o) => o.status === "Finalizado").length,
+    vencidos: visiveisPorUsuario.filter((o) => o.status !== "Finalizado" && diasAte(o.proximoContato) !== null && diasAte(o.proximoContato) < 0).length,
+  };
+
+  const salvarCRM = (nova) => {
+    setCrm(nova);
+    store.set(KEY_CRM, nova);
+  };
+
+  const updateItem = (id, campo, valor) => {
+    salvarCRM(crm.map((o) => (o.id === id ? { ...o, [campo]: valor, atualizadoEm: new Date().toISOString() } : o)));
+  };
+
+  const criarLembretesIA = () => {
+    const nova = crm.map((o) => {
+      if (o.status === "Finalizado") return o;
+      if (o.lembreteIA) return o;
+      const atraso = diasAte(o.proximoContato);
+      let texto = `Fazer follow-up do orçamento ${o.numero || ""} com ${o.cliente || "cliente"}.`;
+      if (atraso !== null && atraso < 0) texto = `Cobrança urgente: orçamento ${o.numero || ""} de ${o.cliente || "cliente"} está com contato atrasado.`;
+      if (atraso === 0) texto = `Entrar em contato hoje com ${o.cliente || "cliente"} sobre o orçamento ${o.numero || ""}.`;
+      return { ...o, lembreteIA: texto };
+    });
+    salvarCRM(nova);
+    pushToast("Lembretes de cobrança criados para os orçamentos em aberto.", "ok");
+  };
+
+  const notificarHoje = async () => {
+    const hoje = new Date().toISOString().slice(0, 10);
+    const vencidosHoje = visiveisPorUsuario.filter((o) => o.status !== "Finalizado" && (!o.proximoContato || o.proximoContato <= hoje));
+    if (!vencidosHoje.length) {
+      pushToast("Não há cobranças pendentes para hoje.", "aviso");
+      return;
+    }
+    if ("Notification" in window) {
+      const perm = await Notification.requestPermission();
+      if (perm === "granted") {
+        new Notification("OrçaFlow CRM", { body: `${vencidosHoje.length} orçamento(s) precisam de acompanhamento hoje.` });
+      }
+    }
+    pushToast(`${vencidosHoje.length} orçamento(s) pendente(s) para acompanhar.`, "ok");
+  };
+
+  const abrirWhats = () => {
+    const numero = onlyDigits(whats);
+    if (!numero || numero.length < 10) {
+      pushToast("Informe o WhatsApp com DDD para enviar o relatório.", "erro");
+      return;
+    }
+    const msg = gerarTextoWhatsPendencias(visiveisPorUsuario, empresas);
+    window.open(`https://wa.me/55${numero.replace(/^55/, "")}?text=${encodeURIComponent(msg)}`, "_blank");
+  };
+
+  const card = (label, valor, cor) => (
+    <div style={{ background: BRAND.panel, border: `1px solid ${cor}33`, borderRadius: 16, padding: 16 }}>
+      <div style={{ fontSize: 24, fontWeight: 950, color: cor }}>{valor}</div>
+      <div style={{ fontSize: 12, color: BRAND.muted, marginTop: 4 }}>{label}</div>
+    </div>
+  );
+
+  return (
+    <div style={{ flex: 1, overflowY: "auto", padding: 18, width: "100%", boxSizing: "border-box" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 950 }}>CRM de Orçamentos</div>
+          <div style={{ fontSize: 12, color: BRAND.dim, marginTop: 3 }}>Busca, acompanhamento, status, follow-up e lembretes de cobrança.</div>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button onClick={criarLembretesIA} style={{ padding: "9px 14px", borderRadius: 10, border: `1px solid ${BRAND.blue2}66`, background: `${BRAND.blue2}18`, color: "#93C5FD", fontWeight: 900, cursor: "pointer" }}>IA criar lembretes</button>
+          <button onClick={notificarHoje} style={{ padding: "9px 14px", borderRadius: 10, border: `1px solid ${BRAND.warn}66`, background: `${BRAND.warn}18`, color: "#FBBF24", fontWeight: 900, cursor: "pointer" }}>Notificar pendentes</button>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,minmax(130px,1fr))", gap: 12, marginBottom: 16 }}>
+        {card("Abertos", totais.aberto, BRAND.blue)}
+        {card("Em andamento", totais.andamento, BRAND.warn)}
+        {card("Finalizados", totais.finalizado, BRAND.green)}
+        {card("Atrasados", totais.vencidos, BRAND.danger)}
+      </div>
+
+      <div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 16, padding: 14, marginBottom: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 10 }}>
+          <input value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar por cliente, orçamento, empresa ou status..." style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, borderRadius: 10, padding: "10px 12px", color: BRAND.text, fontSize: 12, outline: "none" }} />
+          <select value={statusFiltro} onChange={(e) => setStatusFiltro(e.target.value)} style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, borderRadius: 10, padding: "10px 12px", color: BRAND.text, fontSize: 12 }}>
+            {["Todos", "Aberto", "Andamento", "Finalizado"].map((s) => <option key={s}>{s}</option>)}
+          </select>
+          <select value={empresaFiltro} onChange={(e) => setEmpresaFiltro(e.target.value)} style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, borderRadius: 10, padding: "10px 12px", color: BRAND.text, fontSize: 12 }}>
+            <option value="Todas">Todas as empresas</option>
+            {empresas.map((e) => <option key={e.id} value={e.id}>{e.nome}</option>)}
+          </select>
+        </div>
+      </div>
+
+      <div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 16, overflow: "hidden", marginBottom: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr .8fr .9fr .9fr 1.2fr", gap: 8, padding: "10px 12px", background: BRAND.panel2, color: BRAND.muted, fontSize: 10, fontWeight: 900, letterSpacing: 1 }}>
+          <div>CLIENTE</div><div>EMPRESA</div><div>VALOR</div><div>STATUS</div><div>PRÓXIMO CONTATO</div><div>LEMBRETE</div>
+        </div>
+        {lista.length === 0 ? (
+          <div style={{ padding: 26, textAlign: "center", color: BRAND.dim, fontSize: 13 }}>Nenhum orçamento encontrado no CRM.</div>
+        ) : lista.map((o) => (
+          <div key={o.id} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr .8fr .9fr .9fr 1.2fr", gap: 8, alignItems: "center", padding: "10px 12px", borderTop: `1px solid ${BRAND.border2}` }}>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 850 }}>{o.cliente || "—"}</div>
+              <div style={{ fontSize: 10, color: BRAND.dim }}>{o.numero || "—"} · {tsFmt(o.criadoEm)}</div>
+            </div>
+            <div style={{ fontSize: 12, color: BRAND.muted }}>{o.empresaNome || "—"}</div>
+            <div style={{ fontSize: 12, fontWeight: 850 }}>{brl(o.valorGlobal)}</div>
+            <select value={o.status || "Aberto"} onChange={(e) => updateItem(o.id, "status", e.target.value)} style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, color: BRAND.text, borderRadius: 9, padding: 8, fontSize: 12 }}>
+              {["Aberto", "Andamento", "Finalizado"].map((s) => <option key={s}>{s}</option>)}
+            </select>
+            <input type="date" value={o.proximoContato || ""} onChange={(e) => updateItem(o.id, "proximoContato", e.target.value)} style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, color: BRAND.text, borderRadius: 9, padding: 8, fontSize: 12 }} />
+            <textarea value={o.lembreteIA || ""} onChange={(e) => updateItem(o.id, "lembreteIA", e.target.value)} placeholder="Lembrete de cobrança..." rows={2} style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, color: BRAND.text, borderRadius: 9, padding: 8, fontSize: 12, resize: "vertical" }} />
+          </div>
+        ))}
+      </div>
+
+      <div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 16, padding: 14 }}>
+        <div style={{ fontSize: 14, fontWeight: 950, marginBottom: 6 }}>Relatório para WhatsApp</div>
+        <div style={{ fontSize: 12, color: BRAND.dim, marginBottom: 10 }}>O navegador não envia WhatsApp agendado sozinho. Este botão abre o WhatsApp com o relatório pronto. Para envio automático programado, será necessário backend com API oficial da Meta/WhatsApp.</div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input value={whats} onChange={(e) => setWhats(e.target.value)} placeholder="DDD + número do WhatsApp do usuário" style={{ flex: 1, background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, borderRadius: 10, padding: "10px 12px", color: BRAND.text, fontSize: 12 }} />
+          <button onClick={abrirWhats} style={{ padding: "10px 14px", borderRadius: 10, border: 0, background: `linear-gradient(135deg, ${BRAND.green2}, ${BRAND.blue2})`, color: "#fff", fontWeight: 900, cursor: "pointer" }}>Enviar relatório</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, pushToast }) {
+  const [nome, setNome] = useState("");
+  const [senha, setSenha] = useState("");
+
+  const salvarUsuarios = (nova) => {
+    setUsuarios(nova);
+    store.set(KEY_USERS, nova);
+  };
+
+  const criarUsuario = () => {
+    if (!nome.trim() || !senha.trim()) {
+      pushToast("Informe nome e senha para criar o perfil.", "erro");
+      return;
+    }
+    const novo = {
+      id: `user_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      nome: nome.trim(),
+      senha,
+      tipo: "usuario",
+      ativo: true,
+      criadoEm: new Date().toISOString(),
+    };
+    salvarUsuarios([...usuarios, novo]);
+    setNome("");
+    setSenha("");
+    pushToast("Perfil criado com sucesso.", "ok");
+  };
+
+  const alterar = (id, campo, valor) => salvarUsuarios(usuarios.map((u) => (u.id === id ? { ...u, [campo]: valor } : u)));
+
+  const entrarComo = (u) => {
+    if (!u.ativo) {
+      pushToast("Este perfil está cancelado/inativo.", "erro");
+      return;
+    }
+    setUsuarioAtual(u);
+    store.set(KEY_SESSION, u.id);
+    pushToast(`Perfil ativo: ${u.nome}`, "ok");
+  };
+
+  if (usuarioAtual?.tipo !== "admin") {
+    return (
+      <div style={{ padding: 24 }}>
+        <div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 16, padding: 20, maxWidth: 520 }}>
+          <div style={{ fontSize: 16, fontWeight: 950, marginBottom: 6 }}>Perfil do usuário</div>
+          <div style={{ fontSize: 12, color: BRAND.muted }}>Usuário atual: {usuarioAtual?.nome || "—"}</div>
+          <div style={{ fontSize: 12, color: BRAND.dim, marginTop: 10 }}>Somente o administrador pode criar, ativar ou cancelar perfis.</div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ flex: 1, overflowY: "auto", padding: 18 }}>
+      <div style={{ fontSize: 18, fontWeight: 950, marginBottom: 4 }}>Administrador de Usuários</div>
+      <div style={{ fontSize: 12, color: BRAND.dim, marginBottom: 16 }}>Controle total dos perfis, ativação, cancelamento e acesso aos orçamentos.</div>
+
+      <div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 16, padding: 14, marginBottom: 16 }}>
+        <div style={{ fontSize: 14, fontWeight: 900, marginBottom: 10 }}>Criar perfil</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8 }}>
+          <input value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Nome do usuário" style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, borderRadius: 10, padding: "10px 12px", color: BRAND.text, fontSize: 12 }} />
+          <input value={senha} onChange={(e) => setSenha(e.target.value)} placeholder="Senha criada por você" style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, borderRadius: 10, padding: "10px 12px", color: BRAND.text, fontSize: 12 }} />
+          <button onClick={criarUsuario} style={{ padding: "10px 14px", borderRadius: 10, border: 0, background: `linear-gradient(135deg, ${BRAND.green2}, ${BRAND.blue2})`, color: "#fff", fontWeight: 900, cursor: "pointer" }}>Criar</button>
+        </div>
+      </div>
+
+      <div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 16, overflow: "hidden" }}>
+        {usuarios.map((u) => (
+          <div key={u.id} style={{ display: "grid", gridTemplateColumns: "1fr .7fr .7fr .7fr", gap: 8, alignItems: "center", padding: "11px 14px", borderBottom: `1px solid ${BRAND.border2}` }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 900 }}>{u.nome}</div>
+              <div style={{ fontSize: 10, color: BRAND.dim }}>{u.tipo} · {u.ativo ? "ativo" : "cancelado"}</div>
+            </div>
+            <select value={u.tipo} disabled={u.id === "admin"} onChange={(e) => alterar(u.id, "tipo", e.target.value)} style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, color: BRAND.text, borderRadius: 9, padding: 8, fontSize: 12 }}>
+              <option value="admin">admin</option>
+              <option value="usuario">usuario</option>
+            </select>
+            <button disabled={u.id === "admin"} onClick={() => alterar(u.id, "ativo", !u.ativo)} style={{ padding: 8, borderRadius: 9, border: `1px solid ${u.ativo ? BRAND.danger : BRAND.green2}55`, background: "transparent", color: u.ativo ? BRAND.danger : BRAND.green, fontWeight: 850, cursor: u.id === "admin" ? "not-allowed" : "pointer" }}>{u.ativo ? "Cancelar" : "Ativar"}</button>
+            <button onClick={() => entrarComo(u)} style={{ padding: 8, borderRadius: 9, border: `1px solid ${BRAND.blue2}55`, background: `${BRAND.blue2}12`, color: "#93C5FD", fontWeight: 850, cursor: "pointer" }}>Usar perfil</button>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ marginTop: 14, fontSize: 12, color: BRAND.warn, lineHeight: 1.6 }}>
+        MVP local: os usuários ficam no navegador atual. Para acesso real de qualquer lugar com senha segura, use Supabase Auth + PostgreSQL ou Neon + autenticação.
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const { empresas, status, meta, toast, salvarEmpresa, excluirEmpresa, exportarBackup, importarBackup, incOrcamentos, kbUsados, pushToast } = useDB();
   const [view, setView] = useState("orcamento");
@@ -1010,6 +1300,22 @@ export default function App() {
   const [logData, setLogData] = useState([]);
   const [logOpen, setLogOpen] = useState(false);
   const refImport = useRef(null);
+
+  const [crm, setCrm] = useState([]);
+  const [usuarios, setUsuarios] = useState([]);
+  const [usuarioAtual, setUsuarioAtual] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      const salvos = (await store.get(KEY_USERS)) || [];
+      const base = salvos.length ? salvos : [{ id: "admin", nome: "Administrador", senha: "admin123", tipo: "admin", ativo: true, criadoEm: new Date().toISOString() }];
+      if (!salvos.length) await store.set(KEY_USERS, base);
+      setUsuarios(base);
+      const sessao = await store.get(KEY_SESSION);
+      setUsuarioAtual(base.find((u) => u.id === sessao) || base[0]);
+      setCrm((await store.get(KEY_CRM)) || []);
+    })();
+  }, []);
 
   const [cliente, setCliente] = useState("");
   const [texto, setTexto] = useState("");
@@ -1203,6 +1509,29 @@ export default function App() {
       }
 
       setOrcamentos(novos);
+      const novosCRM = selecao.map((s) => {
+        const emp = empresas.find((e) => e.id === s.empId);
+        return {
+          id: `crm_${Date.now()}_${s.empId}`,
+          numero: novos[s.empId]?.numero || orcNum(),
+          empresaId: s.empId,
+          empresaNome: emp?.nome || "",
+          cliente,
+          valorGlobal: s.valorGlobal || "",
+          status: "Aberto",
+          proximoContato: "",
+          lembreteIA: "",
+          userId: usuarioAtual?.id || "admin",
+          criadoEm: new Date().toISOString(),
+          atualizadoEm: new Date().toISOString(),
+        };
+      });
+      setCrm((prev) => {
+        const atualizado = [...novosCRM, ...prev];
+        store.set(KEY_CRM, atualizado);
+        return atualizado;
+      });
+
 
       if (selecao.length > 0) {
         setActiveTab(selecao[0].empId);
@@ -1421,14 +1750,25 @@ export default function App() {
             <span style={{ width: 6, height: 6, borderRadius: "50%", background: corDB[status] || BRAND.warn }} />
             <span style={{ fontSize: 10, color: corDB[status] || BRAND.warn, fontWeight: 850 }}>{status === "carregando" ? "DB…" : status === "ok" ? `${empresas.length} emp.` : "ERRO"}</span>
           </div>
+          <div style={{ fontSize: 10, color: BRAND.muted, border: `1px solid ${BRAND.border2}`, borderRadius: 20, padding: "4px 9px" }}>
+            {usuarioAtual?.tipo === "admin" ? "Admin" : "Usuário"}: {usuarioAtual?.nome || "—"}
+          </div>
         </div>
 
         <div style={{ display: "flex", gap: 3, background: BRAND.bg, borderRadius: 10, padding: 4, border: `1px solid ${BRAND.border2}` }}>
-          {[["orcamento", "✦ Orçamento"], ["empresas", "🏢 Empresas"], ["banco", "🗄 Banco"]].map(([v, l]) => (
+          {[["orcamento", "✦ Orçamento"], ["crm", "📊 CRM"], ["empresas", "🏢 Empresas"], ["usuarios", "👥 Usuários"], ["banco", "🗄 Banco"]].map(([v, l]) => (
             <button key={v} onClick={() => setView(v)} style={{ padding: "7px 12px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 850, background: view === v ? `linear-gradient(135deg, ${BRAND.green2}, #15803D)` : "transparent", color: view === v ? "#fff" : BRAND.dim, transition: "all .22s ease" }}>{l}</button>
           ))}
         </div>
       </div>
+
+      {view === "crm" && (
+        <CRMPanel crm={crm} setCrm={setCrm} empresas={empresas} pushToast={pushToast} usuarioAtual={usuarioAtual} />
+      )}
+
+      {view === "usuarios" && (
+        <UsuariosPanel usuarios={usuarios} setUsuarios={setUsuarios} usuarioAtual={usuarioAtual} setUsuarioAtual={setUsuarioAtual} pushToast={pushToast} />
+      )}
 
       {view === "banco" && (
         <div style={{ flex: 1, overflowY: "auto", padding: "22px 16px", maxWidth: 980, margin: "0 auto", width: "100%", boxSizing: "border-box" }}>
