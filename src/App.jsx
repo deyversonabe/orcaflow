@@ -1,3 +1,5 @@
+Corrigir e me de copia e cole proto 
+
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -419,8 +421,6 @@ function Toast({ toast }) {
 }
 
 function OrcaFlowLogo({ onClick }) {
-  const [logoErro, setLogoErro] = useState(false);
-
   return (
     <button
       onClick={onClick}
@@ -428,44 +428,25 @@ function OrcaFlowLogo({ onClick }) {
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 9,
         background: "transparent",
-        border: 0,
+        border: "none",
         cursor: "pointer",
         padding: 0,
-        transition: "all .25s ease",
+        margin: 0,
       }}
-      onMouseEnter={(e) => (e.currentTarget.style.transform = "translateY(-1px)")}
-      onMouseLeave={(e) => (e.currentTarget.style.transform = "none")}
     >
-      {!logoErro && (
-        <img
-          src="/logo-orcaflow.png"
-          alt="OrçaFlow"
-          onError={() => setLogoErro(true)}
-          style={{
-            height: 42,
-            width: "auto",
-            objectFit: "contain",
-            display: "block",
-          }}
-        />
-      )}
-
-      {logoErro && (
-        <span
-          style={{
-            fontSize: 21,
-            fontWeight: 950,
-            letterSpacing: -0.5,
-            color: BRAND.text,
-            lineHeight: 1,
-          }}
-        >
-          Orça<span style={{ color: BRAND.green }}>Flow</span>
-          <span style={{ color: BRAND.blue, fontSize: 12, marginLeft: 4 }}>AI</span>
-        </span>
-      )}
+      <img
+        src="/logo-orcaflow.png"
+        alt="OrçaFlow"
+        style={{
+          height: 68,
+          width: "auto",
+          maxWidth: 280,
+          objectFit: "contain",
+          display: "block",
+          filter: "drop-shadow(0 8px 22px rgba(0, 176, 255, .22))",
+        }}
+      />
     </button>
   );
 }
@@ -496,10 +477,10 @@ function Sec({ t, children, action }) {
           justifyContent: "space-between",
           alignItems: "center",
           gap: 10,
-          fontSize: 10,
+          fontSize: UI.title,
           fontWeight: 900,
           color: BRAND.green,
-          letterSpacing: 2,
+          letterSpacing: 1.4,
           marginBottom: 12,
           paddingBottom: 7,
           borderBottom: `1px solid ${BRAND.border}`,
@@ -566,6 +547,9 @@ function ModalEmpresa({ empresa, onSave, onCancel, salvando, pushToast }) {
     setImportandoCNPJ(true);
     try {
       const texto = await lerTextoPDF(file);
+      if (!texto || texto.trim().length < 80) {
+        throw new Error("Este PDF parece ser imagem. Será necessário OCR.");
+      }
       const dados = extrairDadosCartaoCNPJ(texto);
       setForm((prev) => {
         const next = { ...prev };
@@ -589,7 +573,7 @@ function ModalEmpresa({ empresa, onSave, onCancel, salvando, pushToast }) {
       pushToast("Dados do Cartão CNPJ importados com sucesso. Confira antes de salvar.", "ok");
     } catch (error) {
       console.error(error);
-      pushToast("Não foi possível ler o PDF. Se for escaneado como imagem, será necessário OCR.", "erro");
+      pushToast(error.message || "Não foi possível ler o PDF. Se for escaneado como imagem, será necessário OCR.", "erro");
     } finally {
       setImportandoCNPJ(false);
     }
@@ -609,7 +593,7 @@ function ModalEmpresa({ empresa, onSave, onCancel, salvando, pushToast }) {
     borderRadius: 9,
     padding: "10px 12px",
     color: BRAND.text,
-    fontSize: 13,
+    fontSize: UI.text,
     outline: "none",
     boxSizing: "border-box",
     fontFamily: "inherit",
@@ -1241,7 +1225,164 @@ export default function App() {
 
   const fieldChange = (empId, campo, val) => setOrcamentos((prev) => ({ ...prev, [empId]: { ...prev[empId], campos: { ...prev[empId].campos, [campo]: val } } }));
 
-  const INP = { background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, borderRadius: 10, padding: "11px 14px", color: BRAND.text, fontSize: 14, outline: "none", width: "100%", boxSizing: "border-box", lineHeight: 1.6, fontFamily: "inherit", transition: "all .22s ease" };
+  const baixarPDF = async (empId) => {
+    const emp = empresas.find((e) => e.id === empId);
+    const dados = orcamentos[empId];
+
+    if (!emp || !dados) {
+      pushToast("Orçamento não encontrado para exportação.", "erro");
+      return;
+    }
+
+    try {
+      const { jsPDF } = await import(/* @vite-ignore */ "https://esm.sh/jspdf@2.5.1");
+      const pdf = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
+      const pageW = pdf.internal.pageSize.getWidth();
+      const pageH = pdf.internal.pageSize.getHeight();
+
+      const titleFont = mapPdfFont(emp.fonteTitulo);
+      const bodyFont = mapPdfFont(emp.fonteCorpo);
+      const titleSize = Number(emp.tamanhoTitulo) || 14;
+      const bodySize = Number(emp.tamanhoCorpo) || 12;
+
+      const marginX = 48;
+      const maxW = pageW - marginX * 2;
+      let y = 64;
+
+      const addBase = () => {
+        if (emp.papelTimbrado) {
+          try {
+            pdf.addImage(emp.papelTimbrado, imageTypeFromDataUrl(emp.papelTimbrado), 0, 0, pageW, pageH);
+          } catch (e) {
+            console.warn("Não foi possível aplicar o papel timbrado:", e);
+          }
+          y = Math.max(Number(emp.altoCabecalho) || 120, 86);
+        } else {
+          pdf.setFillColor(emp.corPrimaria || BRAND.green2);
+          pdf.rect(0, 0, pageW, 92, "F");
+
+          if (emp.logo) {
+            try {
+              pdf.addImage(emp.logo, imageTypeFromDataUrl(emp.logo), marginX, 22, 90, 46);
+            } catch (e) {
+              console.warn("Não foi possível aplicar a logo:", e);
+            }
+          }
+
+          pdf.setFont(titleFont, "bold");
+          pdf.setFontSize(13);
+          pdf.setTextColor(255, 255, 255);
+          pdf.text(emp.nome || "Proposta Comercial", emp.logo ? marginX + 105 : marginX, 45);
+
+          pdf.setFont("helvetica", "bold");
+          pdf.setFontSize(10);
+          pdf.text(dados.numero || orcNum(), pageW - marginX, 44, { align: "right" });
+          y = 122;
+        }
+      };
+
+      const ensure = (h = 60) => {
+        if (y + h > pageH - Math.max(Number(emp.altoRodape) || 60, 58)) {
+          pdf.addPage();
+          addBase();
+        }
+      };
+
+      const writeSection = (titulo, conteudo) => {
+        const valor = String(conteudo || "").trim();
+        if (!valor) return;
+
+        ensure(70);
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(10);
+        pdf.setTextColor(22, 163, 74);
+        pdf.text(String(titulo).toUpperCase(), marginX, y);
+        y += 18;
+
+        pdf.setFont(bodyFont, "normal");
+        pdf.setFontSize(bodySize);
+        pdf.setTextColor(15, 23, 42);
+
+        const linhas = pdf.splitTextToSize(valor, maxW);
+        for (const linha of linhas) {
+          ensure(18);
+          pdf.text(linha, marginX, y);
+          y += bodySize + 5;
+        }
+        y += 12;
+      };
+
+      addBase();
+
+      pdf.setFont(titleFont, "bold");
+      pdf.setFontSize(titleSize);
+      pdf.setTextColor(15, 23, 42);
+      pdf.text("PROPOSTA COMERCIAL", marginX, y);
+      y += 28;
+
+      writeSection("Destinatário", dados.campos?.cliente || cliente);
+      writeSection("Apresentação", dados.campos?.intro);
+      writeSection("Objetivo", dados.campos?.objetivo);
+      writeSection("Escopo Técnico", dados.campos?.escopo);
+      writeSection("Materiais e Equipamentos", dados.campos?.materiais);
+      writeSection("Considerações Técnicas", dados.campos?.consideracoes);
+      writeSection("Recursos Operacionais", dados.campos?.recursos);
+
+      if (Array.isArray(dados.itensIA) && dados.itensIA.length) {
+        writeSection("Itens Incluídos", dados.itensIA.map((item, i) => `${i + 1}. ${item}`).join("\n"));
+      }
+
+      if (dados.valorGlobal) {
+        ensure(72);
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(11);
+        pdf.setTextColor(22, 163, 74);
+        pdf.text("VALOR GLOBAL", marginX, y);
+        y += 20;
+        pdf.setFont(titleFont, "bold");
+        pdf.setFontSize(Math.max(16, Math.min(titleSize, 24)));
+        pdf.setTextColor(15, 23, 42);
+        pdf.text(brl(dados.valorGlobal), marginX, y);
+        y += 28;
+      }
+
+      writeSection("Fechamento", dados.campos?.fechamento);
+
+      ensure(70);
+      pdf.setDrawColor(22, 163, 74);
+      pdf.line(marginX, y + 10, marginX + 180, y + 10);
+      y += 28;
+      pdf.setFont(bodyFont, "bold");
+      pdf.setFontSize(bodySize);
+      pdf.setTextColor(15, 23, 42);
+      pdf.text(emp.assinatura || emp.nome || "Responsável", marginX, y);
+
+      const rodape = emp.rodape || `${emp.nome || ""}${emp.cnpj ? ` | ${emp.cnpj}` : ""}${emp.email ? ` | ${emp.email}` : ""}${emp.telefone ? ` | ${emp.telefone}` : ""}`;
+      if (rodape) {
+        pdf.setFont(bodyFont, "normal");
+        pdf.setFontSize(8);
+        pdf.setTextColor(71, 85, 105);
+        pdf.text(pdf.splitTextToSize(rodape, pageW - 70), pageW / 2, pageH - 28, { align: "center" });
+      }
+
+      pdf.save(`${safeFileName(emp.nome)}-${safeFileName(dados.numero || "orcamento")}.pdf`);
+      pushToast("PDF baixado com sucesso.", "ok");
+    } catch (error) {
+      console.error("Erro ao exportar PDF:", error);
+      pushToast(error.message || "Erro ao baixar PDF.", "erro");
+    }
+  };
+
+  const baixarTodosPDF = async () => {
+    for (const emp of empsSel) {
+      // Pequena pausa para evitar bloqueio de múltiplos downloads no navegador.
+      await baixarPDF(emp.id);
+      await new Promise((resolve) => setTimeout(resolve, 350));
+    }
+  };
+
+
+  const INP = { background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, borderRadius: 10, padding: "11px 14px", color: BRAND.text, fontSize: UI.text, outline: "none", width: "100%", boxSizing: "border-box", lineHeight: 1.6, fontFamily: "inherit", transition: "all .22s ease" };
   const corDB = { ok: BRAND.green, erro: BRAND.danger, carregando: BRAND.warn };
 
   return (
@@ -1249,12 +1390,33 @@ export default function App() {
       <style>{`
         @keyframes ofModalIn { from { opacity: 0; transform: translateY(14px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
         @keyframes ofCardIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
-        button:hover { filter: brightness(1.08); }
+        button { font-size: 12px; }
+        button:hover { filter: brightness(1.1); transform: translateY(-1px); }
+        button:active { transform: translateY(0); }
         input:focus, textarea:focus, select:focus { border-color: ${BRAND.green2} !important; box-shadow: 0 0 0 3px ${BRAND.green2}18; }
       `}</style>
       <Toast toast={toast} />
 
-      <div style={{ background: "rgba(10,20,32,.92)", backdropFilter: "blur(12px)", borderBottom: `1px solid ${BRAND.border}`, padding: "0 16px", height: 58, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+      <img
+        src="/logo-orcaflow.png"
+        alt=""
+        aria-hidden="true"
+        style={{
+          position: "fixed",
+          right: 32,
+          bottom: 28,
+          width: "min(520px, 42vw)",
+          maxHeight: "55vh",
+          objectFit: "contain",
+          opacity: 0.055,
+          pointerEvents: "none",
+          userSelect: "none",
+          zIndex: 0,
+          filter: "saturate(1.1)",
+        }}
+      />
+
+      <div style={{ position: "relative", zIndex: 2, background: "rgba(10,20,32,.92)", backdropFilter: "blur(12px)", borderBottom: `1px solid ${BRAND.border}`, padding: "0 16px", height: 84, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <OrcaFlowLogo onClick={resetInicio} />
           <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "3px 9px", borderRadius: 20, background: status === "ok" ? `${BRAND.green2}14` : BRAND.border2, border: `1px solid ${status === "ok" ? `${BRAND.green2}33` : BRAND.border2}` }}>
@@ -1374,9 +1536,12 @@ export default function App() {
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6 }}><span style={{ fontSize: 10, color: texto.length > 60 ? BRAND.green : BRAND.dim }}>{texto.length > 60 ? "✓ Suficiente para análise" : "⚠ Adicione mais detalhes"}</span><span style={{ fontSize: 10, color: BRAND.dim }}>{texto.length} chars</span></div></div><div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 14, padding: "14px 17px" }}><div style={{ fontSize: 9, fontWeight: 900, color: BRAND.dim, letterSpacing: 2, marginBottom: 8 }}>📌 OBSERVAÇÕES OPCIONAIS</div><textarea value={obs} onChange={(e) => setObs(e.target.value)} rows={2} placeholder="Condições especiais, restrições ou observações complementares..." style={{ ...INP, resize: "vertical" }} /></div></div>}
 
-            {step === "preview" && <div style={{ padding: "16px 18px" }}><div style={{ display: "flex", gap: 6, marginBottom: 13, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}><div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{empsSel.map((emp) => <button key={emp.id} onClick={() => setActiveTab(emp.id)} style={{ padding: "7px 14px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 850, border: `2px solid ${activeTab === emp.id ? emp.corPrimaria || BRAND.green2 : BRAND.border2}`, background: activeTab === emp.id ? `${emp.corPrimaria || BRAND.green2}1e` : BRAND.panel, color: activeTab === emp.id ? "#fff" : BRAND.dim }}>{emp.nome}</button>)}</div><button onClick={() => setEditando((v) => !v)} style={{ padding: "7px 13px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 850, border: `1px solid ${editando ? BRAND.warn : BRAND.border2}`, background: editando ? `${BRAND.warn}14` : "transparent", color: editando ? "#FBBF24" : BRAND.dim }}>{editando ? "✏ Editando" : "✏ Editar"}</button></div>{activeTab && orcamentos[activeTab] && (() => { const emp = empresas.find((e) => e.id === activeTab); return emp ? <OrcamentoDoc emp={emp} dados={orcamentos[activeTab]} editando={editando} onChange={(c, v) => fieldChange(activeTab, c, v)} /> : null; })()}</div>}
+            {step === "preview" && <div style={{ padding: "16px 18px" }}><div style={{ display: "flex", gap: 6, marginBottom: 13, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}><div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{empsSel.map((emp) => <button key={emp.id} onClick={() => setActiveTab(emp.id)} style={{ padding: "7px 14px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 850, border: `2px solid ${activeTab === emp.id ? emp.corPrimaria || BRAND.green2 : BRAND.border2}`, background: activeTab === emp.id ? `${emp.corPrimaria || BRAND.green2}1e` : BRAND.panel, color: activeTab === emp.id ? "#fff" : BRAND.dim }}>{emp.nome}</button>)}</div><div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button onClick={() => activeTab && baixarPDF(activeTab)} style={{ padding: "8px 14px", borderRadius: 9, cursor: "pointer", fontSize: 12, fontWeight: 900, border: `1px solid ${BRAND.green2}66`, background: `linear-gradient(135deg, ${BRAND.green2}, ${BRAND.blue2})`, color: "#fff", boxShadow: `0 8px 22px ${BRAND.green2}28` }}>⬇ Baixar PDF</button>
+              <button onClick={() => setEditando((v) => !v)} style={{ padding: "7px 13px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 850, border: `1px solid ${editando ? BRAND.warn : BRAND.border2}`, background: editando ? `${BRAND.warn}14` : "transparent", color: editando ? "#FBBF24" : BRAND.dim }}>{editando ? "✏ Editando" : "✏ Editar"}</button>
+            </div></div>{activeTab && orcamentos[activeTab] && (() => { const emp = empresas.find((e) => e.id === activeTab); return emp ? <OrcamentoDoc emp={emp} dados={orcamentos[activeTab]} editando={editando} onChange={(c, v) => fieldChange(activeTab, c, v)} /> : null; })()}</div>}
 
-            {step === "exportacao" && <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "28px 16px" }}><div style={{ width: "100%", maxWidth: 540, textAlign: "center" }}><div style={{ fontSize: 48, marginBottom: 10 }}>✅</div><div style={{ fontSize: 19, fontWeight: 900, marginBottom: 5 }}>Orçamentos Aprovados!</div><div style={{ fontSize: 12, color: BRAND.dim, marginBottom: 20 }}>{empsSel.length} proposta{empsSel.length !== 1 ? "s" : ""} pronta{empsSel.length !== 1 ? "s" : ""}</div><div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 15, padding: 16, marginBottom: 15 }}>{empsSel.map((emp) => <div key={emp.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", background: BRAND.panel2, borderRadius: 10, border: `1px solid ${emp.corPrimaria || BRAND.green2}20`, marginBottom: 8 }}><div style={{ textAlign: "left" }}><div style={{ fontSize: 13, fontWeight: 850 }}>{emp.nome}</div><div style={{ fontSize: 10, color: BRAND.dim }}>{orcamentos[emp.id]?.numero}{orcamentos[emp.id]?.valorGlobal ? ` · ${brl(orcamentos[emp.id].valorGlobal)}` : ""}</div></div><span style={{ padding: "4px 10px", borderRadius: 14, background: `${BRAND.green2}18`, border: `1px solid ${BRAND.green2}33`, fontSize: 10, color: BRAND.green, fontWeight: 850 }}>Pronto</span></div>)}</div><button onClick={resetOrcamento} style={{ width: "100%", padding: 10, borderRadius: 10, border: `1px solid ${BRAND.border2}`, background: "transparent", color: BRAND.dim, cursor: "pointer", fontSize: 12 }}>← Criar novo orçamento</button></div></div>}
+            {step === "exportacao" && <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "28px 16px" }}><div style={{ width: "100%", maxWidth: 540, textAlign: "center" }}><div style={{ fontSize: 48, marginBottom: 10 }}>✅</div><div style={{ fontSize: 19, fontWeight: 900, marginBottom: 5 }}>Orçamentos Aprovados!</div><div style={{ fontSize: 12, color: BRAND.dim, marginBottom: 20 }}>{empsSel.length} proposta{empsSel.length !== 1 ? "s" : ""} pronta{empsSel.length !== 1 ? "s" : ""}</div><div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 15, padding: 16, marginBottom: 15 }}>{empsSel.map((emp) => <div key={emp.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", background: BRAND.panel2, borderRadius: 10, border: `1px solid ${emp.corPrimaria || BRAND.green2}20`, marginBottom: 8 }}><div style={{ textAlign: "left" }}><div style={{ fontSize: 13, fontWeight: 850 }}>{emp.nome}</div><div style={{ fontSize: 10, color: BRAND.dim }}>{orcamentos[emp.id]?.numero}{orcamentos[emp.id]?.valorGlobal ? ` · ${brl(orcamentos[emp.id].valorGlobal)}` : ""}</div></div><button onClick={() => baixarPDF(emp.id)} style={{ padding: "6px 12px", borderRadius: 14, background: `linear-gradient(135deg, ${BRAND.green2}, ${BRAND.blue2})`, border: `1px solid ${BRAND.green2}66`, fontSize: 11, color: "#fff", fontWeight: 900, cursor: "pointer" }}>Baixar PDF</button></div>)}</div><button onClick={baixarTodosPDF} style={{ width: "100%", padding: 11, borderRadius: 10, border: `1px solid ${BRAND.green2}66`, background: `linear-gradient(135deg, ${BRAND.green2}, ${BRAND.blue2})`, color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 900, marginBottom: 9 }}>⬇ Baixar todos os PDFs</button><button onClick={resetOrcamento} style={{ width: "100%", padding: 10, borderRadius: 10, border: `1px solid ${BRAND.border2}`, background: "transparent", color: BRAND.dim, cursor: "pointer", fontSize: 12 }}>← Criar novo orçamento</button></div></div>}
           </div>
         </div>
       )}
