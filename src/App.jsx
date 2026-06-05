@@ -17,6 +17,7 @@ const KEY_META = "orcaflow_meta";
 const KEY_CRM = "orcaflow_crm_orcamentos";
 const KEY_USERS = "orcaflow_users";
 const KEY_SESSION = "orcaflow_session";
+const KEY_RESET = "orcaflow_reset_senha";
 
 const BRAND = {
   bg: "#050B14",
@@ -1054,6 +1055,194 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
 }
 
 
+function DashboardPanel({ crm, empresas, meta, usuarioAtual, setView }) {
+  const isAdmin = usuarioAtual?.tipo === "admin";
+  const lista = isAdmin ? crm : crm.filter((o) => o.userId === usuarioAtual?.id);
+  const abertos = lista.filter((o) => o.status === "Aberto").length;
+  const andamento = lista.filter((o) => o.status === "Andamento").length;
+  const finalizados = lista.filter((o) => o.status === "Finalizado").length;
+  const atrasados = lista.filter((o) => o.status !== "Finalizado" && diasAte(o.proximoContato) !== null && diasAte(o.proximoContato) < 0).length;
+  const valorPotencial = lista.filter((o) => o.status !== "Finalizado").reduce((acc, o) => acc + (parseFloat(o.valorGlobal) || 0), 0);
+  const totalValor = lista.reduce((acc, o) => acc + (parseFloat(o.valorGlobal) || 0), 0);
+  const ticketMedio = lista.length ? totalValor / lista.length : 0;
+  const conversao = lista.length ? Math.round((finalizados / lista.length) * 100) : 0;
+  const proximos = lista.filter((o) => o.status !== "Finalizado" && o.proximoContato).sort((a,b) => String(a.proximoContato).localeCompare(String(b.proximoContato))).slice(0, 5);
+
+  const kpi = (label, valor, sub, cor, icon) => (
+    <div className="of-dashboard-card">
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+        <div style={{ fontSize: 12, color: "var(--of-muted)", fontWeight: 800 }}>{label}</div>
+        <div style={{ width: 34, height: 34, borderRadius: 12, display: "grid", placeItems: "center", background: `${cor}18`, border: `1px solid ${cor}44`, color: cor }}>{icon}</div>
+      </div>
+      <div style={{ fontSize: 30, fontWeight: 950, marginTop: 12, color: cor }}>{valor}</div>
+      <div style={{ fontSize: 11, color: "var(--of-muted)", marginTop: 4 }}>{sub}</div>
+    </div>
+  );
+
+  return (
+    <div style={{ flex: 1, overflowY: "auto", padding: 22, position: "relative", zIndex: 2 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 14, flexWrap: "wrap", marginBottom: 20 }}>
+        <div>
+          <div style={{ fontSize: 14, color: BRAND.green, fontWeight: 900, letterSpacing: 2 }}>ORÇAFLOW STUDIO AI</div>
+          <h1 className="of-title-gradient" style={{ fontSize: 34, lineHeight: 1.1, margin: "8px 0 6px", fontWeight: 950 }}>Dashboard Inteligente</h1>
+          <div style={{ fontSize: 13, color: BRAND.muted }}>Controle comercial, orçamentos, CRM e follow-up com IA integrada.</div>
+        </div>
+        <button className="of-neon-btn" onClick={() => setView("orcamento")} style={{ padding: "12px 18px", borderRadius: 14, cursor: "pointer" }}>✨ Novo orçamento</button>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,minmax(150px,1fr))", gap: 14, marginBottom: 18 }}>
+        {kpi("Orçamentos gerados", meta.totalOrcamentos || lista.length, `${empresas.length} empresa(s) cadastrada(s)`, BRAND.blue, "📄")}
+        {kpi("Abertos", abertos, "Aguardando andamento", BRAND.blue, "🔎")}
+        {kpi("Em andamento", andamento, "Em negociação", BRAND.warn, "⚙")}
+        {kpi("Finalizados", finalizados, `${conversao}% de conversão`, BRAND.green, "✅")}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1.15fr .85fr", gap: 16, alignItems: "stretch" }}>
+        <div className="of-glass" style={{ borderRadius: 20, padding: 18 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 950 }}>Funil comercial</div>
+              <div style={{ fontSize: 12, color: BRAND.muted }}>Visão rápida dos orçamentos por etapa.</div>
+            </div>
+            <span style={{ color: BRAND.green, fontSize: 12, fontWeight: 900 }}>{brl(valorPotencial)} em potencial</span>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 10 }}>
+            {[
+              ["Aberto", abertos, BRAND.blue],
+              ["Contato", andamento, BRAND.warn],
+              ["Proposta", lista.length, BRAND.purple || "#7c3aed"],
+              ["Fechado", finalizados, BRAND.green],
+              ["Atrasado", atrasados, BRAND.danger],
+            ].map(([l,v,c]) => (
+              <div key={l} style={{ borderRadius: 16, padding: 14, minHeight: 110, background: `${c}12`, border: `1px solid ${c}38`, display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
+                <div style={{ fontSize: 11, color: BRAND.muted, fontWeight: 850 }}>{l}</div>
+                <div style={{ fontSize: 28, color: c, fontWeight: 950 }}>{v}</div>
+                <div style={{ height: 5, borderRadius: 999, background: `${c}55` }} />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="of-glass" style={{ borderRadius: 20, padding: 18 }}>
+          <div style={{ fontSize: 14, fontWeight: 950, marginBottom: 8 }}>OrçaFlow AI</div>
+          <div style={{ fontSize: 12, color: BRAND.muted, lineHeight: 1.6, marginBottom: 14 }}>Sugestões inteligentes para cobrança e acompanhamento.</div>
+          <div style={{ display: "grid", gap: 10 }}>
+            {[
+              [`${abertos} orçamentos em aberto`, "Gerar mensagens de follow-up"],
+              [`${atrasados} contatos atrasados`, "Priorizar cobranças hoje"],
+              [`${brl(ticketMedio)} ticket médio`, "Acompanhar propostas de maior valor"],
+            ].map(([a,b]) => (
+              <div key={a} style={{ padding: 12, borderRadius: 14, background: "rgba(2,6,23,.55)", border: `1px solid ${BRAND.border2}` }}>
+                <div style={{ fontSize: 13, fontWeight: 900 }}>{a}</div>
+                <div style={{ fontSize: 11, color: BRAND.muted, marginTop: 3 }}>{b}</div>
+              </div>
+            ))}
+          </div>
+          <button onClick={() => setView("crm")} style={{ marginTop: 14, width: "100%", padding: "10px 14px", borderRadius: 12, border: `1px solid ${BRAND.blue2}66`, background: `${BRAND.blue2}18`, color: "#93C5FD", fontWeight: 900, cursor: "pointer" }}>Abrir CRM</button>
+        </div>
+      </div>
+
+      <div className="of-glass" style={{ borderRadius: 20, padding: 18, marginTop: 16 }}>
+        <div style={{ fontSize: 14, fontWeight: 950, marginBottom: 10 }}>Próximos contatos</div>
+        {proximos.length === 0 ? (
+          <div style={{ color: BRAND.dim, fontSize: 13, padding: 16, textAlign: "center" }}>Nenhum acompanhamento programado.</div>
+        ) : proximos.map((o) => (
+          <div key={o.id} style={{ display: "grid", gridTemplateColumns: "1fr .8fr .6fr .8fr", gap: 10, padding: "10px 0", borderTop: `1px solid ${BRAND.border2}`, alignItems: "center" }}>
+            <div><strong>{o.cliente}</strong><div style={{ fontSize: 11, color: BRAND.dim }}>{o.numero}</div></div>
+            <div style={{ fontSize: 12, color: BRAND.muted }}>{o.empresaNome}</div>
+            <div style={{ fontSize: 12, fontWeight: 900 }}>{brl(o.valorGlobal)}</div>
+            <div style={{ fontSize: 12, color: diasAte(o.proximoContato) < 0 ? BRAND.danger : BRAND.green }}>{new Date(o.proximoContato + "T00:00:00").toLocaleDateString("pt-BR")}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function LoginScreen({ usuarios, onLogin, pushToast }) {
+  const [usuario, setUsuario] = useState("");
+  const [senha, setSenha] = useState("");
+  const [mostrar, setMostrar] = useState(false);
+  const [modalReset, setModalReset] = useState(false);
+  const [resetEmail, setResetEmail] = useState("");
+
+  const entrar = () => {
+    const alvo = usuarios.find((u) => (u.nome || "").toLowerCase() === usuario.trim().toLowerCase() || (u.email || "").toLowerCase() === usuario.trim().toLowerCase());
+    if (!alvo || alvo.senha !== senha) {
+      pushToast("Usuário ou senha inválidos.", "erro");
+      return;
+    }
+    if (!alvo.ativo) {
+      pushToast("Este perfil está inativo. Procure o administrador.", "erro");
+      return;
+    }
+    onLogin(alvo);
+  };
+
+  const solicitarReset = async () => {
+    if (!resetEmail.trim()) {
+      pushToast("Informe o usuário ou e-mail para solicitar nova senha.", "erro");
+      return;
+    }
+    const lista = (await store.get(KEY_RESET)) || [];
+    lista.unshift({ id: `reset_${Date.now()}`, usuario: resetEmail.trim(), status: "pendente", criadoEm: new Date().toISOString() });
+    await store.set(KEY_RESET, lista.slice(0, 80));
+    setModalReset(false);
+    setResetEmail("");
+    pushToast("Solicitação enviada ao administrador.", "ok");
+  };
+
+  return (
+    <div style={{ minHeight: "100vh", background: `radial-gradient(circle at 20% 10%, ${BRAND.green2}22, transparent 30%), radial-gradient(circle at 80% 0%, ${BRAND.blue2}22, transparent 32%), ${BRAND.bg}`, color: BRAND.text, display: "flex", alignItems: "center", justifyContent: "center", padding: 18, fontFamily: "'Segoe UI', system-ui, sans-serif" }}>
+      <style>{`
+        :root { --of-bg:#030712; --of-panel:rgba(10,21,37,.82); --of-card:rgba(15,23,42,.76); --of-border:rgba(0,176,255,.22); --of-green:#00e676; --of-blue:#00b0ff; --of-purple:#7c3aed; --of-text:#f8fafc; --of-muted:#94a3b8; }
+        .of-glass { background:linear-gradient(145deg,rgba(15,23,42,.86),rgba(3,7,18,.78)); border:1px solid rgba(0,176,255,.22); box-shadow:0 0 35px rgba(0,230,118,.08), inset 0 1px 0 rgba(255,255,255,.05); backdrop-filter:blur(18px); }
+        .of-title-gradient { background:linear-gradient(90deg,#fff,#00e676,#00b0ff); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
+      `}</style>
+      <div className="of-glass" style={{ width: "100%", maxWidth: 430, borderRadius: 26, padding: 34, position: "relative", overflow: "hidden" }}>
+        <div style={{ position: "absolute", inset: "auto -80px -120px auto", width: 280, height: 280, borderRadius: "50%", background: `${BRAND.blue2}20`, filter: "blur(30px)" }} />
+        <div style={{ textAlign: "center", position: "relative" }}>
+          <img src="/logo-orcaflow.png" alt="OrçaFlow" style={{ height: 84, objectFit: "contain", filter: "drop-shadow(0 0 28px rgba(0,230,118,.25))" }} />
+          <div className="of-title-gradient" style={{ fontSize: 30, fontWeight: 950, marginTop: 12 }}>OrçaFlow</div>
+          <div style={{ fontSize: 11, letterSpacing: 3, color: BRAND.muted, marginTop: 2 }}>STUDIO AI</div>
+          <div style={{ fontSize: 12, color: BRAND.muted, margin: "10px 0 24px" }}>Orçamentos Inteligentes. Resultados Reais.</div>
+        </div>
+        <div style={{ display: "grid", gap: 12, position: "relative" }}>
+          <div>
+            <div style={{ fontSize: 10, color: BRAND.muted, fontWeight: 900, letterSpacing: 1.5, marginBottom: 6 }}>E-MAIL / USUÁRIO</div>
+            <input value={usuario} onChange={(e) => setUsuario(e.target.value)} onKeyDown={(e) => e.key === "Enter" && entrar()} placeholder="Digite seu usuário" style={{ width: "100%", boxSizing: "border-box", background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, borderRadius: 13, padding: "13px 14px", color: BRAND.text, outline: "none" }} />
+          </div>
+          <div>
+            <div style={{ fontSize: 10, color: BRAND.muted, fontWeight: 900, letterSpacing: 1.5, marginBottom: 6 }}>SENHA</div>
+            <div style={{ display: "flex", background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, borderRadius: 13, overflow: "hidden" }}>
+              <input type={mostrar ? "text" : "password"} value={senha} onChange={(e) => setSenha(e.target.value)} onKeyDown={(e) => e.key === "Enter" && entrar()} placeholder="Digite sua senha" style={{ flex: 1, background: "transparent", border: 0, padding: "13px 14px", color: BRAND.text, outline: "none" }} />
+              <button onClick={() => setMostrar((v) => !v)} style={{ width: 52, border: 0, background: "transparent", color: BRAND.muted, cursor: "pointer" }}>{mostrar ? "Ocultar" : "Ver"}</button>
+            </div>
+          </div>
+          <button className="of-neon-btn" onClick={entrar} style={{ marginTop: 10, padding: "14px 16px", borderRadius: 14, cursor: "pointer", fontSize: 15 }}>Entrar</button>
+          <div style={{ display: "flex", justifyContent: "center", gap: 18, marginTop: 4 }}>
+            <button onClick={() => pushToast("A criação de conta é feita pelo administrador.", "aviso")} style={{ border: 0, background: "transparent", color: "#93C5FD", cursor: "pointer", fontSize: 12 }}>Criar conta</button>
+            <button onClick={() => setModalReset(true)} style={{ border: 0, background: "transparent", color: "#93C5FD", cursor: "pointer", fontSize: 12 }}>Esqueci a senha</button>
+          </div>
+        </div>
+      </div>
+      {modalReset && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.78)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div className="of-glass" style={{ width: "100%", maxWidth: 390, borderRadius: 20, padding: 22 }}>
+            <div style={{ fontSize: 16, fontWeight: 950, marginBottom: 6 }}>Solicitar nova senha</div>
+            <div style={{ fontSize: 12, color: BRAND.muted, lineHeight: 1.6, marginBottom: 12 }}>Informe seu usuário ou e-mail. O administrador receberá uma solicitação para gerar nova senha.</div>
+            <input value={resetEmail} onChange={(e) => setResetEmail(e.target.value)} placeholder="Usuário ou e-mail" style={{ width: "100%", boxSizing: "border-box", background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, borderRadius: 12, padding: "12px 14px", color: BRAND.text, outline: "none", marginBottom: 12 }} />
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => setModalReset(false)} style={{ flex: 1, padding: 10, borderRadius: 12, border: `1px solid ${BRAND.border2}`, background: "transparent", color: BRAND.muted, cursor: "pointer" }}>Cancelar</button>
+              <button className="of-neon-btn" onClick={solicitarReset} style={{ flex: 1, padding: 10, borderRadius: 12, cursor: "pointer" }}>Enviar</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CRMPanel({ crm, setCrm, empresas, pushToast, usuarioAtual }) {
   const [busca, setBusca] = useState("");
   const [statusFiltro, setStatusFiltro] = useState("Todos");
@@ -1204,6 +1393,26 @@ function CRMPanel({ crm, setCrm, empresas, pushToast, usuarioAtual }) {
 function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, pushToast }) {
   const [nome, setNome] = useState("");
   const [senha, setSenha] = useState("");
+  const [solicitacoes, setSolicitacoes] = useState([]);
+
+  useEffect(() => {
+    (async () => setSolicitacoes((await store.get(KEY_RESET)) || []))();
+  }, []);
+
+  const salvarSolicitacoes = (nova) => {
+    setSolicitacoes(nova);
+    store.set(KEY_RESET, nova);
+  };
+
+  const gerarNovaSenha = (sol) => {
+    const novaSenha = String(Math.floor(100000 + Math.random() * 900000));
+    const alvo = usuarios.find((u) => (u.nome || "").toLowerCase() === (sol.usuario || "").toLowerCase() || (u.email || "").toLowerCase() === (sol.usuario || "").toLowerCase());
+    if (alvo) {
+      salvarUsuarios(usuarios.map((u) => (u.id === alvo.id ? { ...u, senha: novaSenha } : u)));
+    }
+    salvarSolicitacoes(solicitacoes.map((s) => (s.id === sol.id ? { ...s, status: "resolvido", novaSenha, resolvidoEm: new Date().toISOString() } : s)));
+    pushToast(`Nova senha gerada: ${novaSenha}`, "ok");
+  };
 
   const salvarUsuarios = (nova) => {
     setUsuarios(nova);
@@ -1267,6 +1476,20 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
         </div>
       </div>
 
+      <div className="of-glass" style={{ borderRadius: 16, padding: 14, marginBottom: 16 }}>
+        <div style={{ fontSize: 14, fontWeight: 900, marginBottom: 10 }}>Solicitações de nova senha</div>
+        {solicitacoes.length === 0 ? (
+          <div style={{ fontSize: 12, color: BRAND.dim }}>Nenhuma solicitação pendente.</div>
+        ) : solicitacoes.map((s) => (
+          <div key={s.id} style={{ display: "grid", gridTemplateColumns: "1fr .7fr auto auto", gap: 8, alignItems: "center", padding: "9px 0", borderTop: `1px solid ${BRAND.border2}` }}>
+            <div><strong>{s.usuario}</strong><div style={{ fontSize: 10, color: BRAND.dim }}>{tsFmt(s.criadoEm)}</div></div>
+            <div style={{ fontSize: 12, color: s.status === "pendente" ? BRAND.warn : BRAND.green }}>{s.status}</div>
+            <button onClick={() => gerarNovaSenha(s)} disabled={s.status !== "pendente"} style={{ padding: "8px 10px", borderRadius: 9, border: `1px solid ${BRAND.green2}55`, background: `${BRAND.green2}16`, color: BRAND.green, cursor: s.status !== "pendente" ? "not-allowed" : "pointer", fontWeight: 850 }}>Gerar nova senha</button>
+            <button onClick={() => salvarSolicitacoes(solicitacoes.filter((x) => x.id !== s.id))} style={{ padding: "8px 10px", borderRadius: 9, border: `1px solid ${BRAND.danger}55`, background: "transparent", color: BRAND.danger, cursor: "pointer", fontWeight: 850 }}>Cancelar</button>
+          </div>
+        ))}
+      </div>
+
       <div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 16, overflow: "hidden" }}>
         {usuarios.map((u) => (
           <div key={u.id} style={{ display: "grid", gridTemplateColumns: "1fr .7fr .7fr .7fr", gap: 8, alignItems: "center", padding: "11px 14px", borderBottom: `1px solid ${BRAND.border2}` }}>
@@ -1293,7 +1516,8 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
 
 export default function App() {
   const { empresas, status, meta, toast, salvarEmpresa, excluirEmpresa, exportarBackup, importarBackup, incOrcamentos, kbUsados, pushToast } = useDB();
-  const [view, setView] = useState("orcamento");
+  const [view, setView] = useState("dashboard");
+  const [autenticado, setAutenticado] = useState(false);
   const [modal, setModal] = useState(null);
   const [salvando, setSalvando] = useState(false);
   const [confirmar, setConfirmar] = useState(null);
@@ -1308,11 +1532,15 @@ export default function App() {
   useEffect(() => {
     (async () => {
       const salvos = (await store.get(KEY_USERS)) || [];
-      const base = salvos.length ? salvos : [{ id: "admin", nome: "Administrador", senha: "admin123", tipo: "admin", ativo: true, criadoEm: new Date().toISOString() }];
+      const base = salvos.length ? salvos : [{ id: "admin", nome: "admin", senha: "260310", tipo: "admin", ativo: true, criadoEm: new Date().toISOString() }];
       if (!salvos.length) await store.set(KEY_USERS, base);
       setUsuarios(base);
       const sessao = await store.get(KEY_SESSION);
-      setUsuarioAtual(base.find((u) => u.id === sessao) || base[0]);
+      const userSessao = base.find((u) => u.id === sessao && u.ativo);
+      if (userSessao) {
+        setUsuarioAtual(userSessao);
+        setAutenticado(true);
+      }
       setCrm((await store.get(KEY_CRM)) || []);
     })();
   }, []);
@@ -1363,7 +1591,7 @@ export default function App() {
   const canGerar = cliente.trim() && texto.trim() && selecao.length > 0;
 
   const resetInicio = () => {
-    setView("orcamento");
+    setView("dashboard");
     setStep("montagem");
     setOrcamentos({});
     setActiveTab(null);
@@ -1712,12 +1940,47 @@ export default function App() {
   const INP = { background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, borderRadius: 10, padding: "11px 14px", color: BRAND.text, fontSize: UI.text, outline: "none", width: "100%", boxSizing: "border-box", lineHeight: 1.6, fontFamily: "inherit", transition: "all .22s ease" };
   const corDB = { ok: BRAND.green, erro: BRAND.danger, carregando: BRAND.warn };
 
+  if (!autenticado) {
+    return (
+      <>
+        <Toast toast={toast} />
+        <LoginScreen
+          usuarios={usuarios}
+          pushToast={pushToast}
+          onLogin={(u) => {
+            setUsuarioAtual(u);
+            setAutenticado(true);
+            store.set(KEY_SESSION, u.id);
+            pushToast(`Bem-vindo, ${u.nome}.`, "ok");
+          }}
+        />
+      </>
+    );
+  }
+
   return (
     <div style={{ minHeight: "100vh", background: `radial-gradient(circle at 0% 0%, ${BRAND.green2}12, transparent 28%), radial-gradient(circle at 100% 5%, ${BRAND.blue2}12, transparent 28%), ${BRAND.bg}`, color: BRAND.text, fontFamily: "'Segoe UI', system-ui, sans-serif", display: "flex", flexDirection: "column" }}>
       <style>{`
+        :root {
+          --of-bg: #030712;
+          --of-panel: rgba(10, 21, 37, 0.82);
+          --of-card: rgba(15, 23, 42, 0.76);
+          --of-border: rgba(0, 176, 255, 0.22);
+          --of-green: #00e676;
+          --of-blue: #00b0ff;
+          --of-purple: #7c3aed;
+          --of-text: #f8fafc;
+          --of-muted: #94a3b8;
+        }
         @keyframes ofModalIn { from { opacity: 0; transform: translateY(14px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
         @keyframes ofCardIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
-        button { font-size: 12px; }
+        .of-glass { background: linear-gradient(145deg, rgba(15,23,42,.86), rgba(3,7,18,.78)); border: 1px solid rgba(0,176,255,.22); box-shadow: 0 0 35px rgba(0,230,118,.08), inset 0 1px 0 rgba(255,255,255,.05); backdrop-filter: blur(18px); }
+        .of-neon-btn { background: linear-gradient(135deg, #00e676, #00b0ff); color: #02111f; border: none; font-weight: 900; box-shadow: 0 0 28px rgba(0,230,118,.32); }
+        .of-dashboard-card { background: linear-gradient(145deg, rgba(15,23,42,.92), rgba(2,6,23,.84)); border: 1px solid rgba(0,176,255,.2); border-radius: 18px; padding: 18px; transition: .25s ease; }
+        .of-dashboard-card:hover { transform: translateY(-3px); border-color: rgba(0,230,118,.45); box-shadow: 0 0 32px rgba(0,230,118,.12); }
+        .of-title-gradient { background: linear-gradient(90deg, #fff, #00e676, #00b0ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .of-watermark { position: fixed; right: 35px; bottom: 25px; width: min(620px, 45vw); opacity: .045; pointer-events: none; z-index: 0; }
+        button { font-size: 12px; transition: all .22s ease; }
         button:hover { filter: brightness(1.1); transform: translateY(-1px); }
         button:active { transform: translateY(0); }
         input:focus, textarea:focus, select:focus { border-color: ${BRAND.green2} !important; box-shadow: 0 0 0 3px ${BRAND.green2}18; }
@@ -1755,12 +2018,19 @@ export default function App() {
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: 3, background: BRAND.bg, borderRadius: 10, padding: 4, border: `1px solid ${BRAND.border2}` }}>
-          {[["orcamento", "✦ Orçamento"], ["crm", "📊 CRM"], ["empresas", "🏢 Empresas"], ["usuarios", "👥 Usuários"], ["banco", "🗄 Banco"]].map(([v, l]) => (
-            <button key={v} onClick={() => setView(v)} style={{ padding: "7px 12px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 850, background: view === v ? `linear-gradient(135deg, ${BRAND.green2}, #15803D)` : "transparent", color: view === v ? "#fff" : BRAND.dim, transition: "all .22s ease" }}>{l}</button>
-          ))}
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ display: "flex", gap: 3, background: BRAND.bg, borderRadius: 10, padding: 4, border: `1px solid ${BRAND.border2}` }}>
+            {[["dashboard", "⌂ Dashboard"], ["orcamento", "✦ Orçamento"], ["crm", "📊 CRM"], ["empresas", "🏢 Empresas"], ["usuarios", "👥 Usuários"], ["banco", "🗄 Banco"]].map(([v, l]) => (
+              <button key={v} onClick={() => setView(v)} style={{ padding: "7px 12px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 850, background: view === v ? `linear-gradient(135deg, ${BRAND.green2}, #15803D)` : "transparent", color: view === v ? "#fff" : BRAND.dim, transition: "all .22s ease" }}>{l}</button>
+            ))}
+          </div>
+          <button onClick={() => { store.set(KEY_SESSION, null); setAutenticado(false); setUsuarioAtual(null); }} title="Sair" style={{ padding: "8px 10px", borderRadius: 10, border: `1px solid ${BRAND.border2}`, background: "transparent", color: BRAND.muted, cursor: "pointer", fontWeight: 900 }}>Sair</button>
         </div>
       </div>
+
+      {view === "dashboard" && (
+        <DashboardPanel crm={crm} empresas={empresas} meta={meta} usuarioAtual={usuarioAtual} setView={setView} />
+      )}
 
       {view === "crm" && (
         <CRMPanel crm={crm} setCrm={setCrm} empresas={empresas} pushToast={pushToast} usuarioAtual={usuarioAtual} />
