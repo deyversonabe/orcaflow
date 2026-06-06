@@ -1,5 +1,19 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
+import {
+  FileText,
+  Building2,
+  Users,
+  Database,
+  Bot,
+  Shield,
+  Bell,
+  Search,
+  Download,
+  Mic,
+  Upload
+} from "lucide-react";
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ORÇAFLOW — APP.JSX CORRIGIDO
 // Alterações incluídas:
@@ -1509,6 +1523,404 @@ function CRMPanel({ crm, setCrm, empresas, pushToast, usuarioAtual }) {
   );
 }
 
+
+function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usuarioAtual, setView }) {
+  const [busca, setBusca] = useState("");
+  const [statusFiltro, setStatusFiltro] = useState("Todos");
+  const [empresaFiltro, setEmpresaFiltro] = useState("Todas");
+  const [whats, setWhats] = useState("");
+
+  const isAdmin = usuarioAtual?.tipo === "admin";
+  const base = isAdmin ? crm : crm.filter((o) => o.userId === usuarioAtual?.id);
+
+  const lista = base.filter((o) => {
+    const textoBusca = [
+      o.cliente,
+      o.empresaNome,
+      o.empresa,
+      o.numero,
+      o.status,
+      o.lembreteIA,
+      o.lembrete,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+
+    const okBusca = !busca || textoBusca.includes(busca.toLowerCase());
+    const okStatus = statusFiltro === "Todos" || (o.status || "Aberto") === statusFiltro;
+    const okEmpresa = empresaFiltro === "Todas" || o.empresaId === empresaFiltro;
+
+    return okBusca && okStatus && okEmpresa;
+  });
+
+  const total = base.length;
+  const abertos = base.filter((o) => (o.status || "Aberto") === "Aberto").length;
+  const andamento = base.filter((o) => o.status === "Andamento").length;
+  const finalizados = base.filter((o) => o.status === "Finalizado").length;
+  const atrasados = base.filter(
+    (o) => o.status !== "Finalizado" && diasAte(o.proximoContato) !== null && diasAte(o.proximoContato) < 0
+  ).length;
+
+  const valorTotal = base.reduce((soma, item) => soma + (Number(item.valorGlobal || item.valor) || 0), 0);
+  const valorPotencial = base
+    .filter((item) => item.status !== "Finalizado")
+    .reduce((soma, item) => soma + (Number(item.valorGlobal || item.valor) || 0), 0);
+  const ticketMedio = total ? valorTotal / total : 0;
+  const taxaConversao = total ? Math.round((finalizados / total) * 100) : 0;
+  const precisamContato = abertos + andamento + atrasados;
+
+  const salvarCRM = (novaLista) => {
+    setCrm(novaLista);
+    store.set(KEY_CRM, novaLista);
+  };
+
+  const updateItem = (id, campo, valor) => {
+    salvarCRM(
+      crm.map((o) =>
+        o.id === id
+          ? {
+              ...o,
+              [campo]: valor,
+              atualizadoEm: new Date().toISOString(),
+            }
+          : o
+      )
+    );
+  };
+
+  const criarLembretesIA = () => {
+    const pendentes = crm.filter((o) => o.status !== "Finalizado");
+
+    if (!pendentes.length) {
+      pushToast("Nenhum orçamento pendente para gerar lembrete.", "aviso");
+      return;
+    }
+
+    const atualizados = crm.map((item) => {
+      if (item.status === "Finalizado") return item;
+
+      const prazo = diasAte(item.proximoContato);
+      let lembrete = `Entrar em contato com ${item.cliente || "cliente"} para acompanhar o orçamento ${item.numero || ""}.`;
+
+      if (prazo !== null && prazo < 0) {
+        lembrete = `Cobrança urgente: orçamento ${item.numero || ""} de ${item.cliente || "cliente"} está com contato atrasado.`;
+      } else if (prazo === 0) {
+        lembrete = `Entrar em contato hoje com ${item.cliente || "cliente"} sobre o orçamento ${item.numero || ""}.`;
+      } else if (item.status === "Andamento") {
+        lembrete = `Retomar negociação com ${item.cliente || "cliente"} e registrar o próximo passo do orçamento ${item.numero || ""}.`;
+      }
+
+      return {
+        ...item,
+        lembreteIA: item.lembreteIA || lembrete,
+        lembrete: item.lembrete || lembrete,
+        atualizadoEm: new Date().toISOString(),
+      };
+    });
+
+    salvarCRM(atualizados);
+    pushToast("IA gerou lembretes para os orçamentos pendentes.", "ok");
+  };
+
+  const notificarPendentes = async () => {
+    const hoje = new Date().toISOString().slice(0, 10);
+    const pendentesHoje = base.filter((o) => o.status !== "Finalizado" && (!o.proximoContato || o.proximoContato <= hoje));
+
+    if (!pendentesHoje.length) {
+      pushToast("Não há cobranças pendentes para hoje.", "aviso");
+      return;
+    }
+
+    if ("Notification" in window) {
+      const permissao = await Notification.requestPermission();
+      if (permissao === "granted") {
+        new Notification("OrçaFlow Gestão", {
+          body: `${pendentesHoje.length} orçamento(s) precisam de acompanhamento hoje.`,
+        });
+      }
+    }
+
+    pushToast(`${pendentesHoje.length} orçamento(s) pendente(s) para acompanhar.`, "ok");
+  };
+
+  const abrirWhats = () => {
+    const numero = onlyDigits(whats);
+
+    if (!numero || numero.length < 10) {
+      pushToast("Informe o WhatsApp com DDD para enviar o relatório.", "erro");
+      return;
+    }
+
+    const msg = gerarTextoWhatsPendencias(base, empresas);
+    window.open(`https://wa.me/55${numero.replace(/^55/, "")}?text=${encodeURIComponent(msg)}`, "_blank");
+  };
+
+  const statusColor = {
+    Aberto: BRAND.blue,
+    Andamento: BRAND.warn,
+    Finalizado: BRAND.green,
+    Atrasado: BRAND.danger,
+  };
+
+  const statusReal = (item) => {
+    if (item.status !== "Finalizado" && diasAte(item.proximoContato) !== null && diasAte(item.proximoContato) < 0) {
+      return "Atrasado";
+    }
+    return item.status || "Aberto";
+  };
+
+  return (
+    <div style={{ flex: 1, overflowY: "auto", padding: 22, position: "relative", zIndex: 2 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 14, flexWrap: "wrap", marginBottom: 20 }}>
+        <div>
+          <div style={{ fontSize: 14, color: BRAND.green, fontWeight: 900, letterSpacing: 2 }}>GESTÃO ORÇAFLOW AI</div>
+          <h1 className="of-title-gradient" style={{ fontSize: 34, lineHeight: 1.1, margin: "8px 0 6px", fontWeight: 950 }}>Gestão Comercial Inteligente</h1>
+          <div style={{ fontSize: 13, color: BRAND.muted }}>Dashboard, CRM, acompanhamento de orçamentos e follow-up com IA em uma única tela.</div>
+        </div>
+
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button className="of-neon-btn" onClick={() => setView("orcamento")} style={{ padding: "12px 18px", borderRadius: 14, cursor: "pointer" }}>
+            ✨ Novo orçamento
+          </button>
+          <button onClick={criarLembretesIA} style={{ padding: "12px 18px", borderRadius: 14, border: `1px solid ${BRAND.blue2}66`, background: `${BRAND.blue2}18`, color: "#93C5FD", fontWeight: 900, cursor: "pointer" }}>
+            🤖 IA criar lembretes
+          </button>
+          <button onClick={notificarPendentes} style={{ padding: "12px 18px", borderRadius: 14, border: `1px solid ${BRAND.warn}66`, background: `${BRAND.warn}18`, color: "#FBBF24", fontWeight: 900, cursor: "pointer" }}>
+            🔔 Notificar pendentes
+          </button>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,minmax(150px,1fr))", gap: 14, marginBottom: 18 }}>
+        <CardGestao titulo="Orçamentos gerados" valor={meta.totalOrcamentos || total} cor={BRAND.blue} icon={<FileText size={19} />} />
+        <CardGestao titulo="Abertos" valor={abertos} cor={BRAND.blue} icon={<Search size={19} />} />
+        <CardGestao titulo="Em andamento" valor={andamento} cor={BRAND.warn} icon={<Bot size={19} />} />
+        <CardGestao titulo="Finalizados" valor={finalizados} cor={BRAND.green} icon={<Shield size={19} />} />
+        <CardGestao titulo="Atrasados" valor={atrasados} cor={BRAND.danger} icon={<Bell size={19} />} />
+        <CardGestao titulo="Valor potencial" valor={brl(valorPotencial)} cor={BRAND.green} icon={<Database size={19} />} />
+        <CardGestao titulo="Ticket médio" valor={brl(ticketMedio)} cor={"#7C3AED"} icon={<Building2 size={19} />} />
+        <CardGestao titulo="Conversão" valor={`${taxaConversao}%`} cor={BRAND.blue} icon={<Users size={19} />} />
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1.2fr .8fr", gap: 16, marginBottom: 18 }}>
+        <div style={painelGestao}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", marginBottom: 16 }}>
+            <div>
+              <h3 style={tituloPainel}>Funil de Orçamentos</h3>
+              <div style={{ fontSize: 12, color: BRAND.muted }}>Distribuição por status e prioridade de acompanhamento.</div>
+            </div>
+            <span style={{ color: BRAND.green, fontSize: 12, fontWeight: 900 }}>{brl(valorPotencial)} em aberto</span>
+          </div>
+
+          {["Aberto", "Andamento", "Finalizado", "Atrasado"].map((s) => {
+            const qtd = s === "Atrasado" ? atrasados : base.filter((i) => (i.status || "Aberto") === s).length;
+            const pct = total ? Math.round((qtd / total) * 100) : 0;
+
+            return (
+              <div key={s} style={{ marginBottom: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
+                  <span style={{ fontWeight: 850 }}>{s}</span>
+                  <span style={{ color: BRAND.muted }}>{qtd} orçamento(s)</span>
+                </div>
+                <div style={{ height: 10, background: "#07111F", borderRadius: 999, overflow: "hidden", marginTop: 6 }}>
+                  <div style={{ width: `${pct}%`, height: "100%", background: statusColor[s], borderRadius: 999 }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div style={painelGestao}>
+          <h3 style={tituloPainel}>OrçaFlow AI</h3>
+          <p style={{ color: BRAND.muted, fontSize: 12, lineHeight: 1.6 }}>
+            A IA identifica orçamentos abertos, clientes sem retorno, contatos atrasados e oportunidades que precisam de ação.
+          </p>
+
+          <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
+            <AlertaIA cor={BRAND.warn} titulo={`${precisamContato} acompanhamento(s)`} texto="Orçamentos que precisam de retorno ou próximo passo." />
+            <AlertaIA cor={BRAND.danger} titulo={`${atrasados} atraso(s)`} texto="Priorizar cobrança e atualização de status." />
+            <AlertaIA cor={BRAND.green} titulo={brl(ticketMedio)} texto="Ticket médio dos orçamentos cadastrados." />
+          </div>
+        </div>
+      </div>
+
+      <div style={painelGestao}>
+        <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 12, marginBottom: 16 }}>
+          <input
+            value={busca}
+            onChange={(e) => setBusca(e.target.value)}
+            placeholder="Buscar por cliente, orçamento, empresa, status ou lembrete..."
+            style={inputGestao}
+          />
+
+          <select value={statusFiltro} onChange={(e) => setStatusFiltro(e.target.value)} style={inputGestao}>
+            <option>Todos</option>
+            <option>Aberto</option>
+            <option>Andamento</option>
+            <option>Finalizado</option>
+          </select>
+
+          <select value={empresaFiltro} onChange={(e) => setEmpresaFiltro(e.target.value)} style={inputGestao}>
+            <option value="Todas">Todas as empresas</option>
+            {empresas.map((e) => (
+              <option key={e.id} value={e.id}>{e.nome}</option>
+            ))}
+          </select>
+        </div>
+
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 920 }}>
+            <thead>
+              <tr style={{ color: BRAND.muted, textAlign: "left" }}>
+                <th style={th}>Cliente</th>
+                <th style={th}>Empresa</th>
+                <th style={th}>Valor</th>
+                <th style={th}>Status</th>
+                <th style={th}>Próximo contato</th>
+                <th style={th}>Lembrete IA</th>
+              </tr>
+            </thead>
+            <tbody>
+              {lista.length ? (
+                lista.map((item) => {
+                  const st = statusReal(item);
+                  return (
+                    <tr key={item.id} style={{ borderTop: `1px solid ${BRAND.border}` }}>
+                      <td style={td}>
+                        <strong>{item.cliente || "—"}</strong>
+                        <div style={{ fontSize: 10, color: BRAND.dim, marginTop: 3 }}>{item.numero || "—"} · {tsFmt(item.criadoEm)}</div>
+                      </td>
+                      <td style={td}>{item.empresaNome || item.empresa || "—"}</td>
+                      <td style={td}>{brl(item.valorGlobal || item.valor)}</td>
+                      <td style={td}>
+                        <select
+                          value={item.status || "Aberto"}
+                          onChange={(e) => updateItem(item.id, "status", e.target.value)}
+                          style={{
+                            padding: "7px 10px",
+                            borderRadius: 999,
+                            color: statusColor[item.status || "Aberto"] || BRAND.text,
+                            border: `1px solid ${statusColor[item.status || "Aberto"] || BRAND.border}`,
+                            background: BRAND.panel2,
+                            fontWeight: 800,
+                            outline: "none",
+                          }}
+                        >
+                          <option>Aberto</option>
+                          <option>Andamento</option>
+                          <option>Finalizado</option>
+                        </select>
+                        {st === "Atrasado" && <div style={{ fontSize: 10, color: BRAND.danger, marginTop: 5 }}>Contato atrasado</div>}
+                      </td>
+                      <td style={td}>
+                        <input
+                          type="date"
+                          value={item.proximoContato || ""}
+                          onChange={(e) => updateItem(item.id, "proximoContato", e.target.value)}
+                          style={{ ...inputGestao, padding: "8px 10px" }}
+                        />
+                      </td>
+                      <td style={td}>
+                        <textarea
+                          value={item.lembreteIA || item.lembrete || ""}
+                          onChange={(e) => updateItem(item.id, "lembreteIA", e.target.value)}
+                          placeholder="Lembrete de cobrança..."
+                          rows={2}
+                          style={{ ...inputGestao, resize: "vertical", minHeight: 42 }}
+                        />
+                      </td>
+                    </tr>
+                  );
+                })
+              ) : (
+                <tr>
+                  <td colSpan="6" style={{ padding: 28, textAlign: "center", color: BRAND.dim }}>
+                    Nenhum orçamento encontrado na gestão.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div style={{ ...painelGestao, marginTop: 16 }}>
+        <div style={{ fontSize: 14, fontWeight: 950, marginBottom: 6 }}>Relatório para WhatsApp</div>
+        <div style={{ fontSize: 12, color: BRAND.dim, marginBottom: 10 }}>
+          O navegador não envia WhatsApp agendado sozinho. Este botão abre o WhatsApp com o relatório pronto. Para envio automático programado, será necessário backend com API oficial da Meta/WhatsApp.
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input value={whats} onChange={(e) => setWhats(e.target.value)} placeholder="DDD + número do WhatsApp do usuário" style={{ ...inputGestao, flex: 1 }} />
+          <button onClick={abrirWhats} className="of-neon-btn" style={{ padding: "10px 16px", borderRadius: 12, cursor: "pointer" }}>
+            Enviar relatório
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CardGestao({ titulo, valor, cor, icon }) {
+  return (
+    <div className="of-dashboard-card" style={{ borderColor: `${cor}55`, boxShadow: `0 0 24px ${cor}11` }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+        <div style={{ fontSize: 12, color: BRAND.muted, fontWeight: 850 }}>{titulo}</div>
+        <div style={{ width: 34, height: 34, borderRadius: 12, display: "grid", placeItems: "center", color: cor, background: `${cor}18`, border: `1px solid ${cor}44` }}>
+          {icon}
+        </div>
+      </div>
+      <div style={{ fontSize: 24, fontWeight: 950, color: cor, marginTop: 12, overflowWrap: "anywhere" }}>{valor}</div>
+    </div>
+  );
+}
+
+function AlertaIA({ cor, titulo, texto }) {
+  return (
+    <div style={{ padding: 12, borderRadius: 14, background: `${cor}12`, border: `1px solid ${cor}38` }}>
+      <div style={{ fontSize: 13, fontWeight: 900, color: cor }}>{titulo}</div>
+      <div style={{ fontSize: 11, color: BRAND.muted, marginTop: 3, lineHeight: 1.5 }}>{texto}</div>
+    </div>
+  );
+}
+
+const painelGestao = {
+  background: "linear-gradient(145deg, rgba(15,23,42,.92), rgba(2,6,23,.84))",
+  border: `1px solid ${BRAND.border}`,
+  borderRadius: 18,
+  padding: 18,
+};
+
+const tituloPainel = {
+  margin: "0 0 4px",
+  fontSize: 14,
+  color: BRAND.text,
+};
+
+const inputGestao = {
+  width: "100%",
+  padding: "12px 14px",
+  borderRadius: 12,
+  border: `1px solid ${BRAND.border2}`,
+  background: BRAND.panel2,
+  color: BRAND.text,
+  outline: "none",
+  boxSizing: "border-box",
+};
+
+const th = {
+  padding: "10px 8px",
+  fontSize: 10,
+  letterSpacing: 1.2,
+  textTransform: "uppercase",
+};
+
+const td = {
+  padding: "14px 8px",
+  color: BRAND.text,
+  verticalAlign: "top",
+};
+
 function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, pushToast }) {
   const [nome, setNome] = useState("");
   const [senha, setSenha] = useState("");
@@ -1696,7 +2108,7 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
 
 export default function App() {
   const { empresas, status, meta, toast, salvarEmpresa, excluirEmpresa, exportarBackup, importarBackup, incOrcamentos, kbUsados, pushToast } = useDB();
-  const [view, setView] = useState("dashboard");
+  const [view, setView] = useState("gestao");
   const [autenticado, setAutenticado] = useState(false);
   const [modal, setModal] = useState(null);
   const [salvando, setSalvando] = useState(false);
@@ -1821,7 +2233,7 @@ export default function App() {
   const canGerar = cliente.trim() && texto.trim() && selecao.length > 0;
 
   const resetInicio = () => {
-    setView("dashboard");
+    setView("gestao");
     setStep("montagem");
     setOrcamentos({});
     setActiveTab(null);
@@ -2270,7 +2682,7 @@ export default function App() {
 
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <div style={{ display: "flex", gap: 3, background: BRAND.bg, borderRadius: 10, padding: 4, border: `1px solid ${BRAND.border2}` }}>
-            {[["dashboard", "⌂ Dashboard"], ["orcamento", "✦ Orçamento"], ["crm", "📊 CRM"], ["empresas", "🏢 Empresas"], ["usuarios", "👥 Usuários"], ["banco", "🗄 Banco"]].map(([v, l]) => (
+            {[["gestao", "📊 Gestão"], ["orcamento", "✦ Orçamento"], ["empresas", "🏢 Empresas"], ["usuarios", "👥 Usuários"], ["banco", "🗄 Banco"]].map(([v, l]) => (
               <button key={v} onClick={() => setView(v)} style={{ padding: "7px 12px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 850, background: view === v ? `linear-gradient(135deg, ${BRAND.green2}, #15803D)` : "transparent", color: view === v ? "#fff" : BRAND.dim, transition: "all .22s ease" }}>{l}</button>
             ))}
           </div>
@@ -2278,12 +2690,16 @@ export default function App() {
         </div>
       </div>
 
-      {view === "dashboard" && (
-        <DashboardPanel crm={crm} empresas={empresas} meta={meta} usuarioAtual={usuarioAtual} setView={setView} />
-      )}
-
-      {view === "crm" && (
-        <CRMPanel crm={crm} setCrm={setCrm} empresas={empresas} pushToast={pushToast} usuarioAtual={usuarioAtual} />
+      {view === "gestao" && (
+        <GestaoPage
+          crm={crm}
+          setCrm={setCrm}
+          empresas={empresas}
+          meta={meta}
+          pushToast={pushToast}
+          usuarioAtual={usuarioAtual}
+          setView={setView}
+        />
       )}
 
       {view === "usuarios" && (
