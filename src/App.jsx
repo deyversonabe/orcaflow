@@ -14,6 +14,11 @@ import {
   Upload
 } from "lucide-react";
 
+import * as pdfjsLib from "pdfjs-dist";
+import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ORÇAFLOW — APP.JSX CORRIGIDO
 // Alterações incluídas:
@@ -342,39 +347,35 @@ function extrairDadosCartaoCNPJ(textoOriginal) {
 }
 
 async function lerTextoPDF(file) {
-  const pdfjsLib = await import(/* @vite-ignore */ "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs");
-  pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
   const buffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+
   let texto = "";
+
   for (let i = 1; i <= pdf.numPages; i += 1) {
     const page = await pdf.getPage(i);
     const content = await page.getTextContent();
     texto += content.items.map((item) => item.str).join("\n") + "\n";
   }
+
   return texto;
 }
 
 async function pdfParaImagemTimbrado(file) {
-  const pdfjsLib = await import(
-    /* @vite-ignore */ "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs"
-  );
-
-  pdfjsLib.GlobalWorkerOptions.workerSrc =
-    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
-
   const buffer = await file.arrayBuffer();
+
   const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
   const page = await pdf.getPage(1);
 
   const viewport = page.getViewport({ scale: 3 });
+
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
 
   canvas.width = viewport.width;
   canvas.height = viewport.height;
 
-  ctx.fillStyle = "#FFFFFF";
+  ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   await page.render({
@@ -667,7 +668,7 @@ function ModalEmpresa({ empresa, onSave, onCancel, salvando, pushToast }) {
 
     if (!file) return;
 
-    const nome = file.name.toLowerCase();
+    const nome = String(file.name || "").toLowerCase();
     const isPdf = file.type === "application/pdf" || nome.endsWith(".pdf");
     const isImage = file.type.startsWith("image/");
 
@@ -682,35 +683,29 @@ function ModalEmpresa({ empresa, onSave, onCancel, salvando, pushToast }) {
     }
 
     try {
+      let imagemFinal = "";
+
       if (isPdf) {
         pushToast("Convertendo papel timbrado PDF em imagem...", "aviso");
-        const imagem = await pdfParaImagemTimbrado(file);
-
-        set("papelTimbrado", imagem);
-        set("papelTimbradoNome", file.name);
-        set("altoCabecalho", 120);
-        set("altoRodape", 110);
-
-        pushToast("Papel timbrado em PDF convertido com sucesso.", "ok");
-        return;
+        imagemFinal = await pdfParaImagemTimbrado(file);
+      } else {
+        imagemFinal = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = (ev) => resolve(ev.target.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
       }
 
-      const reader = new FileReader();
+      set("papelTimbrado", imagemFinal);
+      set("papelTimbradoNome", file.name);
+      set("altoCabecalho", form.altoCabecalho || 120);
+      set("altoRodape", form.altoRodape || 90);
 
-      reader.onload = (ev) => {
-        set("papelTimbrado", ev.target.result);
-        set("papelTimbradoNome", file.name);
-        pushToast("Papel timbrado anexado com sucesso.", "ok");
-      };
-
-      reader.onerror = () => {
-        pushToast("Erro ao ler o papel timbrado.", "erro");
-      };
-
-      reader.readAsDataURL(file);
+      pushToast("Papel timbrado anexado com sucesso.", "ok");
     } catch (error) {
-      console.error(error);
-      pushToast("Erro ao converter o PDF do papel timbrado.", "erro");
+      console.error("Erro ao converter papel timbrado:", error);
+      pushToast("Erro ao converter o papel timbrado em PDF.", "erro");
     }
   };
 
