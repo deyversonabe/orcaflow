@@ -1519,7 +1519,7 @@ function CRMPanel({ crm, setCrm, empresas, pushToast, usuarioAtual }) {
 }
 
 
-function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usuarioAtual, setView }) {
+function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usuarioAtual, setView, abrirOrcamentoSalvo }) {
   const [busca, setBusca] = useState("");
   const [statusFiltro, setStatusFiltro] = useState("Todos");
   const [empresaFiltro, setEmpresaFiltro] = useState("Todas");
@@ -1783,8 +1783,48 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
                   return (
                     <tr key={item.id} style={{ borderTop: `1px solid ${BRAND.border}` }}>
                       <td style={td}>
-                        <strong>{item.cliente || "—"}</strong>
-                        <div style={{ fontSize: 10, color: BRAND.dim, marginTop: 3 }}>{item.numero || "—"} · {tsFmt(item.criadoEm)}</div>
+                        <button
+                          type="button"
+                          onClick={() => abrirOrcamentoSalvo?.(item)}
+                          title="Abrir visão do orçamento gerado"
+                          style={{
+                            background: "transparent",
+                            border: "none",
+                            color: BRAND.text,
+                            padding: 0,
+                            cursor: "pointer",
+                            textAlign: "left",
+                            fontSize: 12,
+                            fontWeight: 900,
+                            textDecoration: "underline",
+                            textDecorationColor: BRAND.blue,
+                            textUnderlineOffset: 3,
+                          }}
+                        >
+                          {item.cliente || "—"}
+                        </button>
+
+                        <div style={{ fontSize: 10, color: BRAND.dim, marginTop: 3 }}>
+                          {item.numero || "—"} · {tsFmt(item.criadoEm)}
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => abrirOrcamentoSalvo?.(item)}
+                          style={{
+                            marginTop: 7,
+                            padding: "5px 9px",
+                            borderRadius: 8,
+                            border: `1px solid ${item.orcamentoCompleto ? BRAND.blue2 : BRAND.border2}66`,
+                            background: item.orcamentoCompleto ? `${BRAND.blue2}18` : "transparent",
+                            color: item.orcamentoCompleto ? "#93C5FD" : BRAND.dim,
+                            cursor: "pointer",
+                            fontSize: 10,
+                            fontWeight: 850,
+                          }}
+                        >
+                          👁 Abrir orçamento
+                        </button>
                       </td>
                       <td style={td}>{item.empresaNome || item.empresa || "—"}</td>
                       <td style={td}>{brl(item.valorGlobal || item.valor)}</td>
@@ -2389,6 +2429,7 @@ export default function App() {
           userId: usuarioAtual?.id || "admin",
           criadoEm: new Date().toISOString(),
           atualizadoEm: new Date().toISOString(),
+          orcamentoCompleto: novos[s.empId],
         };
       });
       setCrm((prev) => {
@@ -2593,6 +2634,29 @@ export default function App() {
     }
   };
 
+  const abrirOrcamentoSalvo = (item) => {
+    if (!item?.orcamentoCompleto || !item?.empresaId) {
+      pushToast("Este orçamento antigo não possui visualização salva. Gere novamente para salvar o conteúdo completo.", "aviso");
+      return;
+    }
+
+    setView("orcamento");
+    setStep("preview");
+    setOrcamentos({
+      [item.empresaId]: item.orcamentoCompleto,
+    });
+    setActiveTab(item.empresaId);
+    setEditando(false);
+    setSelecao([
+      {
+        empId: item.empresaId,
+        valorGlobal: item.valorGlobal || item.orcamentoCompleto.valorGlobal || "",
+      },
+    ]);
+    setCliente(item.cliente || item.orcamentoCompleto?.campos?.cliente || "");
+    pushToast("Orçamento aberto para visualização e novo download.", "ok");
+  };
+
 
   const INP = { background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, borderRadius: 10, padding: "11px 14px", color: BRAND.text, fontSize: UI.text, outline: "none", width: "100%", boxSizing: "border-box", lineHeight: 1.6, fontFamily: "inherit", transition: "all .22s ease" };
   const corDB = { ok: BRAND.green, erro: BRAND.danger, carregando: BRAND.warn };
@@ -2694,6 +2758,7 @@ export default function App() {
           pushToast={pushToast}
           usuarioAtual={usuarioAtual}
           setView={setView}
+          abrirOrcamentoSalvo={abrirOrcamentoSalvo}
         />
       )}
 
