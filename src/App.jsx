@@ -1519,7 +1519,7 @@ function CRMPanel({ crm, setCrm, empresas, pushToast, usuarioAtual }) {
 }
 
 
-function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usuarioAtual, setView, abrirOrcamentoSalvo }) {
+function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usuarioAtual, setView }) {
   const [busca, setBusca] = useState("");
   const [statusFiltro, setStatusFiltro] = useState("Todos");
   const [empresaFiltro, setEmpresaFiltro] = useState("Todas");
@@ -1783,48 +1783,8 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
                   return (
                     <tr key={item.id} style={{ borderTop: `1px solid ${BRAND.border}` }}>
                       <td style={td}>
-                        <button
-                          type="button"
-                          onClick={() => abrirOrcamentoSalvo?.(item)}
-                          title="Abrir visão do orçamento gerado"
-                          style={{
-                            background: "transparent",
-                            border: "none",
-                            color: BRAND.text,
-                            padding: 0,
-                            cursor: "pointer",
-                            textAlign: "left",
-                            fontSize: 12,
-                            fontWeight: 900,
-                            textDecoration: "underline",
-                            textDecorationColor: BRAND.blue,
-                            textUnderlineOffset: 3,
-                          }}
-                        >
-                          {item.cliente || "—"}
-                        </button>
-
-                        <div style={{ fontSize: 10, color: BRAND.dim, marginTop: 3 }}>
-                          {item.numero || "—"} · {tsFmt(item.criadoEm)}
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={() => abrirOrcamentoSalvo?.(item)}
-                          style={{
-                            marginTop: 7,
-                            padding: "5px 9px",
-                            borderRadius: 8,
-                            border: `1px solid ${item.orcamentoCompleto ? BRAND.blue2 : BRAND.border2}66`,
-                            background: item.orcamentoCompleto ? `${BRAND.blue2}18` : "transparent",
-                            color: item.orcamentoCompleto ? "#93C5FD" : BRAND.dim,
-                            cursor: "pointer",
-                            fontSize: 10,
-                            fontWeight: 850,
-                          }}
-                        >
-                          👁 Abrir orçamento
-                        </button>
+                        <strong>{item.cliente || "—"}</strong>
+                        <div style={{ fontSize: 10, color: BRAND.dim, marginTop: 3 }}>{item.numero || "—"} · {tsFmt(item.criadoEm)}</div>
                       </td>
                       <td style={td}>{item.empresaNome || item.empresa || "—"}</td>
                       <td style={td}>{brl(item.valorGlobal || item.valor)}</td>
@@ -2429,7 +2389,6 @@ export default function App() {
           userId: usuarioAtual?.id || "admin",
           criadoEm: new Date().toISOString(),
           atualizadoEm: new Date().toISOString(),
-          orcamentoCompleto: novos[s.empId],
         };
       });
       setCrm((prev) => {
@@ -2480,11 +2439,15 @@ export default function App() {
 
       const marginX = 48;
       const maxW = pageW - marginX * 2;
-      const topMargin = Math.max(Number(emp.altoCabecalho) || 120, 72);
+      const topMargin = emp.papelTimbrado
+        ? Math.max(Number(emp.altoCabecalho) || 150, 120)
+        : 122;
       const bottomMargin = Math.max(Number(emp.altoRodape) || 90, 58);
       let y = topMargin;
 
       const addBase = () => {
+        let timbradoAplicado = false;
+
         if (emp.papelTimbrado) {
           try {
             pdf.addImage(
@@ -2497,39 +2460,56 @@ export default function App() {
               undefined,
               "FAST"
             );
-          } catch (e) {
-            console.warn("Não foi possível aplicar o papel timbrado:", e);
-          }
-          y = topMargin;
-          return;
-        }
 
-        // Fallback quando não houver timbrado cadastrado.
-        pdf.setFillColor(255, 255, 255);
-        pdf.rect(0, 0, pageW, pageH, "F");
-
-        if (emp.logo) {
-          try {
-            pdf.addImage(emp.logo, imageTypeFromDataUrl(emp.logo), marginX, 28, 95, 48, undefined, "FAST");
+            timbradoAplicado = true;
           } catch (e) {
-            console.warn("Não foi possível aplicar a logo:", e);
+            console.warn("Timbrado falhou. Aplicando cabeçalho padrão:", e);
           }
         }
 
-        pdf.setDrawColor(0, 0, 0);
-        pdf.setLineWidth(0.6);
-        pdf.line(marginX, 92, pageW - marginX, 92);
+        if (!timbradoAplicado) {
+          pdf.setFillColor(255, 255, 255);
+          pdf.rect(0, 0, pageW, pageH, "F");
 
-        pdf.setFont(titleFont, "bold");
-        pdf.setFontSize(13);
-        pdf.setTextColor(0, 0, 0);
-        pdf.text(emp.nome || "Proposta Comercial", emp.logo ? marginX + 110 : marginX, 52);
+          if (emp.logo) {
+            try {
+              pdf.addImage(
+                emp.logo,
+                imageTypeFromDataUrl(emp.logo),
+                marginX,
+                28,
+                95,
+                48,
+                undefined,
+                "FAST"
+              );
+            } catch (e) {
+              console.warn("Não foi possível aplicar a logo:", e);
+            }
+          }
 
-        pdf.setFont("helvetica", "bold");
-        pdf.setFontSize(10);
-        pdf.setTextColor(0, 0, 0);
-        pdf.text(dados.numero || orcNum(), pageW - marginX, 52, { align: "right" });
-        y = 122;
+          pdf.setFont(titleFont, "bold");
+          pdf.setFontSize(13);
+          pdf.setTextColor(0, 0, 0);
+          pdf.text(
+            emp.nome || "Proposta Comercial",
+            emp.logo ? marginX + 110 : marginX,
+            52
+          );
+
+          pdf.setFont("helvetica", "bold");
+          pdf.setFontSize(10);
+          pdf.setTextColor(0, 0, 0);
+          pdf.text(dados.numero || orcNum(), pageW - marginX, 52, {
+            align: "right",
+          });
+
+          pdf.setDrawColor(0, 0, 0);
+          pdf.setLineWidth(0.6);
+          pdf.line(marginX, 92, pageW - marginX, 92);
+        }
+
+        y = topMargin;
       };
 
       const ensure = (h = 60) => {
@@ -2634,29 +2614,6 @@ export default function App() {
     }
   };
 
-  const abrirOrcamentoSalvo = (item) => {
-    if (!item?.orcamentoCompleto || !item?.empresaId) {
-      pushToast("Este orçamento antigo não possui visualização salva. Gere novamente para salvar o conteúdo completo.", "aviso");
-      return;
-    }
-
-    setView("orcamento");
-    setStep("preview");
-    setOrcamentos({
-      [item.empresaId]: item.orcamentoCompleto,
-    });
-    setActiveTab(item.empresaId);
-    setEditando(false);
-    setSelecao([
-      {
-        empId: item.empresaId,
-        valorGlobal: item.valorGlobal || item.orcamentoCompleto.valorGlobal || "",
-      },
-    ]);
-    setCliente(item.cliente || item.orcamentoCompleto?.campos?.cliente || "");
-    pushToast("Orçamento aberto para visualização e novo download.", "ok");
-  };
-
 
   const INP = { background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, borderRadius: 10, padding: "11px 14px", color: BRAND.text, fontSize: UI.text, outline: "none", width: "100%", boxSizing: "border-box", lineHeight: 1.6, fontFamily: "inherit", transition: "all .22s ease" };
   const corDB = { ok: BRAND.green, erro: BRAND.danger, carregando: BRAND.warn };
@@ -2758,7 +2715,6 @@ export default function App() {
           pushToast={pushToast}
           usuarioAtual={usuarioAtual}
           setView={setView}
-          abrirOrcamentoSalvo={abrirOrcamentoSalvo}
         />
       )}
 
