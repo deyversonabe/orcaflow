@@ -48,19 +48,6 @@ const ADMIN_PADRAO = {
   criadoEm: new Date().toISOString(),
 };
 
-const usuariosBase = [
-  ADMIN_PADRAO,
-  {
-    id: "user-michel",
-    nome: "Michel",
-    senha: "123456",
-    tipo: "usuario",
-    perfil: "Usuário",
-    ativo: true,
-    criadoEm: new Date().toISOString(),
-  },
-];
-
 function isAdminProtegido(usuario) {
   return (
     usuario?.id === "admin-master" ||
