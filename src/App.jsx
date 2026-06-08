@@ -256,8 +256,11 @@ function empVazio() {
     posicaoLogo: "esquerda",
     papelTimbrado: null,
     papelTimbradoNome: "",
-    altoCabecalho: 120,
-    altoRodape: 60,
+    // Medidas em PONTOS (pt), capturadas automaticamente do PDF/imagem do timbrado.
+    timbradoLarguraPt: 595.28,
+    timbradoAlturaPt: 841.89,
+    altoCabecalho: 150,
+    altoRodape: 100,
   };
 }
 
@@ -361,13 +364,96 @@ async function lerTextoPDF(file) {
   return texto;
 }
 
+// Detecta automaticamente onde termina o cabeçalho e onde começa o rodapé
+// analisando a "tinta" (pixels não-brancos) de cada linha do timbrado renderizado.
+// Retorna as alturas em PONTOS (pt) do PDF — captação automática das medidas.
+function detectarZonasTimbrado(canvas, alturaPt) {
+  try {
+    const ctx = canvas.getContext("2d");
+    const { width: W, height: H } = canvas;
+    const img = ctx.getImageData(0, 0, W, H).data;
+
+    // Marca cada linha que possui conteúdo (pixel claramente diferente do branco).
+    const passo = Math.max(1, Math.floor(W / 220)); // amostragem horizontal p/ performance
+    const linhaTemTinta = new Array(H).fill(false);
+
+    for (let y = 0; y < H; y += 1) {
+      let tinta = 0;
+      for (let x = 0; x < W; x += passo) {
+        const i = (y * W + x) * 4;
+        const r = img[i], g = img[i + 1], b = img[i + 2], a = img[i + 3];
+        // considera "tinta" qualquer pixel visível e não-branco
+        if (a > 30 && (r < 245 || g < 245 || b < 245)) tinta += 1;
+      }
+      linhaTemTinta[y] = tinta > 0;
+    }
+
+    // Encontra a maior faixa vazia (sem tinta) localizada na região central
+    // da página. O topo dessa faixa = fim do cabeçalho; a base = início do rodapé.
+    const limTopo = Math.floor(H * 0.10);
+    const limBase = Math.ceil(H * 0.90);
+
+    let melhorIni = -1, melhorFim = -1, melhorTam = 0;
+    let ini = -1;
+    for (let y = 0; y <= H; y += 1) {
+      const vazia = y < H ? !linhaTemTinta[y] : false;
+      if (vazia && ini === -1) ini = y;
+      if ((!vazia || y === H) && ini !== -1) {
+        const fim = y - 1;
+        // só considera faixas que cruzam a região central
+        const cruzaCentro = fim >= limTopo && ini <= limBase;
+        const tam = fim - ini;
+        if (cruzaCentro && tam > melhorTam) {
+          melhorTam = tam;
+          melhorIni = ini;
+          melhorFim = fim;
+        }
+        ini = -1;
+      }
+    }
+
+    const ptPorPx = alturaPt / H;
+    let cabecalhoPx, rodapePx;
+
+    if (melhorIni >= 0 && melhorTam > H * 0.04) {
+      cabecalhoPx = melhorIni; // fim do conteúdo do topo
+      rodapePx = H - melhorFim; // altura do bloco de rodapé
+    } else {
+      // fallback seguro caso não detecte faixa vazia clara
+      cabecalhoPx = H * 0.18;
+      rodapePx = H * 0.12;
+    }
+
+    // pequena folga para garantir que o corpo não encoste no timbrado
+    const folga = H * 0.012;
+    const altoCabecalho = Math.round((cabecalhoPx + folga) * ptPorPx);
+    const altoRodape = Math.round((rodapePx + folga) * ptPorPx);
+
+    return {
+      altoCabecalho: Math.max(40, Math.min(altoCabecalho, Math.round(alturaPt * 0.5))),
+      altoRodape: Math.max(24, Math.min(altoRodape, Math.round(alturaPt * 0.4))),
+    };
+  } catch (e) {
+    console.warn("Não foi possível detectar zonas do timbrado:", e);
+    return { altoCabecalho: Math.round(alturaPt * 0.18), altoRodape: Math.round(alturaPt * 0.12) };
+  }
+}
+
+// Converte o PDF do timbrado em imagem e captura automaticamente:
+// dimensões reais da página (em pontos) e as zonas de cabeçalho/rodapé.
 async function pdfParaImagemTimbrado(file) {
   const buffer = await file.arrayBuffer();
 
   const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
   const page = await pdf.getPage(1);
 
-  const viewport = page.getViewport({ scale: 3 });
+  // viewport em escala 1 = dimensões reais da página em PONTOS (pt)
+  const viewportBase = page.getViewport({ scale: 1 });
+  const larguraPt = viewportBase.width;
+  const alturaPt = viewportBase.height;
+
+  const escala = 3;
+  const viewport = page.getViewport({ scale: escala });
 
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
@@ -378,12 +464,219 @@ async function pdfParaImagemTimbrado(file) {
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  await page.render({
-    canvasContext: ctx,
-    viewport,
-  }).promise;
+  await page.render({ canvasContext: ctx, viewport }).promise;
 
-  return canvas.toDataURL("image/png", 1);
+  const zonas = detectarZonasTimbrado(canvas, alturaPt);
+
+  return {
+    imagem: canvas.toDataURL("image/png", 1),
+    larguraPt,
+    alturaPt,
+    altoCabecalho: zonas.altoCabecalho,
+    altoRodape: zonas.altoRodape,
+  };
+}
+
+// Para timbrados enviados como imagem (PNG/JPG): captura dimensões e zonas
+// usando A4 retrato como referência de proporção da página final.
+async function imagemParaTimbrado(dataUrl) {
+  return new Promise((resolve) => {
+    const A4_W = 595.28;
+    const A4_H = 841.89;
+    const fallback = {
+      imagem: dataUrl,
+      larguraPt: A4_W,
+      alturaPt: A4_H,
+      altoCabecalho: Math.round(A4_H * 0.18),
+      altoRodape: Math.round(A4_H * 0.12),
+    };
+    try {
+      const im = new Image();
+      im.onload = () => {
+        try {
+          const ratio = im.naturalHeight / im.naturalWidth || A4_H / A4_W;
+          const larguraPt = A4_W;
+          const alturaPt = A4_W * ratio;
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.min(im.naturalWidth, 1400);
+          canvas.height = Math.round(canvas.width * ratio);
+          const ctx = canvas.getContext("2d");
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(im, 0, 0, canvas.width, canvas.height);
+          const zonas = detectarZonasTimbrado(canvas, alturaPt);
+          resolve({ imagem: dataUrl, larguraPt, alturaPt, altoCabecalho: zonas.altoCabecalho, altoRodape: zonas.altoRodape });
+        } catch {
+          resolve(fallback);
+        }
+      };
+      im.onerror = () => resolve(fallback);
+      im.src = dataUrl;
+    } catch {
+      resolve(fallback);
+    }
+  });
+}
+
+function lerArquivoComoDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (ev) => resolve(ev.target.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function baixarDataUrl(dataUrl, nomeArquivo) {
+  try {
+    const a = document.createElement("a");
+    a.href = dataUrl;
+    a.download = nomeArquivo || "orcamento.pdf";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Modal para ANEXAR um orçamento já existente (PDF) e acompanhar o status
+// na plataforma, com as mesmas funções dos orçamentos gerados internamente.
+function ModalAnexarOrcamento({ empresas, usuarioAtual, onSave, onCancel, pushToast }) {
+  const [cliente, setCliente] = useState("");
+  const [empresaId, setEmpresaId] = useState(empresas[0]?.id || "");
+  const [numero, setNumero] = useState("");
+  const [valorGlobal, setValorGlobal] = useState("");
+  const [statusItem, setStatusItem] = useState("Aberto");
+  const [proximoContato, setProximoContato] = useState("");
+  const [arquivo, setArquivo] = useState(null);
+  const [arquivoNome, setArquivoNome] = useState("");
+  const [salvandoLocal, setSalvandoLocal] = useState(false);
+  const refFile = useRef(null);
+
+  const inp = {
+    width: "100%", background: BRAND.panel2, border: `1px solid ${BRAND.border2}`,
+    borderRadius: 10, padding: "11px 13px", color: BRAND.text, fontSize: 12.5,
+    outline: "none", boxSizing: "border-box",
+  };
+
+  const anexarPdf = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    const nome = String(file.name || "").toLowerCase();
+    if (file.type !== "application/pdf" && !nome.endsWith(".pdf")) {
+      pushToast("Anexe o orçamento em PDF.", "erro");
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      pushToast("Arquivo muito grande. Envie até 8 MB.", "erro");
+      return;
+    }
+    try {
+      const dataUrl = await lerArquivoComoDataURL(file);
+      setArquivo(dataUrl);
+      setArquivoNome(file.name);
+      pushToast("PDF anexado. Preencha os dados para acompanhamento.", "ok");
+    } catch {
+      pushToast("Erro ao ler o PDF.", "erro");
+    }
+  };
+
+  const salvar = async () => {
+    if (!cliente.trim()) { pushToast("Informe o cliente.", "erro"); return; }
+    if (!empresaId) { pushToast("Selecione a empresa.", "erro"); return; }
+    if (!arquivo) { pushToast("Anexe o PDF do orçamento.", "erro"); return; }
+    setSalvandoLocal(true);
+    const emp = empresas.find((e) => e.id === empresaId);
+    const item = {
+      id: `crm_anexo_${Date.now()}`,
+      numero: numero.trim() || orcNum(),
+      empresaId,
+      empresaNome: emp?.nome || "",
+      cliente: cliente.trim(),
+      valorGlobal: valorGlobal || "",
+      status: statusItem,
+      proximoContato: proximoContato || "",
+      lembreteIA: "",
+      userId: usuarioAtual?.id || "admin",
+      criadoEm: new Date().toISOString(),
+      atualizadoEm: new Date().toISOString(),
+      anexado: true,
+      arquivoPdf: arquivo,
+      arquivoNome: arquivoNome || "orcamento.pdf",
+      orcamentoCompleto: null,
+    };
+    await onSave(item);
+    setSalvandoLocal(false);
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.9)", zIndex: 3000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 16, width: "100%", maxWidth: 520, maxHeight: "86vh", overflowY: "auto", padding: "20px 22px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 950 }}>📎 Anexar orçamento existente</div>
+            <div style={{ fontSize: 11.5, color: BRAND.dim, marginTop: 3 }}>Acompanhe status, contato e cobrança igual aos gerados na plataforma.</div>
+          </div>
+          <button onClick={onCancel} style={{ background: "transparent", border: `1px solid ${BRAND.border2}`, color: BRAND.muted, width: 30, height: 30, borderRadius: 8, cursor: "pointer" }}>✕</button>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
+          <div>
+            <Lbl c="CLIENTE / DESTINATÁRIO *" />
+            <input value={cliente} onChange={(e) => setCliente(e.target.value)} placeholder="Ex: Prefeitura de Mirassol" style={inp} />
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <div>
+              <Lbl c="EMPRESA *" />
+              <select value={empresaId} onChange={(e) => setEmpresaId(e.target.value)} style={inp}>
+                {empresas.length === 0 && <option value="">Nenhuma empresa</option>}
+                {empresas.map((e) => <option key={e.id} value={e.id}>{e.nome}</option>)}
+              </select>
+            </div>
+            <div>
+              <Lbl c="Nº DO ORÇAMENTO" />
+              <input value={numero} onChange={(e) => setNumero(e.target.value)} placeholder="Opcional (gera automático)" style={inp} />
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <div>
+              <Lbl c="VALOR GLOBAL (R$)" />
+              <input type="number" value={valorGlobal} onChange={(e) => setValorGlobal(e.target.value)} placeholder="0,00" style={inp} />
+            </div>
+            <div>
+              <Lbl c="STATUS" />
+              <select value={statusItem} onChange={(e) => setStatusItem(e.target.value)} style={inp}>
+                {["Aberto", "Andamento", "Finalizado"].map((s) => <option key={s}>{s}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <Lbl c="PRÓXIMO CONTATO" />
+            <input type="date" value={proximoContato} onChange={(e) => setProximoContato(e.target.value)} style={inp} />
+          </div>
+
+          <div>
+            <Lbl c="ARQUIVO PDF DO ORÇAMENTO *" />
+            <input ref={refFile} type="file" accept="application/pdf,.pdf" style={{ display: "none" }} onChange={anexarPdf} />
+            <button onClick={() => refFile.current?.click()} style={{ width: "100%", padding: "12px", borderRadius: 10, border: `1px dashed ${arquivo ? BRAND.green2 : BRAND.blue2}66`, background: arquivo ? `${BRAND.green2}12` : `${BRAND.blue2}10`, color: arquivo ? BRAND.green : "#93C5FD", cursor: "pointer", fontSize: 12, fontWeight: 850 }}>
+              {arquivo ? `✓ ${arquivoNome}` : "📎 Selecionar PDF do orçamento"}
+            </button>
+          </div>
+
+          <div style={{ display: "flex", gap: 9, marginTop: 6 }}>
+            <button onClick={onCancel} style={{ flex: 1, padding: "11px", borderRadius: 10, border: `1px solid ${BRAND.border2}`, background: "transparent", color: BRAND.muted, cursor: "pointer", fontSize: 12.5, fontWeight: 800 }}>Cancelar</button>
+            <button onClick={salvar} disabled={salvandoLocal} style={{ flex: 2, padding: "11px", borderRadius: 10, border: "none", background: `linear-gradient(135deg, ${BRAND.green2}, ${BRAND.blue2})`, color: "#fff", cursor: salvandoLocal ? "not-allowed" : "pointer", fontSize: 12.5, fontWeight: 900 }}>{salvandoLocal ? "Salvando..." : "Salvar e acompanhar"}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function useDB() {
@@ -683,29 +976,35 @@ function ModalEmpresa({ empresa, onSave, onCancel, salvando, pushToast }) {
     }
 
     try {
-      let imagemFinal = "";
+      let resultado;
 
       if (isPdf) {
-        pushToast("Convertendo papel timbrado PDF em imagem...", "aviso");
-        imagemFinal = await pdfParaImagemTimbrado(file);
+        pushToast("Lendo papel timbrado e capturando medidas...", "aviso");
+        resultado = await pdfParaImagemTimbrado(file);
       } else {
-        imagemFinal = await new Promise((resolve, reject) => {
+        const dataUrl = await new Promise((resolve, reject) => {
           const reader = new FileReader();
           reader.onload = (ev) => resolve(ev.target.result);
           reader.onerror = reject;
           reader.readAsDataURL(file);
         });
+        resultado = await imagemParaTimbrado(dataUrl);
       }
 
-      set("papelTimbrado", imagemFinal);
+      set("papelTimbrado", resultado.imagem);
       set("papelTimbradoNome", file.name);
-      set("altoCabecalho", form.altoCabecalho || 120);
-      set("altoRodape", form.altoRodape || 90);
+      set("timbradoLarguraPt", resultado.larguraPt);
+      set("timbradoAlturaPt", resultado.alturaPt);
+      set("altoCabecalho", resultado.altoCabecalho);
+      set("altoRodape", resultado.altoRodape);
 
-      pushToast("Papel timbrado anexado com sucesso.", "ok");
+      pushToast(
+        `Timbrado anexado. Cabeçalho ~${resultado.altoCabecalho}pt e rodapé ~${resultado.altoRodape}pt detectados.`,
+        "ok"
+      );
     } catch (error) {
-      console.error("Erro ao converter papel timbrado:", error);
-      pushToast("Erro ao converter o papel timbrado em PDF.", "erro");
+      console.error("Erro ao processar papel timbrado:", error);
+      pushToast("Erro ao processar o papel timbrado.", "erro");
     }
   };
 
@@ -1015,14 +1314,17 @@ function ModalEmpresa({ empresa, onSave, onCancel, salvando, pushToast }) {
                     {form.papelTimbrado && (
                       <>
                         <button onClick={() => { set("papelTimbrado", null); set("papelTimbradoNome", ""); }} style={{ marginTop: 7, width: "100%", padding: "6px", borderRadius: 8, border: `1px solid ${BRAND.danger}55`, background: "transparent", color: BRAND.danger, cursor: "pointer", fontSize: 11 }}>Remover timbrado</button>
+                        <div style={{ marginTop: 10, padding: "8px 10px", borderRadius: 8, background: `${BRAND.green2}12`, border: `1px solid ${BRAND.green2}33`, fontSize: 10.5, color: BRAND.green, lineHeight: 1.5 }}>
+                          ✓ Medidas capturadas automaticamente do arquivo. O corpo do orçamento fica sempre entre o cabeçalho e o rodapé do timbrado. Ajuste fino abaixo se precisar.
+                        </div>
                         <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                           <div>
-                            <Lbl c={`CABEÇALHO: ${form.altoCabecalho}px`} />
-                            <input type="range" min={60} max={240} value={form.altoCabecalho} onChange={(e) => set("altoCabecalho", Number(e.target.value))} style={{ width: "100%", accentColor: BRAND.green }} />
+                            <Lbl c={`ZONA DO CABEÇALHO: ${form.altoCabecalho} pt`} />
+                            <input type="range" min={40} max={Math.round((form.timbradoAlturaPt || 842) * 0.5)} value={form.altoCabecalho} onChange={(e) => set("altoCabecalho", Number(e.target.value))} style={{ width: "100%", accentColor: BRAND.green }} />
                           </div>
                           <div>
-                            <Lbl c={`RODAPÉ: ${form.altoRodape}px`} />
-                            <input type="range" min={30} max={140} value={form.altoRodape} onChange={(e) => set("altoRodape", Number(e.target.value))} style={{ width: "100%", accentColor: BRAND.green }} />
+                            <Lbl c={`ZONA DO RODAPÉ: ${form.altoRodape} pt`} />
+                            <input type="range" min={24} max={Math.round((form.timbradoAlturaPt || 842) * 0.4)} value={form.altoRodape} onChange={(e) => set("altoRodape", Number(e.target.value))} style={{ width: "100%", accentColor: BRAND.green }} />
                           </div>
                         </div>
                       </>
@@ -1102,8 +1404,8 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
   return (
     <div style={{ background: emp.corFundo || "#fff", border: "1px solid #E2E8F0", borderRadius: 14, overflow: "hidden", boxShadow: "0 10px 44px rgba(0,0,0,.2)", animation: "ofCardIn .28s ease both" }}>
       {emp.papelTimbrado ? (
-        <div style={{ position: "relative", minHeight: emp.altoCabecalho || 120, overflow: "hidden" }}>
-          <img src={emp.papelTimbrado} style={{ width: "100%", height: emp.altoCabecalho || 120, objectFit: "cover", objectPosition: "top", display: "block" }} alt="" />
+        <div style={{ position: "relative", overflow: "hidden" }}>
+          <img src={emp.papelTimbrado} style={{ width: "100%", height: "auto", display: "block" }} alt="" />
           <div style={{ position: "absolute", top: 10, right: 18, background: "rgba(0,0,0,.58)", backdropFilter: "blur(4px)", borderRadius: 9, padding: "8px 13px", textAlign: "right" }}>
             <div style={{ fontSize: 8, color: "rgba(255,255,255,.72)", letterSpacing: 1.5 }}>PROPOSTA COMERCIAL</div>
             <div style={{ fontSize: 13, fontWeight: 900, color: "#fff", fontFamily: "monospace" }}>{dados.numero}</div>
@@ -1519,7 +1821,7 @@ function CRMPanel({ crm, setCrm, empresas, pushToast, usuarioAtual }) {
 }
 
 
-function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usuarioAtual, setView }) {
+function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usuarioAtual, setView, abrirOrcamentoSalvo, baixarOrcamento, onAnexar }) {
   const [busca, setBusca] = useState("");
   const [statusFiltro, setStatusFiltro] = useState("Todos");
   const [empresaFiltro, setEmpresaFiltro] = useState("Todas");
@@ -1678,6 +1980,9 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
           <button className="of-neon-btn" onClick={() => setView("orcamento")} style={{ padding: "12px 18px", borderRadius: 14, cursor: "pointer" }}>
             ✨ Novo orçamento
           </button>
+          <button onClick={() => onAnexar?.()} style={{ padding: "12px 18px", borderRadius: 14, border: `1px solid ${BRAND.green2}66`, background: `${BRAND.green2}18`, color: BRAND.green, fontWeight: 900, cursor: "pointer" }}>
+            📎 Anexar orçamento
+          </button>
           <button onClick={criarLembretesIA} style={{ padding: "12px 18px", borderRadius: 14, border: `1px solid ${BRAND.blue2}66`, background: `${BRAND.blue2}18`, color: "#93C5FD", fontWeight: 900, cursor: "pointer" }}>
             🤖 IA criar lembretes
           </button>
@@ -1783,8 +2088,49 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
                   return (
                     <tr key={item.id} style={{ borderTop: `1px solid ${BRAND.border}` }}>
                       <td style={td}>
-                        <strong>{item.cliente || "—"}</strong>
-                        <div style={{ fontSize: 10, color: BRAND.dim, marginTop: 3 }}>{item.numero || "—"} · {tsFmt(item.criadoEm)}</div>
+                        <button
+                          type="button"
+                          onClick={() => (baixarOrcamento || abrirOrcamentoSalvo)?.(item)}
+                          title="Abrir / baixar o orçamento"
+                          style={{
+                            background: "transparent",
+                            border: "none",
+                            color: BRAND.text,
+                            padding: 0,
+                            cursor: "pointer",
+                            textAlign: "left",
+                            fontSize: 12,
+                            fontWeight: 900,
+                            textDecoration: "underline",
+                            textDecorationColor: BRAND.blue,
+                            textUnderlineOffset: 3,
+                          }}
+                        >
+                          {item.cliente || "—"}
+                        </button>
+
+                        <div style={{ fontSize: 10, color: BRAND.dim, marginTop: 3 }}>
+                          {item.numero || "—"} · {tsFmt(item.criadoEm)}
+                          {item.anexado && <span style={{ marginLeft: 6, padding: "1px 6px", borderRadius: 8, background: `${BRAND.green2}1e`, color: BRAND.green, fontWeight: 800, fontSize: 9 }}>📎 anexado</span>}
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => (baixarOrcamento || abrirOrcamentoSalvo)?.(item)}
+                          style={{
+                            marginTop: 7,
+                            padding: "5px 9px",
+                            borderRadius: 8,
+                            border: `1px solid ${(item.orcamentoCompleto || item.anexado) ? BRAND.blue2 : BRAND.border2}66`,
+                            background: (item.orcamentoCompleto || item.anexado) ? `${BRAND.blue2}18` : "transparent",
+                            color: (item.orcamentoCompleto || item.anexado) ? "#93C5FD" : BRAND.dim,
+                            cursor: "pointer",
+                            fontSize: 10,
+                            fontWeight: 850,
+                          }}
+                        >
+                          {item.anexado ? "⬇ Baixar PDF" : "👁 Abrir orçamento"}
+                        </button>
                       </td>
                       <td style={td}>{item.empresaNome || item.empresa || "—"}</td>
                       <td style={td}>{brl(item.valorGlobal || item.valor)}</td>
@@ -2108,6 +2454,7 @@ export default function App() {
   const [modal, setModal] = useState(null);
   const [salvando, setSalvando] = useState(false);
   const [confirmar, setConfirmar] = useState(null);
+  const [anexarOpen, setAnexarOpen] = useState(false);
   const [logData, setLogData] = useState([]);
   const [logOpen, setLogOpen] = useState(false);
   const refImport = useRef(null);
@@ -2389,6 +2736,7 @@ export default function App() {
           userId: usuarioAtual?.id || "admin",
           criadoEm: new Date().toISOString(),
           atualizadoEm: new Date().toISOString(),
+          orcamentoCompleto: novos[s.empId],
         };
       });
       setCrm((prev) => {
@@ -2428,7 +2776,19 @@ export default function App() {
 
     try {
       const { jsPDF } = await import(/* @vite-ignore */ "https://esm.sh/jspdf@2.5.1");
-      const pdf = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
+
+      // Quando há timbrado, a PÁGINA do PDF é criada com as MESMAS dimensões
+      // do arquivo enviado. Assim o timbrado entra inteiro (sem corte e sem
+      // distorção) e o cabeçalho/rodapé dele nunca são cortados.
+      const temTimbrado = Boolean(emp.papelTimbrado);
+      const tW = Number(emp.timbradoLarguraPt) || 595.28;
+      const tH = Number(emp.timbradoAlturaPt) || 841.89;
+      const orientacao = temTimbrado && tW > tH ? "landscape" : "portrait";
+
+      const pdf = temTimbrado
+        ? new jsPDF({ orientation: orientacao, unit: "pt", format: [tW, tH] })
+        : new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
+
       const pageW = pdf.internal.pageSize.getWidth();
       const pageH = pdf.internal.pageSize.getHeight();
 
@@ -2439,10 +2799,17 @@ export default function App() {
 
       const marginX = 48;
       const maxW = pageW - marginX * 2;
-      const topMargin = emp.papelTimbrado
-        ? Math.max(Number(emp.altoCabecalho) || 150, 120)
+
+      // Margens calculadas a partir das zonas detectadas do timbrado (em pt).
+      // Uma folga extra garante que o corpo NUNCA sobreponha o cabeçalho/rodapé.
+      const folgaTopo = 14;
+      const folgaBase = 14;
+      const topMargin = temTimbrado
+        ? Math.max(Number(emp.altoCabecalho) || Math.round(pageH * 0.18), 40) + folgaTopo
         : 122;
-      const bottomMargin = Math.max(Number(emp.altoRodape) || 90, 58);
+      const bottomMargin = temTimbrado
+        ? Math.max(Number(emp.altoRodape) || Math.round(pageH * 0.12), 24) + folgaBase
+        : 64;
       let y = topMargin;
 
       const addBase = () => {
@@ -2549,6 +2916,12 @@ export default function App() {
       pdf.setFontSize(titleSize);
       pdf.setTextColor(0, 0, 0);
       pdf.text("PROPOSTA COMERCIAL", marginX, y);
+
+      // Número da proposta sempre dentro da área segura (nunca sobre o timbrado).
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(10);
+      pdf.setTextColor(0, 0, 0);
+      pdf.text(dados.numero || orcNum(), pageW - marginX, y, { align: "right" });
       y += 28;
 
       writeSection("Destinatário", dados.campos?.cliente || cliente);
@@ -2612,6 +2985,59 @@ export default function App() {
       await baixarPDF(emp.id);
       await new Promise((resolve) => setTimeout(resolve, 350));
     }
+  };
+
+  // Baixa/abre o orçamento: se for anexado, abre o PDF salvo; se for gerado,
+  // re-renderiza o PDF a partir do conteúdo salvo.
+  const baixarOrcamento = (item) => {
+    if (item?.anexado && item?.arquivoPdf) {
+      const ok = baixarDataUrl(item.arquivoPdf, item.arquivoNome || `${safeFileName(item.cliente)}.pdf`);
+      pushToast(ok ? "PDF do orçamento anexado baixado." : "Não foi possível abrir o PDF anexado.", ok ? "ok" : "erro");
+      return;
+    }
+    abrirOrcamentoSalvo(item);
+  };
+
+  const abrirOrcamentoSalvo = (item) => {
+    // Orçamento anexado (PDF externo): baixa o arquivo salvo.
+    if (item?.anexado && item?.arquivoPdf) {
+      const ok = baixarDataUrl(item.arquivoPdf, item.arquivoNome || `${safeFileName(item.cliente)}.pdf`);
+      pushToast(ok ? "PDF do orçamento anexado baixado." : "Não foi possível abrir o PDF anexado.", ok ? "ok" : "erro");
+      return;
+    }
+
+    if (!item?.orcamentoCompleto || !item?.empresaId) {
+      pushToast("Este orçamento antigo não possui visualização salva. Gere novamente para salvar o conteúdo completo.", "aviso");
+      return;
+    }
+
+    setView("orcamento");
+    setStep("preview");
+    setOrcamentos({
+      [item.empresaId]: item.orcamentoCompleto,
+    });
+    setActiveTab(item.empresaId);
+    setEditando(false);
+    setSelecao([
+      {
+        empId: item.empresaId,
+        valorGlobal: item.valorGlobal || item.orcamentoCompleto.valorGlobal || "",
+      },
+    ]);
+    setCliente(item.cliente || item.orcamentoCompleto?.campos?.cliente || "");
+    pushToast("Orçamento aberto para visualização e novo download.", "ok");
+  };
+
+  // Salva no CRM/Gestão um orçamento anexado externamente.
+  const salvarOrcamentoAnexado = async (item) => {
+    setCrm((prev) => {
+      const atualizado = [item, ...prev];
+      store.set(KEY_CRM, atualizado);
+      return atualizado;
+    });
+    await incOrcamentos(1);
+    setAnexarOpen(false);
+    pushToast("Orçamento anexado e adicionado ao acompanhamento.", "ok");
   };
 
 
@@ -2715,6 +3141,9 @@ export default function App() {
           pushToast={pushToast}
           usuarioAtual={usuarioAtual}
           setView={setView}
+          abrirOrcamentoSalvo={abrirOrcamentoSalvo}
+          baixarOrcamento={baixarOrcamento}
+          onAnexar={() => setAnexarOpen(true)}
         />
       )}
 
@@ -2837,6 +3266,16 @@ export default function App() {
       )}
 
       {modal && <ModalEmpresa empresa={modal} onSave={handleSalvar} onCancel={() => setModal(null)} salvando={salvando} pushToast={pushToast} />}
+
+      {anexarOpen && (
+        <ModalAnexarOrcamento
+          empresas={empresas}
+          usuarioAtual={usuarioAtual}
+          onSave={salvarOrcamentoAnexado}
+          onCancel={() => setAnexarOpen(false)}
+          pushToast={pushToast}
+        />
+      )}
 
       {confirmar && <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.9)", zIndex: 3000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}><div style={{ background: BRAND.panel, border: `1px solid ${BRAND.danger}55`, borderRadius: 15, padding: "25px 27px", maxWidth: 390, width: "100%", textAlign: "center" }}><div style={{ fontSize: 34, marginBottom: 10 }}>⚠️</div><div style={{ fontSize: 15, fontWeight: 900, color: BRAND.danger, marginBottom: 7 }}>Excluir empresa?</div><div style={{ fontSize: 13.5, fontWeight: 800, marginBottom: 21 }}>"{confirmar.nome}"</div><div style={{ display: "flex", gap: 10, justifyContent: "center" }}><button onClick={() => setConfirmar(null)} style={{ padding: "9px 19px", borderRadius: 9, border: `1px solid ${BRAND.border2}`, background: "transparent", color: BRAND.muted, cursor: "pointer", fontSize: 12.5, fontWeight: 800 }}>Cancelar</button><button onClick={handleExcluir} style={{ padding: "9px 19px", borderRadius: 9, border: "none", background: "#DC2626", color: "#fff", cursor: "pointer", fontSize: 12.5, fontWeight: 900 }}>Excluir</button></div></div></div>}
 
