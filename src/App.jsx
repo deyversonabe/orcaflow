@@ -48,6 +48,19 @@ const ADMIN_PADRAO = {
   criadoEm: new Date().toISOString(),
 };
 
+const usuariosBase = [
+  ADMIN_PADRAO,
+  {
+    id: "user-michel",
+    nome: "Michel",
+    senha: "123456",
+    tipo: "usuario",
+    perfil: "Usuário",
+    ativo: true,
+    criadoEm: new Date().toISOString(),
+  },
+];
+
 function isAdminProtegido(usuario) {
   return (
     usuario?.id === "admin-master" ||
@@ -151,7 +164,33 @@ async function logOp(acao, nome, id) {
 
 const uid = () => `emp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 const orcNum = () => `ORC-${String(Math.floor(Math.random() * 900000) + 100000)}`;
-const brl = (v) => (parseFloat(v) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+// Interpreta valores no formato brasileiro corretamente:
+// "3.500" → 3500 | "3.500,00" → 3500 | "3500,50" → 3500.5 | "3.5" → 3.5
+function parseValorBR(v) {
+  if (v === null || v === undefined) return 0;
+  if (typeof v === "number") return Number.isFinite(v) ? v : 0;
+  let s = String(v).trim().replace(/r\$/gi, "").replace(/\s/g, "");
+  if (!s) return 0;
+  const temVirgula = s.includes(",");
+  const temPonto = s.includes(".");
+  if (temVirgula && temPonto) {
+    // formato BR completo: ponto = milhar, vírgula = decimal
+    s = s.replace(/\./g, "").replace(",", ".");
+  } else if (temVirgula) {
+    // só vírgula = separador decimal
+    s = s.replace(",", ".");
+  } else if (temPonto) {
+    // só ponto: se o último grupo tem 3 dígitos, é separador de milhar (3.500 = 3500)
+    const partes = s.split(".");
+    const ultima = partes[partes.length - 1];
+    if (partes.length > 1 && ultima.length === 3) s = s.replace(/\./g, "");
+    // caso contrário mantém como decimal (3.5 = 3,5)
+  }
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? n : 0;
+}
+
+const brl = (v) => parseValorBR(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 const tsFmt = (iso) => {
   try {
     return iso ? new Date(iso).toLocaleString("pt-BR") : "—";
@@ -583,7 +622,7 @@ function ModalAnexarOrcamento({ empresas, usuarioAtual, onSave, onCancel, pushTo
       empresaId,
       empresaNome: emp?.nome || "",
       cliente: cliente.trim(),
-      valorGlobal: valorGlobal || "",
+      valorGlobal: parseValorBR(valorGlobal),
       status: statusItem,
       proximoContato: proximoContato || "",
       lembreteIA: "",
@@ -633,7 +672,8 @@ function ModalAnexarOrcamento({ empresas, usuarioAtual, onSave, onCancel, pushTo
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <div>
               <Lbl c="VALOR GLOBAL (R$)" />
-              <input type="number" value={valorGlobal} onChange={(e) => setValorGlobal(e.target.value)} placeholder="0,00" style={inp} />
+              <input type="text" inputMode="decimal" value={valorGlobal} onChange={(e) => setValorGlobal(e.target.value)} placeholder="Ex: 3.500 ou 3500,00" style={inp} />
+              {valorGlobal.trim() !== "" && <div style={{ fontSize: 10, color: BRAND.green, marginTop: 4, fontWeight: 800 }}>{brl(parseValorBR(valorGlobal))}</div>}
             </div>
             <div>
               <Lbl c="STATUS" />
@@ -1808,6 +1848,50 @@ function CRMPanel({ crm, setCrm, empresas, pushToast, usuarioAtual }) {
 }
 
 
+// Editor manual de preço usado na tabela de Gestão. Aceita formato brasileiro
+// (3.500 / 3.500,00 / 3500) e salva o valor numérico correto.
+function ValorEditavel({ valor, onSalvar }) {
+  const [edit, setEdit] = useState(valor === "" || valor === null || valor === undefined ? "" : String(valor));
+
+  useEffect(() => {
+    setEdit(valor === "" || valor === null || valor === undefined ? "" : String(valor));
+  }, [valor]);
+
+  const commit = () => {
+    const n = parseValorBR(edit);
+    onSalvar(n);
+    setEdit(n ? String(n) : "");
+  };
+
+  return (
+    <div>
+      <input
+        value={edit}
+        onChange={(e) => setEdit(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+        placeholder="0,00"
+        title="Digite o valor (ex: 3.500 ou 3500,00) e pressione Enter"
+        style={{
+          width: "100%",
+          background: BRAND.panel2,
+          border: `1px solid ${BRAND.border2}`,
+          borderRadius: 9,
+          padding: "8px 10px",
+          color: BRAND.text,
+          fontSize: 12,
+          fontWeight: 850,
+          outline: "none",
+          boxSizing: "border-box",
+        }}
+      />
+      <div style={{ fontSize: 10, color: BRAND.green, marginTop: 3, fontWeight: 800 }}>
+        {brl(parseValorBR(edit))}
+      </div>
+    </div>
+  );
+}
+
 function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usuarioAtual, setView, abrirOrcamentoSalvo, baixarOrcamento, onAnexar }) {
   const [busca, setBusca] = useState("");
   const [statusFiltro, setStatusFiltro] = useState("Todos");
@@ -1846,10 +1930,10 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
     (o) => o.status !== "Finalizado" && diasAte(o.proximoContato) !== null && diasAte(o.proximoContato) < 0
   ).length;
 
-  const valorTotal = base.reduce((soma, item) => soma + (Number(item.valorGlobal || item.valor) || 0), 0);
+  const valorTotal = base.reduce((soma, item) => soma + parseValorBR(item.valorGlobal ?? item.valor), 0);
   const valorPotencial = base
     .filter((item) => item.status !== "Finalizado")
-    .reduce((soma, item) => soma + (Number(item.valorGlobal || item.valor) || 0), 0);
+    .reduce((soma, item) => soma + parseValorBR(item.valorGlobal ?? item.valor), 0);
   const ticketMedio = total ? valorTotal / total : 0;
   const taxaConversao = total ? Math.round((finalizados / total) * 100) : 0;
   const precisamContato = abertos + andamento + atrasados;
@@ -2120,7 +2204,12 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
                         </button>
                       </td>
                       <td style={td}>{item.empresaNome || item.empresa || "—"}</td>
-                      <td style={td}>{brl(item.valorGlobal || item.valor)}</td>
+                      <td style={td}>
+                        <ValorEditavel
+                          valor={item.valorGlobal ?? item.valor ?? ""}
+                          onSalvar={(n) => updateItem(item.id, "valorGlobal", n)}
+                        />
+                      </td>
                       <td style={td}>
                         <select
                           value={item.status || "Aberto"}
