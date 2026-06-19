@@ -1,114 +1,134 @@
 function extrairTextoResposta(data) {
-  if (typeof data?.output_text === "string" && data.output_text.trim()) return data.output_text.trim();
+  if (typeof data?.output_text === "string" && data.output_text.trim()) {
+    return data.output_text.trim();
+  }
+
   const partes = [];
-  for (const item of data?.output || []) {
-    for (const content of item?.content || []) {
-      if (typeof content?.text === "string") partes.push(content.text);
-      if (typeof content?.output_text === "string") partes.push(content.output_text);
+
+  if (Array.isArray(data?.output)) {
+    for (const item of data.output) {
+      if (Array.isArray(item?.content)) {
+        for (const content of item.content) {
+          if (typeof content?.text === "string") partes.push(content.text);
+          if (typeof content?.output_text === "string") partes.push(content.output_text);
+        }
+      }
     }
   }
+
   return partes.join("\n").trim();
 }
 
 function limparJson(texto) {
-  return String(texto || "").replace(/```json/gi, "").replace(/```/g, "").trim();
+  return String(texto || "")
+    .replace(/```json/gi, "")
+    .replace(/```/g, "")
+    .trim();
 }
 
 export default async function handler(req, res) {
-  if (req.method !== "POST") return res.status(405).json({ error: "Método não permitido." });
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Método não permitido." });
+  }
 
   try {
     if (!process.env.OPENAI_API_KEY) {
-      return res.status(500).json({ error: "OPENAI_API_KEY não configurada no Vercel." });
+      return res.status(500).json({
+        error: "OPENAI_API_KEY não configurada no Vercel.",
+      });
     }
 
     const { cliente, texto, obs, empresas, selecao } = req.body || {};
+
     if (!cliente || !texto || !Array.isArray(empresas) || !Array.isArray(selecao)) {
-      return res.status(400).json({ error: "Dados insuficientes para gerar o orçamento." });
+      return res.status(400).json({
+        error: "Dados insuficientes para gerar o orçamento.",
+      });
     }
 
-    const empresasSelecionadas = selecao.map((s) => {
-      const emp = empresas.find((e) => e.id === s.empId);
-      if (!emp) return null;
-      return {
-        id: emp.id,
-        nome: emp.nome || "",
-        nomeFantasia: emp.nomeFantasia || "",
-        tom: emp.tom || "",
-        dnaLinguagem: emp.dnaLinguagem || "",
-        estruturaOrcamento: emp.estruturaOrcamento || "",
-        preferenciaTabela: emp.preferenciaTabela || "automatica",
-        analiseModelo: emp.analiseModelo || "",
-        diferenciais: emp.diferenciais || "",
-        valorGlobal: s.valorGlobal || "",
-      };
-    }).filter(Boolean);
+    const empresasSelecionadas = selecao
+      .map((s) => {
+        const emp = empresas.find((e) => e.id === s.empId);
+        if (!emp) return null;
+
+        return {
+          id: emp.id,
+          nome: emp.nome || "",
+          nomeFantasia: emp.nomeFantasia || "",
+          tom: emp.tom || "",
+          dnaLinguagem: emp.dnaLinguagem || "",
+          estruturaOrcamento: emp.estruturaOrcamento || "",
+          diferenciais: emp.diferenciais || "",
+          valorGlobal: s.valorGlobal || "",
+        };
+      })
+      .filter(Boolean);
 
     if (!empresasSelecionadas.length) {
-      return res.status(400).json({ error: "Nenhuma empresa selecionada foi encontrada." });
+      return res.status(400).json({
+        error: "Nenhuma empresa selecionada foi encontrada.",
+      });
     }
 
     const prompt = `
-Você é um especialista em elaboração de propostas e orçamentos técnicos brasileiros.
-Gere um documento individual para cada empresa, usando obrigatoriamente a descrição informada pelo usuário.
+Você é um sistema especializado em geração de orçamentos técnicos.
 
-REGRAS DE CONTEÚDO:
-- Não invente datas, prazos, garantias, marcas, materiais, quantidades, locais ou condições não informadas.
-- Não invente preços. O único valor financeiro autorizado é o valor global informado para cada empresa.
-- Preserve detalhes concretos fornecidos pelo usuário.
-- Use o DNA e a estrutura de cada empresa sem misturar estilos.
-- Não use emojis.
-- Escreva com qualidade profissional, clareza técnica e sem frases promocionais vazias.
+O usuário informou um serviço na tela principal do sistema.
+Você deve gerar um orçamento individual para cada empresa selecionada.
 
-REGRAS DE TABELA:
-- "nunca": retorne tipo "nenhuma".
-- "sempre_tecnica": use tabela técnica se houver pelo menos 2 linhas identificáveis.
-- "sempre_precificada": use tabela precificada se houver pelo menos 2 itens e valor global.
-- "automatica": só gere tabela quando a descrição trouxer variedade real de itens, equipamentos, locais, fases ou serviços que possam formar pelo menos 2 linhas.
-- Se houver somente um serviço principal, texto narrativo ou lista genérica de etapas, não gere tabela comercial.
-- Tabela técnica não contém valores por item.
-- Tabela precificada pode retornar peso relativo, quantidade e unidade, mas não deve calcular nem inventar preços. O sistema fará o rateio exato usando o valor global manual.
-- Não transforme cada frase de um escopo narrativo em tabela apenas para preencher espaço.
+REGRA PRINCIPAL:
+Cada empresa possui regras próprias cadastradas nos campos "dnaLinguagem" e "estruturaOrcamento".
+Você deve respeitar rigorosamente as regras de cada empresa.
+Não misture estilos entre empresas.
 
-CLIENTE:
+REGRAS GERAIS OBRIGATÓRIAS:
+- Não inventar informações.
+- Não criar datas.
+- Não criar prazos.
+- Não criar valores.
+- Não criar materiais que não foram informados.
+- Não criar escopos não informados.
+- Não usar emojis.
+- Não usar linguagem promocional.
+- Não fugir da estrutura cadastrada.
+- Usar apenas as informações fornecidas pelo usuário.
+- Se alguma informação não foi fornecida, deixe o campo vazio ou escreva apenas o que for tecnicamente seguro.
+- Gerar cada orçamento de forma individual, respeitando a personalidade da empresa correspondente.
+- O valor global deve ser usado somente se estiver informado na seleção da empresa.
+- Não criar prazo de execução, validade, garantia ou data de emissão.
+
+CLIENTE / DESTINATÁRIO:
 ${cliente}
 
-DESCRIÇÃO DO CORPO DO ORÇAMENTO:
+DESCRIÇÃO DO SERVIÇO INFORMADA PELO USUÁRIO:
 ${texto}
 
-OBSERVAÇÕES:
+OBSERVAÇÕES OPCIONAIS:
 ${obs || "Não informado."}
 
-EMPRESAS:
+EMPRESAS SELECIONADAS:
 ${JSON.stringify(empresasSelecionadas, null, 2)}
 
-Retorne somente JSON válido neste formato:
+RETORNE SOMENTE JSON VÁLIDO, SEM MARKDOWN, NESTE FORMATO EXATO:
+
 {
+  "itens": [
+    "item técnico objetivo 1",
+    "item técnico objetivo 2"
+  ],
   "empresas": {
     "ID_DA_EMPRESA": {
-      "titulo": "título específico da proposta",
-      "secoes": [
-        { "titulo": "Nome da seção", "conteudo": "texto profissional da seção" }
-      ],
-      "tabela": {
-        "tipo": "nenhuma|tecnica|precificada",
-        "titulo": "título da tabela",
-        "itens": [
-          {
-            "item": "01",
-            "local": "",
-            "equipamento": "",
-            "descricao": "",
-            "quantidade": 1,
-            "unidade": "un.",
-            "peso": 1
-          }
-        ]
-      },
-      "fechamento": "fechamento formal, vazio quando não fizer parte do padrão"
+      "intro": "texto de apresentação da proposta conforme a linguagem da empresa",
+      "objetivo": "objetivo técnico do serviço",
+      "escopo": "escopo completo seguindo a estrutura da empresa",
+      "materiais": "materiais e equipamentos somente se informados ou necessários de forma evidente",
+      "consideracoes": "considerações técnicas aplicáveis",
+      "recursos": "recursos operacionais aplicáveis",
+      "fechamento": "fechamento formal da proposta"
     }
   }
-}`;
+}
+`;
 
     const response = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
@@ -119,29 +139,53 @@ Retorne somente JSON válido neste formato:
       body: JSON.stringify({
         model: process.env.OPENAI_BUDGET_MODEL || "gpt-4.1-mini",
         input: prompt,
-        temperature: 0.15,
+        temperature: 0.2,
       }),
     });
 
     const data = await response.json();
-    if (!response.ok) return res.status(response.status).json({ error: data?.error?.message || "Erro ao gerar orçamento com IA." });
+
+    if (!response.ok) {
+      return res.status(response.status).json({
+        error: data?.error?.message || "Erro ao gerar orçamento com IA.",
+      });
+    }
 
     const outputText = extrairTextoResposta(data);
-    if (!outputText) return res.status(500).json({ error: "A IA não retornou conteúdo." });
+
+    if (!outputText) {
+      return res.status(500).json({
+        error: "A IA não retornou conteúdo.",
+      });
+    }
 
     let parsed;
+
     try {
       parsed = JSON.parse(limparJson(outputText));
     } catch {
-      return res.status(500).json({ error: "A IA retornou um formato inválido.", raw: outputText });
-    }
-    if (!parsed.empresas || typeof parsed.empresas !== "object") {
-      return res.status(500).json({ error: "A IA não retornou os orçamentos por empresa.", raw: parsed });
+      return res.status(500).json({
+        error: "A IA retornou um formato inválido.",
+        raw: outputText,
+      });
     }
 
-    return res.status(200).json({ empresas: parsed.empresas });
+    if (!parsed.empresas || typeof parsed.empresas !== "object") {
+      return res.status(500).json({
+        error: "A IA não retornou os orçamentos por empresa.",
+        raw: parsed,
+      });
+    }
+
+    return res.status(200).json({
+      itens: Array.isArray(parsed.itens) ? parsed.itens : [],
+      empresas: parsed.empresas,
+    });
   } catch (error) {
     console.error("Erro em generate-budget:", error);
-    return res.status(500).json({ error: error.message || "Erro interno ao gerar orçamento." });
+
+    return res.status(500).json({
+      error: error.message || "Erro interno ao gerar orçamento.",
+    });
   }
 }
