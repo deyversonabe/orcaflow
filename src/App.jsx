@@ -13,7 +13,12 @@ import {
   Search,
   Download,
   Mic,
-  Upload
+  Upload,
+  Send,
+  Copy,
+  Trash2,
+  Mail,
+  MessageSquareText
 } from "lucide-react";
 
 let pdfJsPromise;
@@ -48,6 +53,8 @@ const KEY_META = "orcaflow_meta";
 const KEY_CRM = "orcaflow_crm_orcamentos";
 const KEY_USERS = "orcaflow_users";
 const KEY_RESET = "orcaflow_reset_senha";
+const KEY_CHAT = "orcaflow_chat_ia";
+const BACKUP_KEYS = [KEY_EMP, KEY_CRM, KEY_META, KEY_LOG, KEY_USERS, KEY_RESET, KEY_CHAT];
 
 const ADMIN_PADRAO = {
   id: "admin-master",
@@ -116,6 +123,16 @@ function imageTypeFromDataUrl(dataUrl = "") {
   return "JPEG";
 }
 
+function hexToRgb(hex, fallback = [22, 163, 74]) {
+  const cleanHex = String(hex || "").replace("#", "").trim();
+  if (!/^[0-9a-f]{6}$/i.test(cleanHex)) return fallback;
+  return [
+    parseInt(cleanHex.slice(0, 2), 16),
+    parseInt(cleanHex.slice(2, 4), 16),
+    parseInt(cleanHex.slice(4, 6), 16),
+  ];
+}
+
 function mapPdfFont(font = "") {
   const f = String(font).toLowerCase();
   if (f.includes("times") || f.includes("georgia") || f.includes("garamond") || f.includes("cambria") || f.includes("constantia") || f.includes("palatino")) return "times";
@@ -180,6 +197,45 @@ function parseValorBR(v) {
 }
 
 const brl = (v) => parseValorBR(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+const DEFAULT_SECTION_ORDER = ["intro", "objetivo", "escopo", "materiais", "consideracoes", "recursos", "itens", "fechamento"];
+const SECTION_FALLBACK_LABELS = {
+  intro: "APRESENTACAO",
+  objetivo: "OBJETIVO",
+  escopo: "ESCOPO DO SERVICO",
+  materiais: "MATERIAIS E EQUIPAMENTOS",
+  consideracoes: "CONSIDERACOES TECNICAS",
+  recursos: "RECURSOS OPERACIONAIS",
+  itens: "ITENS INCLUIDOS",
+  fechamento: "FECHAMENTO",
+};
+
+function materialRows(dados) {
+  return Array.isArray(dados?.materiaisTabela) ? dados.materiaisTabela.filter((item) => item?.descricao) : [];
+}
+
+function materialTotal(rows = []) {
+  return rows.reduce((acc, item) => acc + parseValorBR(item?.subtotal), 0);
+}
+
+function getDocTitle(dados) {
+  return clean(dados?.identidadeDocumento?.tituloDocumento || "PROPOSTA COMERCIAL");
+}
+
+function getSectionLabel(dados, key) {
+  return clean(dados?.identidadeDocumento?.rotulos?.[key] || SECTION_FALLBACK_LABELS[key] || key).toUpperCase();
+}
+
+function getSectionOrder(dados) {
+  const received = Array.isArray(dados?.identidadeDocumento?.ordemSecoes)
+    ? dados.identidadeDocumento.ordemSecoes
+    : [];
+  const allowed = new Set(DEFAULT_SECTION_ORDER);
+  const ordered = received.map((item) => clean(item)).filter((item) => allowed.has(item));
+  for (const item of DEFAULT_SECTION_ORDER) {
+    if (!ordered.includes(item)) ordered.push(item);
+  }
+  return ordered;
+}
 const tsFmt = (iso) => {
   try {
     return iso ? new Date(iso).toLocaleString("pt-BR") : "—";
@@ -257,6 +313,8 @@ function empVazio() {
     tom: "profissional",
     dnaLinguagem: "",
     estruturaOrcamento: "",
+    padraoDocumental: "",
+    assinaturaVisual: "",
     // Cores fixas de fallback; a aba Visual foi removida.
     corPrimaria: BRAND.green2,
     corSecundaria: BRAND.blue2,
@@ -768,10 +826,29 @@ function useDB() {
 
   const exportarBackup = useCallback(async () => {
     try {
-      const logs = (await store.get(KEY_LOG)) || [];
-      const m = (await store.get(KEY_META)) || {};
+      const dados = {};
+      await Promise.all(
+        BACKUP_KEYS.map(async (key) => {
+          dados[key] = (await store.get(key)) || (key === KEY_META ? {} : []);
+        })
+      );
+      dados[KEY_EMP] = empresasRef.current;
+      const m = dados[KEY_META] || {};
       const blob = new Blob(
-        [JSON.stringify({ geradoEm: new Date().toISOString(), versao: "2.0", meta: m, empresas: empresasRef.current, log: logs }, null, 2)],
+        [JSON.stringify({
+          geradoEm: new Date().toISOString(),
+          versao: "2.1",
+          app: "OrcaFlow Studio AI",
+          meta: m,
+          empresas: dados[KEY_EMP] || [],
+          crm: dados[KEY_CRM] || [],
+          orcamentos: dados[KEY_CRM] || [],
+          log: dados[KEY_LOG] || [],
+          usuarios: dados[KEY_USERS] || [],
+          solicitacoesSenha: dados[KEY_RESET] || [],
+          chatIA: dados[KEY_CHAT] || [],
+          dados,
+        }, null, 2)],
         { type: "application/json" }
       );
       const url = URL.createObjectURL(blob);
@@ -792,12 +869,34 @@ function useDB() {
     async (file) => {
       try {
         const parsed = JSON.parse(await file.text());
-        if (!Array.isArray(parsed.empresas)) throw new Error("Arquivo inválido");
-        const ok = await store.set(KEY_EMP, parsed.empresas);
-        if (ok) {
-          setEmpresas(parsed.empresas);
-          await logOp("IMPORT", `${parsed.empresas.length} empresas`, "batch");
-          pushToast(`✓ ${parsed.empresas.length} empresa(s) importada(s)`, "ok");
+        const dados = parsed.dados && typeof parsed.dados === "object" ? parsed.dados : {};
+        const empresasImport = Array.isArray(parsed.empresas) ? parsed.empresas : dados[KEY_EMP];
+        if (!Array.isArray(empresasImport)) throw new Error("Arquivo invalido");
+
+        const crmImport = Array.isArray(parsed.crm) ? parsed.crm : Array.isArray(parsed.orcamentos) ? parsed.orcamentos : dados[KEY_CRM];
+        const metaImport = parsed.meta && typeof parsed.meta === "object" ? parsed.meta : dados[KEY_META];
+        const logImport = Array.isArray(parsed.log) ? parsed.log : dados[KEY_LOG];
+        const usersImport = Array.isArray(parsed.usuarios) ? parsed.usuarios : dados[KEY_USERS];
+        const resetImport = Array.isArray(parsed.solicitacoesSenha) ? parsed.solicitacoesSenha : dados[KEY_RESET];
+        const chatImport = Array.isArray(parsed.chatIA) ? parsed.chatIA : dados[KEY_CHAT];
+
+        const payload = {
+          [KEY_EMP]: empresasImport,
+          [KEY_CRM]: Array.isArray(crmImport) ? crmImport : [],
+          [KEY_META]: metaImport && typeof metaImport === "object" ? metaImport : { totalOrcamentos: 0 },
+          [KEY_LOG]: Array.isArray(logImport) ? logImport : [],
+          [KEY_USERS]: Array.isArray(usersImport) ? usersImport : [],
+          [KEY_RESET]: Array.isArray(resetImport) ? resetImport : [],
+          [KEY_CHAT]: Array.isArray(chatImport) ? chatImport : [],
+        };
+
+        const results = await Promise.all(BACKUP_KEYS.map((key) => store.set(key, payload[key])));
+        if (results.every(Boolean)) {
+          setEmpresas(payload[KEY_EMP]);
+          setMeta(payload[KEY_META]);
+          window.dispatchEvent(new CustomEvent("orcaflow:backup-imported", { detail: { crm: payload[KEY_CRM] } }));
+          await logOp("IMPORT", `${payload[KEY_EMP].length} empresas / ${payload[KEY_CRM].length} orcamentos`, "batch");
+          pushToast(`✓ Backup importado: ${payload[KEY_EMP].length} empresa(s) e ${payload[KEY_CRM].length} orcamento(s)`, "ok");
         }
       } catch (error) {
         pushToast(`✗ ${error.message}`, "erro");
@@ -1037,10 +1136,41 @@ function ModalEmpresa({ empresa, onSave, onCancel, salvando, pushToast }) {
     setImportandoCNPJ(true);
     try {
       const texto = await lerTextoPDF(file);
-      if (!texto || texto.trim().length < 80) {
-        throw new Error("Este PDF parece ser imagem. Será necessário OCR.");
+      if (!texto || texto.trim().length < 40) {
+        throw new Error("Este PDF parece ser imagem ou não possui texto pesquisável. Será necessário OCR.");
       }
-      const dados = extrairDadosCartaoCNPJ(texto);
+
+      let dados;
+      let origem = "IA";
+
+      try {
+        const response = await fetch("/api/read-company-card", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(await authHeaders()),
+          },
+          body: JSON.stringify({
+            filename: file.name,
+            texto,
+          }),
+        });
+
+        let data = {};
+        try {
+          data = await response.json();
+        } catch {
+          throw new Error("A resposta da IA veio inválida.");
+        }
+
+        if (!response.ok) throw new Error(data.error || "Erro ao ler Cartão CNPJ com IA.");
+        dados = data.dados || {};
+      } catch (iaError) {
+        console.warn("Leitura com IA indisponível, usando leitor local:", iaError);
+        dados = extrairDadosCartaoCNPJ(texto);
+        origem = "leitor local";
+      }
+
       setForm((prev) => {
         const next = { ...prev };
         const put = (campo, valor) => {
@@ -1048,19 +1178,21 @@ function ModalEmpresa({ empresa, onSave, onCancel, salvando, pushToast }) {
         };
         put("nome", dados.nome);
         put("nomeFantasia", dados.nomeFantasia);
-        put("cnpj", dados.cnpj);
+        put("cnpj", formatCNPJ(dados.cnpj || ""));
         put("email", dados.email);
-        put("telefone", dados.telefone);
+        put("telefone", formatTelefone(dados.telefone || ""));
         put("site", dados.site);
         put("endereco", dados.endereco);
+        if (!next.assinatura && dados.assinatura) next.assinatura = dados.assinatura;
         if (!next.assinatura && (dados.nome || prev.nome)) next.assinatura = `Departamento Comercial · ${dados.nome || prev.nome}`;
+        if (!next.rodape && dados.rodape) next.rodape = dados.rodape;
         if (!next.rodape) {
           const parts = [dados.nome || prev.nome, dados.cnpj, dados.email, dados.telefone].filter(Boolean);
           next.rodape = parts.join(" | ");
         }
         return next;
       });
-      pushToast("Dados do Cartão CNPJ importados com sucesso. Confira antes de salvar.", "ok");
+      pushToast(`Dados do Cartão CNPJ importados com ${origem}. Confira antes de salvar.`, "ok");
     } catch (error) {
       console.error(error);
       pushToast(error.message || "Não foi possível ler o PDF. Se for escaneado como imagem, será necessário OCR.", "erro");
@@ -1179,13 +1311,13 @@ function ModalEmpresa({ empresa, onSave, onCancel, salvando, pushToast }) {
                       boxShadow: importandoCNPJ ? "none" : `0 8px 24px ${BRAND.green2}33`,
                     }}
                   >
-                    {importandoCNPJ ? "Lendo PDF…" : "📎 Anexar Cartão CNPJ"}
+                    {importandoCNPJ ? "IA lendo PDF…" : "📎 Anexar Cartão CNPJ"}
                   </button>
                 }
               >
                 <input ref={refCNPJ} type="file" accept="application/pdf,.pdf" style={{ display: "none" }} onChange={importarCartao} />
                 <div style={{ padding: "12px 14px", background: `${BRAND.blue2}12`, border: `1px solid ${BRAND.blue2}2a`, borderRadius: 10, color: "#A7C7FF", fontSize: 12.2, lineHeight: 1.6 }}>
-                  Envie o PDF oficial do Cartão CNPJ. O sistema tenta preencher razão social, CNPJ, telefone, e-mail e endereço automaticamente. PDFs escaneados como imagem precisam de OCR.
+                  Envie o PDF oficial do Cartão CNPJ. A IA lê o texto extraído do PDF e preenche razão social, CNPJ, telefone, e-mail, endereço, assinatura e rodapé. PDFs escaneados como imagem precisam de OCR.
                 </div>
               </Sec>
 
@@ -1278,6 +1410,29 @@ function ModalEmpresa({ empresa, onSave, onCancel, salvando, pushToast }) {
                   placeholder="Ex: iniciar com objetivo, depois escopo técnico, condições comerciais e fechamento..."
                   style={TXT}
                 />
+              </Sec>
+
+              <Sec t="PADRAO DOCUMENTAL E VISUAL">
+                <div style={{ marginBottom: 12 }}>
+                  <Lbl c="PADRAO DOCUMENTAL PROPRIO" />
+                  <textarea
+                    value={form.padraoDocumental || ""}
+                    onChange={(e) => set("padraoDocumental", e.target.value)}
+                    rows={5}
+                    placeholder="Ex: proposta objetiva, com foco em escopo executivo; evitar textos longos; trazer tabela antes das consideracoes..."
+                    style={TXT}
+                  />
+                </div>
+                <div>
+                  <Lbl c="ASSINATURA VISUAL / DNA DO PDF" />
+                  <textarea
+                    value={form.assinaturaVisual || ""}
+                    onChange={(e) => set("assinaturaVisual", e.target.value)}
+                    rows={4}
+                    placeholder="Ex: linguagem visual tecnica, secoes curtas, titulos diretos, fechamento institucional, uso forte do timbrado..."
+                    style={TXT}
+                  />
+                </div>
               </Sec>
             </>
           )}
@@ -1395,6 +1550,54 @@ function ModalEmpresa({ empresa, onSave, onCancel, salvando, pushToast }) {
   );
 }
 
+function MateriaisTabela({ emp, dados }) {
+  const rows = materialRows(dados);
+  if (!rows.length) return null;
+
+  const total = materialTotal(rows);
+  const precificacao = dados?.precificacao || {};
+  const cor = emp.corPrimaria || BRAND.green2;
+
+  return (
+    <div style={{ marginTop: 10, overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720 }}>
+        <thead>
+          <tr style={{ background: cor }}>
+            {["ITEM", "QTD", "UN", "ORIGINAL", "ACRESC.", "UNITARIO", "SUBTOTAL"].map((h, i) => (
+              <th key={h} style={{ padding: "8px 10px", color: "#fff", textAlign: i === 0 ? "left" : "right", fontFamily: "sans-serif", fontSize: 8, letterSpacing: 1.2, fontWeight: 900 }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((item, i) => (
+            <tr key={`${item.descricao}-${i}`} style={{ background: i % 2 === 0 ? `${cor}0a` : emp.corFundo || "#fff", borderBottom: `1px solid ${cor}18` }}>
+              <td style={{ padding: "9px 10px", fontFamily: emp.fonteCorpo, fontSize: Number(emp.tamanhoCorpo) || 12, color: "#000", minWidth: 210 }}>
+                {item.descricao}
+                {item.observacao && <div style={{ fontSize: 9, color: "#475569", marginTop: 2 }}>{item.observacao}</div>}
+              </td>
+              <td style={{ padding: "9px 10px", textAlign: "right", color: "#000", fontSize: 11 }}>{item.quantidade || 1}</td>
+              <td style={{ padding: "9px 10px", textAlign: "right", color: "#000", fontSize: 11 }}>{item.unidade || "un"}</td>
+              <td style={{ padding: "9px 10px", textAlign: "right", color: "#000", fontSize: 11 }}>{parseValorBR(item.valorOriginal) > 0 ? brl(item.valorOriginal) : "-"}</td>
+              <td style={{ padding: "9px 10px", textAlign: "right", color: "#000", fontSize: 11 }}>{parseValorBR(item.acrescimoPercentual) ? `${Number(item.acrescimoPercentual).toFixed(2)}%` : "-"}</td>
+              <td style={{ padding: "9px 10px", textAlign: "right", color: "#000", fontSize: 11 }}>{brl(item.valorUnitario)}</td>
+              <td style={{ padding: "9px 10px", textAlign: "right", color: "#000", fontSize: 11, fontWeight: 850 }}>{brl(item.subtotal)}</td>
+            </tr>
+          ))}
+        </tbody>
+        <tfoot>
+          <tr>
+            <td colSpan={5} style={{ padding: "10px", textAlign: "right", color: "#000", fontSize: 10, fontWeight: 850 }}>
+              {precificacao.criterio ? `Criterio: ${precificacao.criterio.replace(/_/g, " ")}` : "Total da tabela"}
+            </td>
+            <td style={{ padding: "10px", textAlign: "right", color: "#000", fontSize: 11, fontWeight: 900 }}>TOTAL</td>
+            <td style={{ padding: "10px", textAlign: "right", color: "#000", fontSize: 12, fontWeight: 950 }}>{brl(total)}</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  );
+}
+
 function OrcamentoDoc({ emp, dados, editando, onChange }) {
   const difs = (emp.diferenciais || "").split(",").map((d) => d.trim()).filter(Boolean);
 
@@ -1418,6 +1621,65 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
   };
 
   const secLbl = { fontSize: 9, fontWeight: 900, color: "#000000", letterSpacing: 2.2, fontFamily: "sans-serif", marginBottom: 7, display: "block" };
+  const docTitle = getDocTitle(dados).toUpperCase();
+
+  const renderItens = () => {
+    if (!dados.itensIA?.length) return null;
+    return (
+      <div key="itens" style={{ marginBottom: 18 }}>
+        <span style={secLbl}>{getSectionLabel(dados, "itens")}</span>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr style={{ background: emp.corPrimaria || BRAND.green2 }}><th style={{ padding: "9px 13px", color: "#fff", textAlign: "left", fontFamily: "sans-serif", fontSize: 8, letterSpacing: 1.5, fontWeight: 900 }}>DESCRICAO DA ETAPA / ITEM</th><th style={{ padding: "9px 13px", color: "#fff", textAlign: "center", fontFamily: "sans-serif", fontSize: 8, letterSpacing: 1.5, fontWeight: 900, width: 86 }}>STATUS</th></tr></thead>
+          <tbody>
+            {dados.itensIA.map((it, i) => (
+              <tr key={i} style={{ background: i % 2 === 0 ? `${emp.corPrimaria || BRAND.green2}0a` : emp.corFundo || "#fff", borderBottom: `1px solid ${emp.corPrimaria || BRAND.green2}18` }}>
+                <td style={{ padding: "10px 13px", fontFamily: emp.fonteCorpo, fontSize: Number(emp.tamanhoCorpo) || 12, color: "#000000" }}>{it}</td>
+                <td style={{ padding: "10px 13px", textAlign: "center" }}><span style={{ padding: "3px 9px", borderRadius: 12, background: `${emp.corPrimaria || BRAND.green2}18`, color: emp.corSecundaria || BRAND.blue2, fontSize: 8.5, fontWeight: 800 }}>Incluido</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  const renderSection = (key) => {
+    if (key === "itens") return renderItens();
+
+    if (key === "materiais") {
+      const hasTable = materialRows(dados).length > 0;
+      const hasText = Boolean(dados.campos?.materiais);
+      if (!hasTable && !hasText && !editando) return null;
+      return (
+        <div key="materiais" style={{ marginBottom: 18 }}>
+          <span style={secLbl}>{getSectionLabel(dados, "materiais")}</span>
+          {hasText || editando ? <div style={{ lineHeight: 1.85, marginBottom: hasTable ? 10 : 0 }}><F campo="materiais" multiline /></div> : null}
+          <MateriaisTabela emp={emp} dados={dados} />
+        </div>
+      );
+    }
+
+    const val = dados.campos?.[key] || "";
+    const required = key === "intro" || key === "escopo";
+    if (!required && !val && !editando) return null;
+
+    const content = <div style={{ lineHeight: 1.85 }}><F campo={key} multiline /></div>;
+    if (key === "fechamento") {
+      return (
+        <div key={key} style={{ marginBottom: 22, padding: "13px 15px", borderRadius: 9, background: `${emp.corPrimaria || BRAND.green2}0a`, borderLeft: `4px solid ${emp.corPrimaria || BRAND.green2}` }}>
+          <span style={secLbl}>{getSectionLabel(dados, key)}</span>
+          <div style={{ fontStyle: "italic" }}>{content}</div>
+        </div>
+      );
+    }
+
+    return (
+      <div key={key} style={{ marginBottom: 18 }}>
+        <span style={secLbl}>{getSectionLabel(dados, key)}</span>
+        {content}
+      </div>
+    );
+  };
 
   return (
     <div style={{ background: emp.corFundo || "#fff", border: "1px solid #E2E8F0", borderRadius: 14, overflow: "hidden", boxShadow: "0 10px 44px rgba(0,0,0,.2)", animation: "ofCardIn .28s ease both" }}>
@@ -1425,7 +1687,7 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
         <div style={{ position: "relative", overflow: "hidden" }}>
           <img src={emp.papelTimbrado} style={{ width: "100%", height: "auto", display: "block" }} alt="" />
           <div style={{ position: "absolute", top: 10, right: 18, background: "rgba(0,0,0,.58)", backdropFilter: "blur(4px)", borderRadius: 9, padding: "8px 13px", textAlign: "right" }}>
-            <div style={{ fontSize: 8, color: "rgba(255,255,255,.72)", letterSpacing: 1.5 }}>PROPOSTA COMERCIAL</div>
+            <div style={{ fontSize: 8, color: "rgba(255,255,255,.72)", letterSpacing: 1.5 }}>{docTitle}</div>
             <div style={{ fontSize: 13, fontWeight: 900, color: "#fff", fontFamily: "monospace" }}>{dados.numero}</div>
             
           </div>
@@ -1437,7 +1699,7 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
             {emp.assinatura && <div style={{ fontSize: 10.5, color: "rgba(255,255,255,.78)", fontFamily: "sans-serif" }}>{emp.assinatura}</div>}
           </div>
           <div style={{ textAlign: "right", background: "rgba(0,0,0,.18)", borderRadius: 10, padding: "11px 16px" }}>
-            <div style={{ fontSize: 8, color: "rgba(255,255,255,.65)", letterSpacing: 1.5 }}>PROPOSTA COMERCIAL</div>
+            <div style={{ fontSize: 8, color: "rgba(255,255,255,.65)", letterSpacing: 1.5 }}>{docTitle}</div>
             <div style={{ fontSize: 15, fontWeight: 900, color: "#fff", fontFamily: "monospace" }}>{dados.numero}</div>
             
           </div>
@@ -1450,29 +1712,13 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
           <div style={{ fontFamily: emp.fonteCorpo, fontSize: (Number(emp.tamanhoCorpo) || 12) + 1, fontWeight: 800, color: "#000000" }}><F campo="cliente" /></div>
         </div>
 
-        <div style={{ marginBottom: 18 }}><span style={secLbl}>APRESENTAÇÃO</span><div style={{ lineHeight: 1.85 }}><F campo="intro" multiline /></div></div>
-        {(dados.campos?.objetivo || editando) && <div style={{ marginBottom: 18 }}><span style={secLbl}>OBJETIVO</span><div style={{ lineHeight: 1.85 }}><F campo="objetivo" multiline /></div></div>}
-        <div style={{ marginBottom: 18 }}><span style={secLbl}>ESCOPO DO SERVIÇO</span><div style={{ lineHeight: 1.85 }}><F campo="escopo" multiline /></div></div>
-        {(dados.campos?.materiais || editando) && <div style={{ marginBottom: 18 }}><span style={secLbl}>MATERIAIS E EQUIPAMENTOS</span><div style={{ lineHeight: 1.85 }}><F campo="materiais" multiline /></div></div>}
-        {(dados.campos?.consideracoes || editando) && <div style={{ marginBottom: 18 }}><span style={secLbl}>CONSIDERAÇÕES TÉCNICAS</span><div style={{ lineHeight: 1.85 }}><F campo="consideracoes" multiline /></div></div>}
-        {(dados.campos?.recursos || editando) && <div style={{ marginBottom: 18 }}><span style={secLbl}>RECURSOS OPERACIONAIS</span><div style={{ lineHeight: 1.85 }}><F campo="recursos" multiline /></div></div>}
-
-        {dados.itensIA?.length > 0 && (
-          <div style={{ marginBottom: 18 }}>
-            <span style={secLbl}>ITENS INCLUÍDOS</span>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead><tr style={{ background: emp.corPrimaria || BRAND.green2 }}><th style={{ padding: "9px 13px", color: "#fff", textAlign: "left", fontFamily: "sans-serif", fontSize: 8, letterSpacing: 1.5, fontWeight: 900 }}>DESCRIÇÃO DA ETAPA / ITEM</th><th style={{ padding: "9px 13px", color: "#fff", textAlign: "center", fontFamily: "sans-serif", fontSize: 8, letterSpacing: 1.5, fontWeight: 900, width: 86 }}>STATUS</th></tr></thead>
-              <tbody>
-                {dados.itensIA.map((it, i) => (
-                  <tr key={i} style={{ background: i % 2 === 0 ? `${emp.corPrimaria || BRAND.green2}0a` : emp.corFundo || "#fff", borderBottom: `1px solid ${emp.corPrimaria || BRAND.green2}18` }}>
-                    <td style={{ padding: "10px 13px", fontFamily: emp.fonteCorpo, fontSize: Number(emp.tamanhoCorpo) || 12, color: "#000000" }}>{it}</td>
-                    <td style={{ padding: "10px 13px", textAlign: "center" }}><span style={{ padding: "3px 9px", borderRadius: 12, background: `${emp.corPrimaria || BRAND.green2}18`, color: emp.corSecundaria || BRAND.blue2, fontSize: 8.5, fontWeight: 800 }}>Incluído</span></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        {dados.identidadeDocumento?.subtitulo && (
+          <div style={{ marginBottom: 18, color: "#475569", fontFamily: emp.fonteCorpo, fontSize: Number(emp.tamanhoCorpo) || 12, fontStyle: "italic" }}>
+            {dados.identidadeDocumento.subtitulo}
           </div>
         )}
+
+        {getSectionOrder(dados).map(renderSection)}
 
         <div style={{ marginBottom: 18, display: "flex", justifyContent: "flex-end" }}>
           <div style={{ background: `linear-gradient(135deg, ${emp.corPrimaria || BRAND.green2}, ${emp.corSecundaria || BRAND.blue2})`, borderRadius: 11, padding: "15px 23px", color: "#fff", textAlign: "right", minWidth: 210 }}>
@@ -1482,8 +1728,6 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
         </div>
 
         {difs.length > 0 && <div style={{ marginBottom: 18 }}><span style={secLbl}>DIFERENCIAIS</span><div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>{difs.map((d, i) => <span key={i} style={{ padding: "5px 12px", background: `${emp.corPrimaria || BRAND.green2}12`, border: `1px solid ${emp.corPrimaria || BRAND.green2}30`, borderRadius: 20, fontSize: 10, color: emp.corSecundaria || BRAND.blue2, fontWeight: 800 }}>{d}</span>)}</div></div>}
-
-        <div style={{ marginBottom: 22, padding: "13px 15px", borderRadius: 9, background: `${emp.corPrimaria || BRAND.green2}0a`, borderLeft: `4px solid ${emp.corPrimaria || BRAND.green2}` }}><div style={{ lineHeight: 1.85, fontStyle: "italic" }}><F campo="fechamento" multiline /></div></div>
 
         <div style={{ borderTop: `2px solid ${emp.corPrimaria || BRAND.green2}`, paddingTop: 16, display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
           <div>
@@ -1497,6 +1741,219 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
 
       <div style={{ background: emp.papelTimbrado ? `${emp.corPrimaria || BRAND.green2}14` : "#0F172A", borderTop: `1px solid ${emp.corPrimaria || BRAND.green2}22`, padding: "9px 28px", textAlign: "center" }}>
         <div style={{ fontFamily: emp.fonteCorpo, fontSize: 9.5, color: emp.papelTimbrado ? "#475569" : "#94A3B8" }}>{emp.rodape || `${emp.nome}${emp.cnpj ? ` | ${emp.cnpj}` : ""}${emp.email ? ` | ${emp.email}` : ""}${emp.telefone ? ` | ${emp.telefone}` : ""}`}</div>
+      </div>
+    </div>
+  );
+}
+
+
+function ChatIAPanel({ empresas = [], crm = [], pushToast }) {
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState("");
+  const [mode, setMode] = useState("geral");
+  const [loading, setLoading] = useState(false);
+  const endRef = useRef(null);
+
+  useEffect(() => {
+    (async () => {
+      const saved = (await store.get(KEY_CHAT)) || [];
+      if (Array.isArray(saved)) setMessages(saved.slice(-80));
+    })();
+  }, []);
+
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages, loading]);
+
+  const persist = async (next) => {
+    const limited = next.slice(-80);
+    setMessages(limited);
+    await store.set(KEY_CHAT, limited);
+  };
+
+  const atalhos = [
+    {
+      id: "email",
+      label: "E-mail",
+      icon: <Mail size={15} />,
+      prompt: "Gere um e-mail profissional para enviar ao cliente sobre o orçamento. Use assunto e corpo.",
+    },
+    {
+      id: "cobranca",
+      label: "Cobrança",
+      icon: <Bell size={15} />,
+      prompt: "Crie uma mensagem de cobrança/follow-up educada para um orçamento enviado e ainda sem retorno.",
+    },
+    {
+      id: "whatsapp",
+      label: "WhatsApp",
+      icon: <MessageSquareText size={15} />,
+      prompt: "Transforme este contexto em uma mensagem curta de WhatsApp para o cliente.",
+    },
+    {
+      id: "resposta_cliente",
+      label: "Resposta",
+      icon: <Send size={15} />,
+      prompt: "Monte uma resposta profissional para o cliente com tom cordial e proximo passo claro.",
+    },
+    {
+      id: "orcamento",
+      label: "Orçamento",
+      icon: <FileText size={15} />,
+      prompt: "Me oriente como escrever o resumo do serviço para a IA gerar um orçamento mais completo.",
+    },
+  ];
+
+  const enviar = async (textoForcado = "") => {
+    const texto = clean(textoForcado || input);
+    if (!texto || loading) return;
+
+    const userMsg = { id: `msg_${Date.now()}_u`, role: "user", content: texto, ts: new Date().toISOString() };
+    const base = [...messages, userMsg];
+    setInput("");
+    setLoading(true);
+    setMessages(base);
+
+    try {
+      const response = await fetch("/api/chat-assistant", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(await authHeaders()),
+        },
+        body: JSON.stringify({
+          mode,
+          messages: base.map((msg) => ({ role: msg.role, content: msg.content })),
+          context: { empresas, crm },
+        }),
+      });
+
+      let data = {};
+      try {
+        data = await response.json();
+      } catch {
+        throw new Error("A resposta do chat veio invalida.");
+      }
+
+      if (!response.ok) {
+        throw new Error(data.error || "Erro ao consultar a IA.");
+      }
+
+      const assistantMsg = {
+        id: `msg_${Date.now()}_a`,
+        role: "assistant",
+        content: clean(data.answer || ""),
+        model: data.model || "",
+        ts: new Date().toISOString(),
+      };
+      await persist([...base, assistantMsg]);
+    } catch (error) {
+      console.error("Erro no chat IA:", error);
+      setMessages(messages);
+      pushToast(error.message || "Erro no chat com IA.", "erro");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const copiar = async (texto) => {
+    try {
+      await navigator.clipboard.writeText(texto);
+      pushToast("Texto copiado.", "ok");
+    } catch {
+      pushToast("Nao foi possivel copiar.", "erro");
+    }
+  };
+
+  const limpar = async () => {
+    await persist([]);
+    pushToast("Historico do chat limpo.", "aviso");
+  };
+
+  const bubble = (msg) => {
+    const isUser = msg.role === "user";
+    return (
+      <div key={msg.id || `${msg.role}_${msg.ts}`} style={{ display: "flex", justifyContent: isUser ? "flex-end" : "flex-start", marginBottom: 12 }}>
+        <div style={{ maxWidth: "min(760px, 86%)", background: isUser ? `linear-gradient(135deg, ${BRAND.green2}, #15803D)` : BRAND.panel, border: `1px solid ${isUser ? `${BRAND.green2}55` : BRAND.border}`, color: isUser ? "#fff" : BRAND.text, borderRadius: 14, padding: "12px 14px", boxShadow: "0 10px 28px rgba(0,0,0,.2)" }}>
+          <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.65, fontSize: 13 }}>{msg.content}</div>
+          {!isUser && (
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginTop: 10 }}>
+              <span style={{ fontSize: 10, color: BRAND.dim }}>{msg.model || "IA"}</span>
+              <button onClick={() => copiar(msg.content)} title="Copiar" style={{ width: 30, height: 30, display: "grid", placeItems: "center", borderRadius: 8, border: `1px solid ${BRAND.border2}`, background: "transparent", color: BRAND.muted, cursor: "pointer" }}>
+                <Copy size={14} />
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", padding: "18px 16px", maxWidth: 1180, width: "100%", margin: "0 auto", boxSizing: "border-box" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 950, color: BRAND.text }}>Chat IA Comercial</div>
+          <div style={{ fontSize: 12, color: BRAND.dim, marginTop: 3 }}>E-mails, cobrancas, respostas, follow-up e apoio para orcamentos.</div>
+        </div>
+        <button onClick={limpar} disabled={!messages.length || loading} title="Limpar historico" style={{ display: "flex", alignItems: "center", gap: 7, padding: "8px 12px", borderRadius: 9, border: `1px solid ${BRAND.danger}40`, background: "transparent", color: messages.length ? BRAND.danger : BRAND.dim, cursor: messages.length && !loading ? "pointer" : "not-allowed", fontWeight: 850 }}>
+          <Trash2 size={15} /> Limpar
+        </button>
+      </div>
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+        {atalhos.map((item) => (
+          <button
+            key={item.id}
+            onClick={() => {
+              setMode(item.id);
+              setInput((atual) => atual || item.prompt);
+            }}
+            style={{ display: "flex", alignItems: "center", gap: 7, padding: "8px 12px", borderRadius: 10, border: `1px solid ${mode === item.id ? BRAND.green2 : BRAND.border2}`, background: mode === item.id ? `${BRAND.green2}18` : BRAND.panel2, color: mode === item.id ? BRAND.green : BRAND.muted, cursor: "pointer", fontWeight: 850 }}
+          >
+            {item.icon} {item.label}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ flex: 1, overflowY: "auto", background: "rgba(7,17,31,.66)", border: `1px solid ${BRAND.border}`, borderRadius: 16, padding: 16, minHeight: 320 }}>
+        {!messages.length && (
+          <div style={{ height: "100%", minHeight: 260, display: "grid", placeItems: "center", textAlign: "center", color: BRAND.dim }}>
+            <div>
+              <Bot size={36} style={{ opacity: 0.45, marginBottom: 10 }} />
+              <div style={{ fontSize: 15, fontWeight: 900, color: BRAND.muted, marginBottom: 6 }}>Pronto para escrever com voce</div>
+              <div style={{ fontSize: 12, lineHeight: 1.6, maxWidth: 520 }}>Selecione um atalho ou digite diretamente o que precisa gerar.</div>
+            </div>
+          </div>
+        )}
+        {messages.map(bubble)}
+        {loading && (
+          <div style={{ display: "flex", justifyContent: "flex-start", marginBottom: 12 }}>
+            <div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 14, padding: "12px 14px", color: BRAND.muted, fontSize: 13 }}>IA escrevendo...</div>
+          </div>
+        )}
+        <div ref={endRef} />
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, marginTop: 12 }}>
+        <textarea
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) enviar();
+          }}
+          rows={3}
+          placeholder="Ex: gere um e-mail cobrando retorno do orçamento ORC-123456 com tom educado..."
+          style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, borderRadius: 12, padding: "12px 14px", color: BRAND.text, fontSize: 13, outline: "none", resize: "vertical", lineHeight: 1.65, fontFamily: "inherit", minHeight: 76 }}
+        />
+        <button
+          onClick={() => enviar()}
+          disabled={!input.trim() || loading}
+          title="Enviar"
+          style={{ width: 54, borderRadius: 12, border: "none", display: "grid", placeItems: "center", cursor: input.trim() && !loading ? "pointer" : "not-allowed", background: input.trim() && !loading ? `linear-gradient(135deg, ${BRAND.green2}, ${BRAND.blue2})` : BRAND.border2, color: input.trim() && !loading ? "#fff" : BRAND.dim }}
+        >
+          <Send size={20} />
+        </button>
       </div>
     </div>
   );
@@ -1871,16 +2328,174 @@ function ValorEditavel({ valor, onSalvar }) {
   );
 }
 
+function diasDesde(iso) {
+  if (!iso) return 0;
+  const data = new Date(iso);
+  if (Number.isNaN(data.getTime())) return 0;
+  return Math.max(0, Math.floor((Date.now() - data.getTime()) / 86400000));
+}
+
+function dataISOEmDias(dias = 3) {
+  const data = new Date();
+  data.setDate(data.getDate() + dias);
+  return data.toISOString().slice(0, 10);
+}
+
+function contatosDoOrcamento(item) {
+  return Array.isArray(item?.followups) ? item.followups : Array.isArray(item?.contatos) ? item.contatos : [];
+}
+
+function conversasDoOrcamento(item) {
+  const conversas = Array.isArray(item?.conversas) ? item.conversas : [];
+  const idsConversas = new Set(conversas.map((c) => c?.followupId || c?.id).filter(Boolean));
+  const followupsLegados = contatosDoOrcamento(item)
+    .filter((contato) => !idsConversas.has(contato?.id))
+    .map((contato) => ({
+      id: contato?.id || `legado_${contato?.criadoEm || Math.random()}`,
+      followupId: contato?.id || "",
+      canal: contato?.canal || "Acompanhamento",
+      direcao: contato?.direcao || "saida",
+      tipo: contato?.tipo || "follow-up",
+      mensagem: contato?.mensagem || contato?.conteudo || "",
+      criadoEm: contato?.criadoEm || contato?.data || new Date().toISOString(),
+      origem: contato?.origem || "legado",
+      usuarioNome: contato?.usuarioNome || "",
+    }));
+
+  return [...conversas, ...followupsLegados].sort((a, b) => new Date(b?.criadoEm || 0) - new Date(a?.criadoEm || 0));
+}
+
+function ultimoContatoOrcamento(item) {
+  const contatos = conversasDoOrcamento(item);
+  return contatos.length ? contatos[0] : null;
+}
+
+function ultimaMensagemCliente(item) {
+  return conversasDoOrcamento(item).find((msg) => msg?.direcao === "entrada") || null;
+}
+
+function avaliarPrioridadeOrcamento(item) {
+  if ((item?.status || "Aberto") === "Finalizado") {
+    return { score: 0, nivel: "Fechado", cor: BRAND.green, motivos: ["Orçamento finalizado"], acao: "Arquivo comercial" };
+  }
+
+  let score = 0;
+  const motivos = [];
+  const diasContato = diasAte(item?.proximoContato);
+  const valor = parseValorBR(item?.valorGlobal ?? item?.valor);
+  const idade = diasDesde(item?.criadoEm);
+  const contatos = conversasDoOrcamento(item);
+
+  if (diasContato !== null && diasContato < 0) {
+    score += 38;
+    motivos.push("contato atrasado");
+  } else if (!item?.proximoContato) {
+    score += 26;
+    motivos.push("sem próximo contato");
+  } else if (diasContato === 0) {
+    score += 24;
+    motivos.push("contato hoje");
+  } else if (diasContato <= 3) {
+    score += 12;
+    motivos.push("contato próximo");
+  }
+
+  if ((item?.status || "Aberto") === "Aberto") {
+    score += 14;
+    motivos.push("em aberto");
+  }
+  if (item?.status === "Andamento") {
+    score += 10;
+    motivos.push("em negociação");
+  }
+  if (valor >= 100000) {
+    score += 18;
+    motivos.push("alto valor");
+  } else if (valor >= 50000) {
+    score += 12;
+    motivos.push("valor relevante");
+  } else if (valor >= 10000) {
+    score += 6;
+    motivos.push("valor comercial");
+  }
+  if (idade >= 14) {
+    score += 10;
+    motivos.push("antigo");
+  } else if (idade >= 7) {
+    score += 6;
+    motivos.push("aguardando retorno");
+  }
+  if (!contatos.length) {
+    score += 8;
+    motivos.push("sem contato registrado");
+  }
+
+  score = Math.min(100, score);
+
+  if (score >= 70) return { score, nivel: "Crítica", cor: BRAND.danger, motivos, acao: "Cobrar hoje" };
+  if (score >= 50) return { score, nivel: "Alta", cor: BRAND.warn, motivos, acao: "Fazer follow-up" };
+  if (score >= 30) return { score, nivel: "Média", cor: BRAND.blue, motivos, acao: "Monitorar" };
+  return { score, nivel: "Baixa", cor: BRAND.green, motivos, acao: "Acompanhar" };
+}
+
 function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usuarioAtual, setView, abrirOrcamentoSalvo, baixarOrcamento, onAnexar }) {
   const [busca, setBusca] = useState("");
   const [statusFiltro, setStatusFiltro] = useState("Todos");
   const [empresaFiltro, setEmpresaFiltro] = useState("Todas");
+  const [filtroRapido, setFiltroRapido] = useState("Todos");
+  const [ordenacao, setOrdenacao] = useState("contatoAsc");
+  const [porPagina, setPorPagina] = useState(15);
+  const [pagina, setPagina] = useState(1);
+  const [gerandoContato, setGerandoContato] = useState(null);
+  const [historicoAberto, setHistoricoAberto] = useState(null);
+  const [conversaDrafts, setConversaDrafts] = useState({});
   const [whats, setWhats] = useState("");
 
   const isAdmin = usuarioAtual?.tipo === "admin";
   const base = isAdmin ? crm : crm.filter((o) => o.userId === usuarioAtual?.id);
 
-  const lista = base.filter((o) => {
+  const draftConversa = (id) => conversaDrafts[id] || {
+    canal: "WhatsApp",
+    direcao: "saida",
+    tipo: "Follow-up",
+    mensagem: "",
+  };
+
+  const atualizarDraftConversa = (id, patch) => {
+    setConversaDrafts((atual) => ({
+      ...atual,
+      [id]: {
+        canal: "WhatsApp",
+        direcao: "saida",
+        tipo: "Follow-up",
+        mensagem: "",
+        ...(atual[id] || {}),
+        ...patch,
+      },
+    }));
+  };
+
+  useEffect(() => {
+    setPagina(1);
+  }, [busca, statusFiltro, empresaFiltro, filtroRapido, ordenacao, porPagina]);
+
+  const statusColor = {
+    Aberto: BRAND.blue,
+    Andamento: BRAND.warn,
+    Finalizado: BRAND.green,
+    Atrasado: BRAND.danger,
+  };
+
+  const statusReal = (item) => {
+    if (item.status !== "Finalizado" && diasAte(item.proximoContato) !== null && diasAte(item.proximoContato) < 0) {
+      return "Atrasado";
+    }
+    return item.status || "Aberto";
+  };
+
+  const hojeISO = new Date().toISOString().slice(0, 10);
+
+  const listaFiltrada = base.filter((o) => {
     const textoBusca = [
       o.cliente,
       o.empresaNome,
@@ -1897,9 +2512,41 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
     const okBusca = !busca || textoBusca.includes(busca.toLowerCase());
     const okStatus = statusFiltro === "Todos" || (o.status || "Aberto") === statusFiltro;
     const okEmpresa = empresaFiltro === "Todas" || o.empresaId === empresaFiltro;
+    const dias = diasAte(o.proximoContato);
+    const okRapido =
+      filtroRapido === "Todos" ||
+      (filtroRapido === "Atrasados" && o.status !== "Finalizado" && dias !== null && dias < 0) ||
+      (filtroRapido === "Hoje" && o.status !== "Finalizado" && (!o.proximoContato || o.proximoContato <= hojeISO)) ||
+      (filtroRapido === "Sem contato" && o.status !== "Finalizado" && !o.proximoContato) ||
+      (filtroRapido === "Em aberto" && o.status !== "Finalizado") ||
+      (filtroRapido === "Prioridade alta" && avaliarPrioridadeOrcamento(o).score >= 50) ||
+      (filtroRapido === "Anexados" && o.anexado);
 
-    return okBusca && okStatus && okEmpresa;
+    return okBusca && okStatus && okEmpresa && okRapido;
   });
+
+  const lista = [...listaFiltrada].sort((a, b) => {
+    const valorA = parseValorBR(a.valorGlobal ?? a.valor);
+    const valorB = parseValorBR(b.valorGlobal ?? b.valor);
+    const contatoA = a.proximoContato || "9999-12-31";
+    const contatoB = b.proximoContato || "9999-12-31";
+    const criadoA = new Date(a.criadoEm || 0).getTime();
+    const criadoB = new Date(b.criadoEm || 0).getTime();
+
+    if (ordenacao === "contatoAsc") return contatoA.localeCompare(contatoB);
+    if (ordenacao === "criadoDesc") return criadoB - criadoA;
+    if (ordenacao === "valorDesc") return valorB - valorA;
+    if (ordenacao === "valorAsc") return valorA - valorB;
+    if (ordenacao === "clienteAsc") return String(a.cliente || "").localeCompare(String(b.cliente || ""));
+    if (ordenacao === "status") return statusReal(a).localeCompare(statusReal(b));
+    if (ordenacao === "prioridade") return avaliarPrioridadeOrcamento(b).score - avaliarPrioridadeOrcamento(a).score;
+    return 0;
+  });
+
+  const totalPaginas = Math.max(1, Math.ceil(lista.length / porPagina));
+  const paginaAtual = Math.min(pagina, totalPaginas);
+  const inicioPagina = (paginaAtual - 1) * porPagina;
+  const paginaItens = lista.slice(inicioPagina, inicioPagina + porPagina);
 
   const total = base.length;
   const abertos = base.filter((o) => (o.status || "Aberto") === "Aberto").length;
@@ -1916,6 +2563,12 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
   const ticketMedio = total ? valorTotal / total : 0;
   const taxaConversao = total ? Math.round((finalizados / total) * 100) : 0;
   const precisamContato = abertos + andamento + atrasados;
+  const filaFollowup = [...base]
+    .filter((item) => (item.status || "Aberto") !== "Finalizado")
+    .map((item) => ({ item, prioridade: avaliarPrioridadeOrcamento(item) }))
+    .filter(({ prioridade }) => prioridade.score >= 30)
+    .sort((a, b) => b.prioridade.score - a.prioridade.score)
+    .slice(0, 6);
 
   const salvarCRM = (novaLista) => {
     setCrm(novaLista);
@@ -1934,6 +2587,244 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
           : o
       )
     );
+  };
+
+  const atualizarOrcamento = (id, mutator) => {
+    const atualizada = crm.map((item) => {
+      if (item.id !== id) return item;
+      return { ...mutator(item), atualizadoEm: new Date().toISOString() };
+    });
+    salvarCRM(atualizada);
+  };
+
+  const registrarConversa = (item, dados = {}) => {
+    const texto = clean(dados.mensagem || "", 6000);
+
+    if (!texto) {
+      pushToast("Escreva a mensagem da conversa antes de registrar.", "erro");
+      return null;
+    }
+
+    const direcao = dados.direcao || "saida";
+    const conversa = {
+      id: dados.id || `conv_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      followupId: dados.followupId || "",
+      canal: dados.canal || "WhatsApp",
+      direcao,
+      tipo: dados.tipo || "Follow-up",
+      mensagem: texto,
+      criadoEm: dados.criadoEm || new Date().toISOString(),
+      origem: dados.origem || "manual",
+      usuarioNome: usuarioAtual?.nome || "",
+    };
+
+    atualizarOrcamento(item.id, (atual) => ({
+      ...atual,
+      conversas: [conversa, ...(Array.isArray(atual.conversas) ? atual.conversas : [])].slice(0, 100),
+      ultimoContatoEm: conversa.criadoEm,
+      proximoContato: atual.proximoContato && atual.proximoContato > hojeISO ? atual.proximoContato : dataISOEmDias(direcao === "entrada" ? 1 : 3),
+      lembreteIA: direcao === "entrada" ? `Responder ${atual.cliente || "cliente"}: ${clean(texto, 180)}` : atual.lembreteIA || texto,
+    }));
+
+    setConversaDrafts((atual) => ({
+      ...atual,
+      [item.id]: {
+        canal: "WhatsApp",
+        direcao: "saida",
+        tipo: "Follow-up",
+        ...(atual[item.id] || {}),
+        mensagem: "",
+      },
+    }));
+    pushToast("Conversa registrada no orçamento.", "ok");
+    return conversa;
+  };
+
+  const registrarContato = (item, tipo = "manual", conteudo = "") => {
+    const texto = clean(conteudo || item.lembreteIA || item.lembrete || `Contato registrado para acompanhar o orçamento ${item.numero || ""}.`);
+    const criadoEm = new Date().toISOString();
+    const contato = {
+      id: `follow_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      tipo,
+      canal: tipo === "whatsapp" ? "WhatsApp" : tipo === "email" ? "E-mail" : "Acompanhamento",
+      conteudo: texto,
+      criadoEm,
+      origem: tipo === "manual" ? "manual" : "ia",
+    };
+    const conversa = {
+      id: `conv_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      followupId: contato.id,
+      tipo,
+      canal: contato.canal,
+      direcao: "saida",
+      mensagem: texto,
+      criadoEm,
+      origem: contato.origem,
+      usuarioNome: usuarioAtual?.nome || "",
+    };
+    atualizarOrcamento(item.id, (atual) => ({
+      ...atual,
+      followups: [contato, ...contatosDoOrcamento(atual)].slice(0, 30),
+      conversas: [conversa, ...(Array.isArray(atual.conversas) ? atual.conversas : [])].slice(0, 100),
+      ultimoContatoEm: contato.criadoEm,
+      proximoContato: atual.proximoContato && atual.proximoContato > hojeISO ? atual.proximoContato : dataISOEmDias(tipo === "cobranca" ? 2 : 3),
+      lembreteIA: texto,
+    }));
+    pushToast("Contato registrado no histórico.", "ok");
+    return contato;
+  };
+
+  const copiarTexto = async (texto) => {
+    try {
+      await navigator.clipboard.writeText(texto);
+      pushToast("Texto copiado.", "ok");
+    } catch {
+      pushToast("Não foi possível copiar.", "erro");
+    }
+  };
+
+  const abrirWhatsItem = (item) => {
+    const texto = item.lembreteIA || item.lembrete || `Olá, tudo bem? Gostaria de acompanhar o orçamento ${item.numero || ""}.`;
+    window.open(`https://wa.me/?text=${encodeURIComponent(texto)}`, "_blank");
+  };
+
+  const abrirEmailItem = (item) => {
+    const texto = item.lembreteIA || item.lembrete || `Olá,\n\nGostaria de acompanhar o orçamento ${item.numero || ""}.\n\nFico à disposição.`;
+    const assunto = `Acompanhamento do orçamento ${item.numero || ""}`;
+    window.location.href = `mailto:?subject=${encodeURIComponent(assunto)}&body=${encodeURIComponent(texto)}`;
+  };
+
+  const gerarMensagemIA = async (item, tipo = "cobranca") => {
+    if (gerandoContato) return;
+    setGerandoContato(`${item.id}_${tipo}`);
+    const emp = empresas.find((e) => e.id === item.empresaId);
+    const prioridade = avaliarPrioridadeOrcamento(item);
+
+    const pedido = tipo === "email"
+      ? `Gere um e-mail profissional de follow-up para o orçamento abaixo. Entregue assunto e corpo.\n\nCliente: ${item.cliente || ""}\nEmpresa proponente: ${item.empresaNome || emp?.nome || ""}\nNúmero: ${item.numero || ""}\nValor: ${brl(item.valorGlobal)}\nStatus: ${item.status || "Aberto"}\nPróximo contato: ${item.proximoContato || "não definido"}\nPrioridade: ${prioridade.nivel} (${prioridade.motivos.join(", ")})`
+      : tipo === "whatsapp"
+        ? `Gere uma mensagem curta de WhatsApp para acompanhar este orçamento.\n\nCliente: ${item.cliente || ""}\nEmpresa proponente: ${item.empresaNome || emp?.nome || ""}\nNúmero: ${item.numero || ""}\nValor: ${brl(item.valorGlobal)}\nStatus: ${item.status || "Aberto"}\nPrioridade: ${prioridade.nivel}`
+        : `Gere uma mensagem de cobrança/follow-up firme, educada e comercial para este orçamento ainda sem retorno.\n\nCliente: ${item.cliente || ""}\nEmpresa proponente: ${item.empresaNome || emp?.nome || ""}\nNúmero: ${item.numero || ""}\nValor: ${brl(item.valorGlobal)}\nStatus: ${item.status || "Aberto"}\nPróximo contato: ${item.proximoContato || "não definido"}\nMotivos de prioridade: ${prioridade.motivos.join(", ")}`;
+
+    try {
+      const response = await fetch("/api/chat-assistant", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(await authHeaders()),
+        },
+        body: JSON.stringify({
+          mode: tipo === "email" ? "email" : tipo === "whatsapp" ? "whatsapp" : "cobranca",
+          messages: [{ role: "user", content: pedido }],
+          context: { empresas, crm: base },
+        }),
+      });
+
+      let data = {};
+      try {
+        data = await response.json();
+      } catch {
+        throw new Error("A resposta da IA veio inválida.");
+      }
+
+      if (!response.ok) throw new Error(data.error || "Erro ao gerar mensagem com IA.");
+
+      registrarContato(item, tipo, data.answer || "");
+      pushToast("IA gerou mensagem e salvou no histórico.", "ok");
+    } catch (error) {
+      console.error("Erro ao gerar follow-up:", error);
+      pushToast(error.message || "Erro ao gerar follow-up com IA.", "erro");
+    } finally {
+      setGerandoContato(null);
+    }
+  };
+
+  const gerarInsightConversa = async (item, tipo = "resumo") => {
+    if (gerandoContato) return;
+
+    const conversas = conversasDoOrcamento(item);
+    if (!conversas.length) {
+      pushToast("Registre pelo menos uma conversa antes de usar a IA.", "aviso");
+      return;
+    }
+
+    setGerandoContato(`${item.id}_${tipo}`);
+    const emp = empresas.find((e) => e.id === item.empresaId);
+    const ultimaCliente = ultimaMensagemCliente(item);
+    const linhaDoTempo = conversas
+      .slice(0, 14)
+      .reverse()
+      .map((msg) => {
+        const lado = msg.direcao === "entrada" ? "CLIENTE" : msg.direcao === "interna" ? "INTERNO" : "EMPRESA";
+        return `${tsFmt(msg.criadoEm)} | ${msg.canal || "Canal"} | ${lado} | ${msg.tipo || "Conversa"}: ${clean(msg.mensagem || msg.conteudo || "", 900)}`;
+      })
+      .join("\n");
+
+    const pedido = tipo === "resposta"
+      ? `Leia o historico comercial deste orcamento e gere a melhor resposta para o cliente. Seja claro, cordial, comercial e objetivo. Nao invente dados.\n\nCliente: ${item.cliente || ""}\nEmpresa proponente: ${item.empresaNome || emp?.nome || ""}\nNumero: ${item.numero || ""}\nValor: ${brl(item.valorGlobal ?? item.valor)}\nStatus: ${item.status || "Aberto"}\nUltima mensagem do cliente: ${ultimaCliente ? clean(ultimaCliente.mensagem || "", 1200) : "nao identificada"}\n\nHistorico:\n${linhaDoTempo}`
+      : `Resuma o historico comercial deste orcamento para o vendedor. Entregue: 1) resumo em 3 linhas, 2) objeções ou pontos de atencao, 3) proxima acao recomendada, 4) sugestao de mensagem curta. Nao invente dados.\n\nCliente: ${item.cliente || ""}\nEmpresa proponente: ${item.empresaNome || emp?.nome || ""}\nNumero: ${item.numero || ""}\nValor: ${brl(item.valorGlobal ?? item.valor)}\nStatus: ${item.status || "Aberto"}\n\nHistorico:\n${linhaDoTempo}`;
+
+    try {
+      const response = await fetch("/api/chat-assistant", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(await authHeaders()),
+        },
+        body: JSON.stringify({
+          mode: tipo === "resposta" ? "resposta_cliente" : "geral",
+          messages: [{ role: "user", content: pedido }],
+          context: { empresas, crm: base },
+        }),
+      });
+
+      let data = {};
+      try {
+        data = await response.json();
+      } catch {
+        throw new Error("A resposta da IA veio inválida.");
+      }
+
+      if (!response.ok) throw new Error(data.error || "Erro ao analisar conversa com IA.");
+
+      const resposta = data.answer || "";
+      if (tipo === "resposta") {
+        atualizarDraftConversa(item.id, {
+          canal: ultimaCliente?.canal || "WhatsApp",
+          direcao: "saida",
+          tipo: "Resposta IA",
+          mensagem: resposta,
+        });
+        atualizarOrcamento(item.id, (atual) => ({
+          ...atual,
+          lembreteIA: resposta,
+        }));
+        pushToast("IA preparou a resposta no rascunho da conversa.", "ok");
+      } else {
+        const nota = {
+          id: `conv_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          canal: "Nota IA",
+          direcao: "interna",
+          tipo: "Resumo IA",
+          mensagem: resposta,
+          criadoEm: new Date().toISOString(),
+          origem: "ia",
+          usuarioNome: usuarioAtual?.nome || "",
+        };
+        atualizarOrcamento(item.id, (atual) => ({
+          ...atual,
+          conversas: [nota, ...(Array.isArray(atual.conversas) ? atual.conversas : [])].slice(0, 100),
+          resumoConversas: resposta,
+          lembreteIA: resposta,
+        }));
+        pushToast("IA resumiu o histórico e salvou no orçamento.", "ok");
+      }
+    } catch (error) {
+      console.error("Erro ao analisar conversa:", error);
+      pushToast(error.message || "Erro ao analisar conversa com IA.", "erro");
+    } finally {
+      setGerandoContato(null);
+    }
   };
 
   const criarLembretesIA = () => {
@@ -2001,20 +2892,6 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
 
     const msg = gerarTextoWhatsPendencias(base, empresas);
     window.open(`https://wa.me/55${numero.replace(/^55/, "")}?text=${encodeURIComponent(msg)}`, "_blank");
-  };
-
-  const statusColor = {
-    Aberto: BRAND.blue,
-    Andamento: BRAND.warn,
-    Finalizado: BRAND.green,
-    Atrasado: BRAND.danger,
-  };
-
-  const statusReal = (item) => {
-    if (item.status !== "Finalizado" && diasAte(item.proximoContato) !== null && diasAte(item.proximoContato) < 0) {
-      return "Atrasado";
-    }
-    return item.status || "Aberto";
   };
 
   return (
@@ -2092,11 +2969,91 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
             <AlertaIA cor={BRAND.danger} titulo={`${atrasados} atraso(s)`} texto="Priorizar cobrança e atualização de status." />
             <AlertaIA cor={BRAND.green} titulo={brl(ticketMedio)} texto="Ticket médio dos orçamentos cadastrados." />
           </div>
+
+          <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${BRAND.border}` }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", marginBottom: 10 }}>
+              <div style={{ fontSize: 12, fontWeight: 950, color: BRAND.text }}>Fila de follow-up</div>
+              <button
+                type="button"
+                onClick={() => {
+                  setFiltroRapido("Prioridade alta");
+                  setOrdenacao("prioridade");
+                }}
+                style={{ ...btnMiniGestao, color: BRAND.green, borderColor: `${BRAND.green2}66`, background: `${BRAND.green2}12` }}
+              >
+                Ver altas
+              </button>
+            </div>
+
+            {filaFollowup.length ? (
+              <div style={{ display: "grid", gap: 8 }}>
+                {filaFollowup.map(({ item, prioridade }) => {
+                  const chaveCarga = `${item.id}_cobranca`;
+                  return (
+                    <div key={item.id} style={{ padding: 10, borderRadius: 12, background: "rgba(7,17,31,.72)", border: `1px solid ${BRAND.border}` }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start" }}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ color: BRAND.text, fontSize: 12, fontWeight: 900, overflowWrap: "anywhere" }}>{item.cliente || "Cliente sem nome"}</div>
+                          <div style={{ color: BRAND.dim, fontSize: 10, marginTop: 2 }}>{item.numero || "orcamento"} - {brl(item.valorGlobal ?? item.valor)}</div>
+                        </div>
+                        <span style={{ flex: "0 0 auto", color: prioridade.cor, fontSize: 10, fontWeight: 950 }}>
+                          {prioridade.nivel} {prioridade.score}
+                        </span>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", marginTop: 8 }}>
+                        <div style={{ color: BRAND.muted, fontSize: 10, lineHeight: 1.4 }}>{prioridade.acao}</div>
+                        <button
+                          type="button"
+                          disabled={gerandoContato === chaveCarga}
+                          onClick={() => gerarMensagemIA(item, "cobranca")}
+                          style={{ ...btnMiniGestao, color: "#93C5FD", borderColor: `${BRAND.blue2}66`, background: `${BRAND.blue2}12`, opacity: gerandoContato === chaveCarga ? 0.55 : 1 }}
+                        >
+                          {gerandoContato === chaveCarga ? "Gerando" : "IA cobrar"}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div style={{ color: BRAND.dim, fontSize: 11, lineHeight: 1.5 }}>
+                Nenhum orcamento entrou na fila de prioridade no momento.
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
       <div style={painelGestao}>
-        <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 12, marginBottom: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+          <div>
+            <h3 style={tituloPainel}>Controle de orçamentos</h3>
+            <div style={{ fontSize: 12, color: BRAND.muted }}>
+              {lista.length} de {base.length} orçamento(s) filtrado(s). Página {paginaAtual} de {totalPaginas}.
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+            {["Todos", "Prioridade alta", "Em aberto", "Atrasados", "Hoje", "Sem contato", "Anexados"].map((f) => (
+              <button
+                key={f}
+                onClick={() => setFiltroRapido(f)}
+                style={{
+                  padding: "7px 10px",
+                  borderRadius: 999,
+                  border: `1px solid ${filtroRapido === f ? BRAND.green2 : BRAND.border2}`,
+                  background: filtroRapido === f ? `${BRAND.green2}18` : "transparent",
+                  color: filtroRapido === f ? BRAND.green : BRAND.muted,
+                  cursor: "pointer",
+                  fontWeight: 850,
+                }}
+              >
+                {f}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(220px,2fr) minmax(140px,1fr) minmax(170px,1fr) minmax(160px,1fr) 110px", gap: 12, marginBottom: 16 }}>
           <input
             value={busca}
             onChange={(e) => setBusca(e.target.value)}
@@ -2117,15 +3074,30 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
               <option key={e.id} value={e.id}>{e.nome}</option>
             ))}
           </select>
+
+          <select value={ordenacao} onChange={(e) => setOrdenacao(e.target.value)} style={inputGestao}>
+            <option value="contatoAsc">Próximo contato</option>
+            <option value="criadoDesc">Mais recentes</option>
+            <option value="valorDesc">Maior valor</option>
+            <option value="valorAsc">Menor valor</option>
+            <option value="clienteAsc">Cliente A-Z</option>
+            <option value="status">Status</option>
+            <option value="prioridade">Prioridade</option>
+          </select>
+
+          <select value={porPagina} onChange={(e) => setPorPagina(Number(e.target.value))} style={inputGestao}>
+            {[10, 15, 25, 50].map((n) => <option key={n} value={n}>{n}/pág.</option>)}
+          </select>
         </div>
 
         <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 920 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 1180 }}>
             <thead>
               <tr style={{ color: BRAND.muted, textAlign: "left" }}>
                 <th style={th}>Cliente</th>
                 <th style={th}>Empresa</th>
                 <th style={th}>Valor</th>
+                <th style={th}>Prioridade</th>
                 <th style={th}>Status</th>
                 <th style={th}>Próximo contato</th>
                 <th style={th}>Lembrete IA</th>
@@ -2133,105 +3105,244 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
             </thead>
             <tbody>
               {lista.length ? (
-                lista.map((item) => {
+                paginaItens.map((item) => {
                   const st = statusReal(item);
+                  const prioridade = avaliarPrioridadeOrcamento(item);
+                  const conversas = conversasDoOrcamento(item);
+                  const ultimoContato = ultimoContatoOrcamento(item);
+                  const lembreteAtual = item.lembreteIA || item.lembrete || "";
+                  const carregandoContato = String(gerandoContato || "").startsWith(`${item.id}_`);
+                  const rascunhoConversa = draftConversa(item.id);
                   return (
-                    <tr key={item.id} style={{ borderTop: `1px solid ${BRAND.border}` }}>
-                      <td style={td}>
-                        <button
-                          type="button"
-                          onClick={() => (baixarOrcamento || abrirOrcamentoSalvo)?.(item)}
-                          title="Abrir / baixar o orçamento"
-                          style={{
-                            background: "transparent",
-                            border: "none",
-                            color: BRAND.text,
-                            padding: 0,
-                            cursor: "pointer",
-                            textAlign: "left",
-                            fontSize: 12,
-                            fontWeight: 900,
-                            textDecoration: "underline",
-                            textDecorationColor: BRAND.blue,
-                            textUnderlineOffset: 3,
-                          }}
-                        >
-                          {item.cliente || "—"}
-                        </button>
+                    <React.Fragment key={item.id}>
+                      <tr style={{ borderTop: `1px solid ${BRAND.border}` }}>
+                        <td style={td}>
+                          <button
+                            type="button"
+                            onClick={() => (baixarOrcamento || abrirOrcamentoSalvo)?.(item)}
+                            title="Abrir / baixar o orçamento"
+                            style={{
+                              background: "transparent",
+                              border: "none",
+                              color: BRAND.text,
+                              padding: 0,
+                              cursor: "pointer",
+                              textAlign: "left",
+                              fontSize: 12,
+                              fontWeight: 900,
+                              textDecoration: "underline",
+                              textDecorationColor: BRAND.blue,
+                              textUnderlineOffset: 3,
+                            }}
+                          >
+                            {item.cliente || "—"}
+                          </button>
 
-                        <div style={{ fontSize: 10, color: BRAND.dim, marginTop: 3 }}>
-                          {item.numero || "—"} · {tsFmt(item.criadoEm)}
-                          {item.anexado && <span style={{ marginLeft: 6, padding: "1px 6px", borderRadius: 8, background: `${BRAND.green2}1e`, color: BRAND.green, fontWeight: 800, fontSize: 9 }}>📎 anexado</span>}
-                        </div>
+                          <div style={{ fontSize: 10, color: BRAND.dim, marginTop: 3 }}>
+                            {item.numero || "—"} · {tsFmt(item.criadoEm)}
+                            {item.anexado && <span style={{ marginLeft: 6, padding: "1px 6px", borderRadius: 8, background: `${BRAND.green2}1e`, color: BRAND.green, fontWeight: 800, fontSize: 9 }}>📎 anexado</span>}
+                          </div>
 
-                        <button
-                          type="button"
-                          onClick={() => (baixarOrcamento || abrirOrcamentoSalvo)?.(item)}
-                          style={{
-                            marginTop: 7,
-                            padding: "5px 9px",
-                            borderRadius: 8,
-                            border: `1px solid ${(item.orcamentoCompleto || item.anexado) ? BRAND.blue2 : BRAND.border2}66`,
-                            background: (item.orcamentoCompleto || item.anexado) ? `${BRAND.blue2}18` : "transparent",
-                            color: (item.orcamentoCompleto || item.anexado) ? "#93C5FD" : BRAND.dim,
-                            cursor: "pointer",
-                            fontSize: 10,
-                            fontWeight: 850,
-                          }}
-                        >
-                          {item.anexado ? "⬇ Baixar PDF" : "👁 Abrir orçamento"}
-                        </button>
-                      </td>
-                      <td style={td}>{item.empresaNome || item.empresa || "—"}</td>
-                      <td style={td}>
-                        <ValorEditavel
-                          valor={item.valorGlobal ?? item.valor ?? ""}
-                          onSalvar={(n) => updateItem(item.id, "valorGlobal", n)}
-                        />
-                      </td>
-                      <td style={td}>
-                        <select
-                          value={item.status || "Aberto"}
-                          onChange={(e) => updateItem(item.id, "status", e.target.value)}
-                          style={{
-                            padding: "7px 10px",
-                            borderRadius: 999,
-                            color: statusColor[item.status || "Aberto"] || BRAND.text,
-                            border: `1px solid ${statusColor[item.status || "Aberto"] || BRAND.border}`,
-                            background: BRAND.panel2,
-                            fontWeight: 800,
-                            outline: "none",
-                          }}
-                        >
-                          <option>Aberto</option>
-                          <option>Andamento</option>
-                          <option>Finalizado</option>
-                        </select>
-                        {st === "Atrasado" && <div style={{ fontSize: 10, color: BRAND.danger, marginTop: 5 }}>Contato atrasado</div>}
-                      </td>
-                      <td style={td}>
-                        <input
-                          type="date"
-                          value={item.proximoContato || ""}
-                          onChange={(e) => updateItem(item.id, "proximoContato", e.target.value)}
-                          style={{ ...inputGestao, padding: "8px 10px" }}
-                        />
-                      </td>
-                      <td style={td}>
-                        <textarea
-                          value={item.lembreteIA || item.lembrete || ""}
-                          onChange={(e) => updateItem(item.id, "lembreteIA", e.target.value)}
-                          placeholder="Lembrete de cobrança..."
-                          rows={2}
-                          style={{ ...inputGestao, resize: "vertical", minHeight: 42 }}
-                        />
-                      </td>
-                    </tr>
+                          <button
+                            type="button"
+                            onClick={() => (baixarOrcamento || abrirOrcamentoSalvo)?.(item)}
+                            style={{
+                              marginTop: 7,
+                              padding: "5px 9px",
+                              borderRadius: 8,
+                              border: `1px solid ${(item.orcamentoCompleto || item.anexado) ? BRAND.blue2 : BRAND.border2}66`,
+                              background: (item.orcamentoCompleto || item.anexado) ? `${BRAND.blue2}18` : "transparent",
+                              color: (item.orcamentoCompleto || item.anexado) ? "#93C5FD" : BRAND.dim,
+                              cursor: "pointer",
+                              fontSize: 10,
+                              fontWeight: 850,
+                            }}
+                          >
+                            {item.anexado ? "⬇ Baixar PDF" : "👁 Abrir orçamento"}
+                          </button>
+
+                          {ultimoContato && (
+                            <div style={{ fontSize: 10, color: BRAND.dim, marginTop: 7 }}>
+                              Último contato: {tsFmt(ultimoContato.criadoEm)}
+                            </div>
+                          )}
+                        </td>
+                        <td style={td}>{item.empresaNome || item.empresa || "—"}</td>
+                        <td style={td}>
+                          <ValorEditavel
+                            valor={item.valorGlobal ?? item.valor ?? ""}
+                            onSalvar={(n) => updateItem(item.id, "valorGlobal", n)}
+                          />
+                        </td>
+                        <td style={td}>
+                          <div style={{ display: "grid", gap: 7, minWidth: 118 }}>
+                            <span style={{ display: "inline-flex", width: "fit-content", alignItems: "center", gap: 6, padding: "5px 9px", borderRadius: 999, color: prioridade.cor, border: `1px solid ${prioridade.cor}66`, background: `${prioridade.cor}12`, fontSize: 10, fontWeight: 950 }}>
+                              {prioridade.nivel} {prioridade.score}
+                            </span>
+                            <div style={{ fontSize: 10, color: BRAND.muted, lineHeight: 1.45 }}>
+                              {(prioridade.motivos || []).slice(0, 3).join(" - ") || prioridade.acao}
+                            </div>
+                          </div>
+                        </td>
+                        <td style={td}>
+                          <select
+                            value={item.status || "Aberto"}
+                            onChange={(e) => updateItem(item.id, "status", e.target.value)}
+                            style={{
+                              padding: "7px 10px",
+                              borderRadius: 999,
+                              color: statusColor[item.status || "Aberto"] || BRAND.text,
+                              border: `1px solid ${statusColor[item.status || "Aberto"] || BRAND.border}`,
+                              background: BRAND.panel2,
+                              fontWeight: 800,
+                              outline: "none",
+                            }}
+                          >
+                            <option>Aberto</option>
+                            <option>Andamento</option>
+                            <option>Finalizado</option>
+                          </select>
+                          {st === "Atrasado" && <div style={{ fontSize: 10, color: BRAND.danger, marginTop: 5 }}>Contato atrasado</div>}
+                        </td>
+                        <td style={td}>
+                          <input
+                            type="date"
+                            value={item.proximoContato || ""}
+                            onChange={(e) => updateItem(item.id, "proximoContato", e.target.value)}
+                            style={{ ...inputGestao, padding: "8px 10px" }}
+                          />
+                        </td>
+                        <td style={{ ...td, minWidth: 300 }}>
+                          <textarea
+                            value={lembreteAtual}
+                            onChange={(e) => updateItem(item.id, "lembreteIA", e.target.value)}
+                            placeholder="Lembrete de cobrança..."
+                            rows={2}
+                            style={{ ...inputGestao, resize: "vertical", minHeight: 42 }}
+                          />
+
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 6, marginTop: 8 }}>
+                            <button type="button" disabled={carregandoContato} onClick={() => gerarMensagemIA(item, "cobranca")} style={{ ...btnMiniGestao, color: BRAND.warn, borderColor: `${BRAND.warn}66`, background: `${BRAND.warn}12`, opacity: carregandoContato ? 0.55 : 1 }}>
+                              <Bot size={12} /> Cobrar
+                            </button>
+                            <button type="button" disabled={carregandoContato} onClick={() => gerarMensagemIA(item, "email")} style={{ ...btnMiniGestao, color: "#93C5FD", borderColor: `${BRAND.blue2}66`, background: `${BRAND.blue2}12`, opacity: carregandoContato ? 0.55 : 1 }}>
+                              <Mail size={12} /> E-mail
+                            </button>
+                            <button type="button" disabled={carregandoContato} onClick={() => gerarMensagemIA(item, "whatsapp")} style={{ ...btnMiniGestao, color: BRAND.green, borderColor: `${BRAND.green2}66`, background: `${BRAND.green2}12`, opacity: carregandoContato ? 0.55 : 1 }}>
+                              <MessageSquareText size={12} /> Whats
+                            </button>
+                          </div>
+
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 6, marginTop: 6 }}>
+                            <button type="button" onClick={() => copiarTexto(lembreteAtual || `Acompanhar orçamento ${item.numero || ""}.`)} style={btnMiniGestao}>
+                              <Copy size={12} /> Copiar
+                            </button>
+                            <button type="button" onClick={() => abrirEmailItem(item)} style={btnMiniGestao}>
+                              <Mail size={12} /> Abrir
+                            </button>
+                            <button type="button" onClick={() => abrirWhatsItem(item)} style={btnMiniGestao}>
+                              <Send size={12} /> Enviar
+                            </button>
+                            <button type="button" onClick={() => setHistoricoAberto(historicoAberto === item.id ? null : item.id)} style={btnMiniGestao}>
+                              <MessageSquareText size={12} /> {conversas.length}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+
+                      {historicoAberto === item.id && (
+                        <tr>
+                          <td colSpan="7" style={{ padding: "0 8px 14px", borderTop: `1px solid ${BRAND.border}` }}>
+                            <div style={{ border: `1px solid ${BRAND.border}`, background: "rgba(7,17,31,.64)", borderRadius: 14, padding: 12 }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", marginBottom: 10 }}>
+                                <div>
+                                  <div style={{ fontSize: 12, color: BRAND.text, fontWeight: 950 }}>Conversas do cliente</div>
+                                  <div style={{ fontSize: 10, color: BRAND.dim }}>{item.numero || "orçamento"} - {item.cliente || "cliente"}</div>
+                                </div>
+                                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                                  <button type="button" disabled={carregandoContato} onClick={() => gerarInsightConversa(item, "resumo")} style={{ ...btnMiniGestao, color: "#93C5FD", borderColor: `${BRAND.blue2}66`, background: `${BRAND.blue2}12`, opacity: carregandoContato ? 0.55 : 1 }}>
+                                    <Bot size={12} /> Resumir IA
+                                  </button>
+                                  <button type="button" disabled={carregandoContato} onClick={() => gerarInsightConversa(item, "resposta")} style={{ ...btnMiniGestao, color: BRAND.green, borderColor: `${BRAND.green2}66`, background: `${BRAND.green2}12`, opacity: carregandoContato ? 0.55 : 1 }}>
+                                    <Bot size={12} /> Responder IA
+                                  </button>
+                                </div>
+                              </div>
+
+                              <div style={{ display: "grid", gridTemplateColumns: "minmax(120px,.7fr) minmax(120px,.7fr) minmax(130px,.8fr) minmax(240px,2fr) auto", gap: 8, alignItems: "start", marginBottom: 12 }}>
+                                <select value={rascunhoConversa.canal} onChange={(e) => atualizarDraftConversa(item.id, { canal: e.target.value })} style={{ ...inputGestao, padding: "9px 10px" }}>
+                                  <option>WhatsApp</option>
+                                  <option>E-mail</option>
+                                  <option>Ligação</option>
+                                  <option>Reunião</option>
+                                  <option>Presencial</option>
+                                  <option>Observação</option>
+                                </select>
+                                <select value={rascunhoConversa.direcao} onChange={(e) => atualizarDraftConversa(item.id, { direcao: e.target.value })} style={{ ...inputGestao, padding: "9px 10px" }}>
+                                  <option value="entrada">Cliente respondeu</option>
+                                  <option value="saida">Empresa enviou</option>
+                                  <option value="interna">Nota interna</option>
+                                </select>
+                                <select value={rascunhoConversa.tipo} onChange={(e) => atualizarDraftConversa(item.id, { tipo: e.target.value })} style={{ ...inputGestao, padding: "9px 10px" }}>
+                                  <option>Follow-up</option>
+                                  <option>Cobrança</option>
+                                  <option>Resposta</option>
+                                  <option>Objeção</option>
+                                  <option>Negociação</option>
+                                  <option>Aprovação</option>
+                                  <option>Recusa</option>
+                                  <option>Observação</option>
+                                </select>
+                                <textarea
+                                  value={rascunhoConversa.mensagem}
+                                  onChange={(e) => atualizarDraftConversa(item.id, { mensagem: e.target.value })}
+                                  placeholder="Cole ou escreva a conversa feita com o cliente..."
+                                  rows={3}
+                                  style={{ ...inputGestao, resize: "vertical", minHeight: 76 }}
+                                />
+                                <button type="button" onClick={() => registrarConversa(item, rascunhoConversa)} style={{ ...btnMiniGestao, minHeight: 38, color: BRAND.green, borderColor: `${BRAND.green2}66`, background: `${BRAND.green2}12` }}>
+                                  Salvar conversa
+                                </button>
+                              </div>
+
+                              {item.resumoConversas && (
+                                <div style={{ padding: 10, borderRadius: 10, background: `${BRAND.blue2}10`, border: `1px solid ${BRAND.blue2}33`, marginBottom: 10 }}>
+                                  <div style={{ color: "#93C5FD", fontSize: 10, fontWeight: 950, marginBottom: 4 }}>Resumo IA</div>
+                                  <div style={{ color: BRAND.text, fontSize: 11, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{item.resumoConversas}</div>
+                                </div>
+                              )}
+
+                              {conversas.length ? (
+                                <div style={{ display: "grid", gap: 8 }}>
+                                  {conversas.slice(0, 10).map((msg) => {
+                                    const direcaoCor = msg.direcao === "entrada" ? BRAND.warn : msg.direcao === "interna" ? "#93C5FD" : BRAND.green;
+                                    const direcaoTexto = msg.direcao === "entrada" ? "Cliente" : msg.direcao === "interna" ? "Interno" : "Empresa";
+                                    return (
+                                      <div key={msg.id || msg.criadoEm} style={{ padding: 10, borderRadius: 10, background: BRAND.panel2, border: `1px solid ${BRAND.border2}` }}>
+                                        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, color: BRAND.muted, fontSize: 10, marginBottom: 5, flexWrap: "wrap" }}>
+                                          <span>
+                                            <strong style={{ color: direcaoCor }}>{direcaoTexto}</strong> - {msg.canal || "Canal"} - {msg.tipo || "Conversa"} {msg.origem === "ia" ? "- IA" : ""}
+                                          </span>
+                                          <span>{tsFmt(msg.criadoEm)}</span>
+                                        </div>
+                                        <div style={{ color: BRAND.text, fontSize: 11, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{msg.mensagem || msg.conteudo || "Conversa registrada."}</div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              ) : (
+                                <div style={{ color: BRAND.dim, fontSize: 11 }}>Ainda não existe conversa registrada para este orçamento.</div>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
                   );
                 })
               ) : (
                 <tr>
-                  <td colSpan="6" style={{ padding: 28, textAlign: "center", color: BRAND.dim }}>
+                  <td colSpan="7" style={{ padding: 28, textAlign: "center", color: BRAND.dim }}>
                     Nenhum orçamento encontrado na gestão.
                   </td>
                 </tr>
@@ -2239,6 +3350,45 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
             </tbody>
           </table>
         </div>
+
+        {lista.length > 0 && (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", borderTop: `1px solid ${BRAND.border}`, paddingTop: 14, marginTop: 12 }}>
+            <div style={{ fontSize: 12, color: BRAND.muted }}>
+              Mostrando {inicioPagina + 1}-{Math.min(inicioPagina + porPagina, lista.length)} de {lista.length}
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <button
+                onClick={() => setPagina(1)}
+                disabled={paginaAtual === 1}
+                style={{ ...btnPagina, opacity: paginaAtual === 1 ? 0.45 : 1 }}
+              >
+                Primeira
+              </button>
+              <button
+                onClick={() => setPagina((p) => Math.max(1, p - 1))}
+                disabled={paginaAtual === 1}
+                style={{ ...btnPagina, opacity: paginaAtual === 1 ? 0.45 : 1 }}
+              >
+                Anterior
+              </button>
+              <span style={{ fontSize: 12, color: BRAND.text, fontWeight: 900, minWidth: 74, textAlign: "center" }}>{paginaAtual} / {totalPaginas}</span>
+              <button
+                onClick={() => setPagina((p) => Math.min(totalPaginas, p + 1))}
+                disabled={paginaAtual === totalPaginas}
+                style={{ ...btnPagina, opacity: paginaAtual === totalPaginas ? 0.45 : 1 }}
+              >
+                Próxima
+              </button>
+              <button
+                onClick={() => setPagina(totalPaginas)}
+                disabled={paginaAtual === totalPaginas}
+                style={{ ...btnPagina, opacity: paginaAtual === totalPaginas ? 0.45 : 1 }}
+              >
+                Última
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       <div style={{ ...painelGestao, marginTop: 16 }}>
@@ -2302,6 +3452,34 @@ const inputGestao = {
   color: BRAND.text,
   outline: "none",
   boxSizing: "border-box",
+};
+
+const btnPagina = {
+  padding: "8px 11px",
+  borderRadius: 9,
+  border: `1px solid ${BRAND.border2}`,
+  background: BRAND.panel2,
+  color: BRAND.muted,
+  cursor: "pointer",
+  fontWeight: 850,
+};
+
+const btnMiniGestao = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 4,
+  minHeight: 30,
+  padding: "6px 7px",
+  borderRadius: 8,
+  border: `1px solid ${BRAND.border2}`,
+  background: "rgba(7,17,31,.7)",
+  color: BRAND.muted,
+  cursor: "pointer",
+  fontSize: 10,
+  fontWeight: 850,
+  lineHeight: 1,
+  whiteSpace: "nowrap",
 };
 
 const th = {
@@ -2494,7 +3672,7 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
       </div>
 
       <div style={{ marginTop: 14, fontSize: 12, color: BRAND.warn, lineHeight: 1.6 }}>
-        MVP local: os usuários ficam no navegador atual. Para acesso real de qualquer lugar com senha segura, use Supabase Auth + PostgreSQL ou Neon + autenticação.
+        Banco online ativo: os acessos e dados operacionais devem ficar vinculados ao Supabase Auth, com isolamento por usuario e sincronizacao em nuvem.
       </div>
     </div>
   );
@@ -2517,6 +3695,15 @@ export default function App() {
   const [usuarioAtual, setUsuarioAtual] = useState(null);
 
   useEffect(() => {
+    const onBackupImported = (event) => {
+      const detail = event.detail || {};
+      if (Array.isArray(detail.crm)) setCrm(detail.crm);
+    };
+    window.addEventListener("orcaflow:backup-imported", onBackupImported);
+    return () => window.removeEventListener("orcaflow:backup-imported", onBackupImported);
+  }, []);
+
+  useEffect(() => {
     const applyUser = async (user) => {
       if (!user) {
         setAutenticado(false);
@@ -2533,7 +3720,7 @@ export default function App() {
         ativo: true,
       });
       setAutenticado(true);
-      await store.migrate([KEY_EMP, KEY_LOG, KEY_META, KEY_CRM]);
+      await store.migrate([KEY_EMP, KEY_LOG, KEY_META, KEY_CRM, KEY_CHAT]);
       setCrm((await store.get(KEY_CRM)) || []);
     };
 
@@ -2557,7 +3744,7 @@ export default function App() {
   const [step, setStep] = useState("montagem");
   const [transcrevendo, setTranscrevendo] = useState(false);
   const refAudio = useRef(null);
-  const MAX = 3;
+  const MAX = 12;
 
   const handleSalvar = async (form) => {
     setSalvando(true);
@@ -2724,6 +3911,9 @@ export default function App() {
           valorGlobal: s.valorGlobal || "",
           criadoEm: new Date().toISOString(),
           itensIA: Array.isArray(data.itens) ? data.itens : [],
+          identidadeDocumento: ed.identidadeDocumento || {},
+          materiaisTabela: Array.isArray(ed.materiaisTabela) ? ed.materiaisTabela : [],
+          precificacao: ed.precificacao || {},
           retornoIA: ed,
           campos: {
             cliente,
@@ -2928,12 +4118,110 @@ export default function App() {
         y += 12;
       };
 
+      const writeMaterialsTable = () => {
+        const rows = materialRows(dados);
+        if (!rows.length) return;
+
+        ensure(100);
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(10);
+        pdf.setTextColor(0, 0, 0);
+        pdf.text(getSectionLabel(dados, "materiais"), marginX, y);
+        y += 16;
+
+        const [r, g, b] = hexToRgb(emp.corPrimaria || BRAND.green2);
+        const widths = [180, 34, 30, 66, 48, 64, maxW - 422];
+        const labels = ["ITEM", "QTD", "UN", "ORIGINAL", "ACRESC.", "UNIT.", "SUBTOTAL"];
+        const aligns = ["left", "right", "right", "right", "right", "right", "right"];
+
+        const drawText = (text, x, width, lineY, align = "left", size = 7.5) => {
+          pdf.setFontSize(size);
+          const lines = pdf.splitTextToSize(String(text || ""), width - 6);
+          const tx = align === "right" ? x + width - 3 : x + 3;
+          pdf.text(lines, tx, lineY, { align });
+          return lines.length;
+        };
+
+        ensure(22);
+        pdf.setFillColor(r, g, b);
+        pdf.rect(marginX, y, maxW, 18, "F");
+        pdf.setFont("helvetica", "bold");
+        pdf.setTextColor(255, 255, 255);
+        let x = marginX;
+        labels.forEach((label, i) => {
+          drawText(label, x, widths[i], y + 12, aligns[i], 6.8);
+          x += widths[i];
+        });
+        y += 18;
+
+        pdf.setFont(bodyFont, "normal");
+        rows.forEach((item, index) => {
+          const descLines = pdf.splitTextToSize(String(item.descricao || ""), widths[0] - 6);
+          const rowHeight = Math.max(22, descLines.length * 9 + (item.observacao ? 12 : 6));
+          ensure(rowHeight + 8);
+
+          if (index % 2 === 0) {
+            pdf.setFillColor(245, 248, 250);
+            pdf.rect(marginX, y, maxW, rowHeight, "F");
+          }
+          pdf.setDrawColor(220, 226, 235);
+          pdf.line(marginX, y + rowHeight, marginX + maxW, y + rowHeight);
+
+          pdf.setTextColor(0, 0, 0);
+          x = marginX;
+          pdf.setFont(bodyFont, "normal");
+          pdf.setFontSize(7.5);
+          pdf.text(descLines, x + 3, y + 11);
+          if (item.observacao) {
+            pdf.setFontSize(6.8);
+            pdf.setTextColor(70, 85, 105);
+            pdf.text(pdf.splitTextToSize(String(item.observacao), widths[0] - 6), x + 3, y + 11 + descLines.length * 9);
+          }
+
+          x += widths[0];
+          pdf.setTextColor(0, 0, 0);
+          pdf.setFontSize(7.2);
+          drawText(item.quantidade || 1, x, widths[1], y + 12, "right", 7.2); x += widths[1];
+          drawText(item.unidade || "un", x, widths[2], y + 12, "right", 7.2); x += widths[2];
+          drawText(parseValorBR(item.valorOriginal) > 0 ? brl(item.valorOriginal) : "-", x, widths[3], y + 12, "right", 7.2); x += widths[3];
+          drawText(parseValorBR(item.acrescimoPercentual) ? `${Number(item.acrescimoPercentual).toFixed(2)}%` : "-", x, widths[4], y + 12, "right", 7.2); x += widths[4];
+          drawText(brl(item.valorUnitario), x, widths[5], y + 12, "right", 7.2); x += widths[5];
+          pdf.setFont(bodyFont, "bold");
+          drawText(brl(item.subtotal), x, widths[6], y + 12, "right", 7.2);
+
+          y += rowHeight;
+        });
+
+        ensure(26);
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(8.5);
+        pdf.setTextColor(0, 0, 0);
+        pdf.text("TOTAL DA TABELA", marginX + maxW - 170, y + 14, { align: "right" });
+        pdf.text(brl(materialTotal(rows)), marginX + maxW, y + 14, { align: "right" });
+        y += 32;
+      };
+
+      const writeOrderedSection = (key) => {
+        if (key === "materiais") {
+          if (dados.campos?.materiais) writeSection(getSectionLabel(dados, "materiais"), dados.campos.materiais);
+          writeMaterialsTable();
+          return;
+        }
+        if (key === "itens") {
+          if (Array.isArray(dados.itensIA) && dados.itensIA.length) {
+            writeSection(getSectionLabel(dados, "itens"), dados.itensIA.map((item, i) => `${i + 1}. ${item}`).join("\n"));
+          }
+          return;
+        }
+        writeSection(getSectionLabel(dados, key), dados.campos?.[key]);
+      };
+
       addBase();
 
       pdf.setFont(titleFont, "bold");
       pdf.setFontSize(titleSize);
       pdf.setTextColor(0, 0, 0);
-      pdf.text("PROPOSTA COMERCIAL", marginX, y);
+      pdf.text(pdf.splitTextToSize(getDocTitle(dados).toUpperCase(), maxW - 120), marginX, y);
 
       // Número da proposta sempre dentro da área segura (nunca sobre o timbrado).
       pdf.setFont("helvetica", "bold");
@@ -2943,16 +4231,10 @@ export default function App() {
       y += 28;
 
       writeSection("Destinatário", dados.campos?.cliente || cliente);
-      writeSection("Apresentação", dados.campos?.intro);
-      writeSection("Objetivo", dados.campos?.objetivo);
-      writeSection("Escopo Técnico", dados.campos?.escopo);
-      writeSection("Materiais e Equipamentos", dados.campos?.materiais);
-      writeSection("Considerações Técnicas", dados.campos?.consideracoes);
-      writeSection("Recursos Operacionais", dados.campos?.recursos);
-
-      if (Array.isArray(dados.itensIA) && dados.itensIA.length) {
-        writeSection("Itens Incluídos", dados.itensIA.map((item, i) => `${i + 1}. ${item}`).join("\n"));
+      if (dados.identidadeDocumento?.subtitulo) {
+        writeSection("", dados.identidadeDocumento.subtitulo);
       }
+      getSectionOrder(dados).forEach(writeOrderedSection);
 
       if (dados.valorGlobal) {
         ensure(72);
@@ -2967,8 +4249,6 @@ export default function App() {
         pdf.text(brl(dados.valorGlobal), marginX, y);
         y += 28;
       }
-
-      writeSection("Fechamento", dados.campos?.fechamento);
 
       ensure(70);
       pdf.setDrawColor(0, 0, 0);
@@ -3139,7 +4419,7 @@ export default function App() {
 
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <div style={{ display: "flex", gap: 3, background: BRAND.bg, borderRadius: 10, padding: 4, border: `1px solid ${BRAND.border2}` }}>
-            {[["gestao", "📊 Gestão"], ["orcamento", "✦ Orçamento"], ["empresas", "🏢 Empresas"], ["banco", "🗄 Banco"]].map(([v, l]) => (
+            {[["gestao", "📊 Gestão"], ["orcamento", "✦ Orçamento"], ["chat", "IA Chat"], ["empresas", "🏢 Empresas"], ["banco", "🗄 Banco"]].map(([v, l]) => (
               <button key={v} onClick={() => setView(v)} style={{ padding: "7px 12px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 850, background: view === v ? `linear-gradient(135deg, ${BRAND.green2}, #15803D)` : "transparent", color: view === v ? "#fff" : BRAND.dim, transition: "all .22s ease" }}>{l}</button>
             ))}
           </div>
@@ -3159,6 +4439,14 @@ export default function App() {
           abrirOrcamentoSalvo={abrirOrcamentoSalvo}
           baixarOrcamento={baixarOrcamento}
           onAnexar={() => setAnexarOpen(true)}
+        />
+      )}
+
+      {view === "chat" && (
+        <ChatIAPanel
+          empresas={empresas}
+          crm={crm}
+          pushToast={pushToast}
         />
       )}
 
