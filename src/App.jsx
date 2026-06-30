@@ -1778,7 +1778,45 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
     </div>
   );
 }
+function textoCurto(valor, limite = 900) {
+  return clean(valor || "").slice(0, limite);
+}
 
+function contextoCompactoChat(empresas = [], crm = []) {
+  return {
+    empresas: (Array.isArray(empresas) ? empresas : []).slice(0, 24).map((emp) => ({
+      nome: emp?.nome || "",
+      nomeFantasia: emp?.nomeFantasia || "",
+      cnpj: emp?.cnpj || "",
+      tom: textoCurto(emp?.tom, 220),
+      diferenciais: textoCurto(emp?.diferenciais, 450),
+      dnaLinguagem: textoCurto(emp?.dnaLinguagem, 900),
+      estruturaOrcamento: textoCurto(emp?.estruturaOrcamento, 700),
+      padraoDocumental: textoCurto(emp?.padraoDocumental, 700),
+      assinaturaVisual: textoCurto(emp?.assinaturaVisual, 500),
+    })),
+    crm: (Array.isArray(crm) ? crm : []).slice(0, 35).map((item) => {
+      const conversas = Array.isArray(item?.conversas) ? item.conversas : [];
+      return {
+        numero: item?.numero || "",
+        cliente: item?.cliente || "",
+        empresaNome: item?.empresaNome || "",
+        valorGlobal: item?.valorGlobal ?? item?.valor ?? "",
+        status: item?.status || "",
+        proximoContato: item?.proximoContato || "",
+        lembreteIA: textoCurto(item?.lembreteIA, 450),
+        resumoConversas: textoCurto(item?.resumoConversas, 550),
+        conversasRecentes: conversas.slice(-3).map((msg) => ({
+          canal: msg?.canal || "",
+          direcao: msg?.direcao || "",
+          tipo: msg?.tipo || "",
+          mensagem: textoCurto(msg?.mensagem || msg?.conteudo, 450),
+          criadoEm: msg?.criadoEm || "",
+        })),
+      };
+    }),
+  };
+}
 
 function ChatIAPanel({ empresas = [], crm = [], pushToast }) {
   const [messages, setMessages] = useState([]);
@@ -1856,8 +1894,8 @@ function ChatIAPanel({ empresas = [], crm = [], pushToast }) {
         },
         body: JSON.stringify({
           mode,
-          messages: base.map((msg) => ({ role: msg.role, content: msg.content })),
-          context: { empresas, crm },
+          messages: base.slice(-12).map((msg) => ({ role: msg.role, content: textoCurto(msg.content, 3000) })),
+          context: contextoCompactoChat(empresas, crm),
         }),
       });
 
