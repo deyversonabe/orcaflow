@@ -651,7 +651,10 @@ function ModalAnexarOrcamento({ empresas, usuarioAtual, onSave, onCancel, pushTo
   const [arquivo, setArquivo] = useState(null);
   const [arquivoNome, setArquivoNome] = useState("");
   const [salvandoLocal, setSalvandoLocal] = useState(false);
+  const [importandoMassa, setImportandoMassa] = useState(false);
+  const [progressoMassa, setProgressoMassa] = useState("");
   const refFile = useRef(null);
+  const refBulk = useRef(null);
 
   const inp = {
     width: "100%", background: BRAND.panel2, border: `1px solid ${BRAND.border2}`,
@@ -679,6 +682,139 @@ function ModalAnexarOrcamento({ empresas, usuarioAtual, onSave, onCancel, pushTo
       pushToast("PDF anexado. Preencha os dados para acompanhamento.", "ok");
     } catch {
       pushToast("Erro ao ler o PDF.", "erro");
+    }
+  };
+
+  const empresasCompactas = () => empresas.map((emp) => ({
+    id: emp.id,
+    nome: emp.nome || "",
+    nomeFantasia: emp.nomeFantasia || "",
+    cnpj: emp.cnpj || "",
+    email: emp.email || "",
+    assinatura: emp.assinatura || "",
+    rodape: emp.rodape || "",
+  }));
+
+  const empresaPorIA = (dados) => {
+    const porId = empresas.find((emp) => emp.id === dados?.empresaId);
+    if (porId) return porId;
+    const alvo = clean(`${dados?.empresaNomeDetectada || ""} ${dados?.observacoes || ""}`).toLowerCase();
+    if (!alvo) return null;
+    return empresas.find((emp) => {
+      const nome = clean(`${emp.nome || ""} ${emp.nomeFantasia || ""} ${emp.cnpj || ""}`).toLowerCase();
+      return nome && (alvo.includes(nome) || nome.includes(alvo));
+    }) || null;
+  };
+
+  const importarEmMassa = async (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (!files.length || importandoMassa) return;
+
+    setImportandoMassa(true);
+    let importados = 0;
+    let falhas = 0;
+
+    try {
+      for (let i = 0; i < files.length; i += 1) {
+        const file = files[i];
+        const nome = String(file.name || "");
+        const nomeLower = nome.toLowerCase();
+        const isPdf = file.type === "application/pdf" || nomeLower.endsWith(".pdf");
+        const isDocx = nomeLower.endsWith(".docx") || /officedocument\.wordprocessingml\.document/i.test(file.type);
+
+        setProgressoMassa(`Importando ${i + 1}/${files.length}: ${nome}`);
+
+        if (!isPdf && !isDocx) {
+          falhas += 1;
+          continue;
+        }
+        if (file.size > 8 * 1024 * 1024) {
+          falhas += 1;
+          continue;
+        }
+
+        try {
+          const dataUrl = await lerArquivoComoDataURL(file);
+          const dataArquivo = file.lastModified ? new Date(file.lastModified).toISOString() : new Date().toISOString();
+          let texto = "";
+          let imagem = "";
+
+          if (isPdf) {
+            texto = await lerTextoPDF(file);
+            if (!texto || texto.trim().length < 40) {
+              imagem = await pdfParaImagemCartaoCNPJ(file);
+            }
+          }
+
+          const response = await fetch("/api/import-budget-file", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(await authHeaders()),
+            },
+            body: JSON.stringify({
+              filename: nome,
+              mimeType: file.type || (isDocx ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : "application/pdf"),
+              texto,
+              imagem,
+              fileData: isDocx ? dataUrl : "",
+              fileModifiedAt: dataArquivo,
+              empresas: empresasCompactas(),
+            }),
+          });
+
+          let data = {};
+          try {
+            data = await response.json();
+          } catch {
+            throw new Error("A resposta da IA veio invalida.");
+          }
+          if (!response.ok) throw new Error(data.error || "Erro ao importar arquivo com IA.");
+
+          const dados = data.dados || {};
+          const emp = empresaPorIA(dados) || empresas[0];
+          if (!emp) throw new Error("Cadastre uma empresa antes de importar.");
+
+          const item = {
+            id: `crm_import_${Date.now()}_${i}`,
+            numero: dados.numero || orcNum(),
+            empresaId: emp.id,
+            empresaNome: emp.nome || "",
+            cliente: dados.cliente || safeFileName(nome),
+            valorGlobal: parseValorBR(dados.valorGlobal),
+            status: "Aberto",
+            proximoContato: "",
+            lembreteIA: dados.descricao || "",
+            descricaoArquivo: dados.descricao || "",
+            empresaNomeDetectada: dados.empresaNomeDetectada || "",
+            dataDocumento: dados.dataDocumento || "",
+            dataArquivo,
+            confiancaImportacao: dados.confianca || "",
+            observacoesImportacao: dados.observacoes || "",
+            origemImportacao: "massa_ia",
+            userId: usuarioAtual?.id || "admin",
+            criadoEm: dataArquivo,
+            atualizadoEm: new Date().toISOString(),
+            anexado: true,
+            arquivoPdf: dataUrl,
+            arquivoNome: nome,
+            arquivoTipo: file.type || (isDocx ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : "application/pdf"),
+            orcamentoCompleto: null,
+          };
+
+          await onSave(item, { keepOpen: true, silent: true });
+          importados += 1;
+        } catch (error) {
+          console.error("Erro ao importar arquivo em massa:", file.name, error);
+          falhas += 1;
+        }
+      }
+
+      pushToast(`Importacao concluida: ${importados} arquivo(s) importado(s)${falhas ? `, ${falhas} falha(s)` : ""}.`, falhas ? "aviso" : "ok");
+      setProgressoMassa("");
+    } finally {
+      setImportandoMassa(false);
     }
   };
 
@@ -763,9 +899,14 @@ function ModalAnexarOrcamento({ empresas, usuarioAtual, onSave, onCancel, pushTo
           <div>
             <Lbl c="ARQUIVO PDF DO ORÇAMENTO *" />
             <input ref={refFile} type="file" accept="application/pdf,.pdf" style={{ display: "none" }} onChange={anexarPdf} />
+            <input ref={refBulk} type="file" accept="application/pdf,.pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple style={{ display: "none" }} onChange={importarEmMassa} />
             <button onClick={() => refFile.current?.click()} style={{ width: "100%", padding: "12px", borderRadius: 10, border: `1px dashed ${arquivo ? BRAND.green2 : BRAND.blue2}66`, background: arquivo ? `${BRAND.green2}12` : `${BRAND.blue2}10`, color: arquivo ? BRAND.green : "#93C5FD", cursor: "pointer", fontSize: 12, fontWeight: 850 }}>
               {arquivo ? `✓ ${arquivoNome}` : "📎 Selecionar PDF do orçamento"}
             </button>
+            <button type="button" onClick={() => refBulk.current?.click()} disabled={importandoMassa} style={{ width: "100%", marginTop: 8, padding: "11px", borderRadius: 10, border: `1px solid ${BRAND.green2}55`, background: `${BRAND.green2}14`, color: BRAND.green, cursor: importandoMassa ? "not-allowed" : "pointer", fontSize: 12, fontWeight: 900 }}>
+              {importandoMassa ? "IA importando arquivos..." : "Importar varios orcamentos com IA"}
+            </button>
+            {progressoMassa && <div style={{ fontSize: 10.5, color: BRAND.dim, marginTop: 6 }}>{progressoMassa}</div>}
           </div>
 
           <div style={{ display: "flex", gap: 9, marginTop: 6 }}>
@@ -2603,6 +2744,10 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
       o.status,
       o.lembreteIA,
       o.lembrete,
+      o.descricaoArquivo,
+      o.arquivoNome,
+      o.empresaNomeDetectada,
+      o.dataDocumento,
     ]
       .filter(Boolean)
       .join(" ")
@@ -3216,6 +3361,17 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
                     <React.Fragment key={item.id}>
                       <tr style={{ borderTop: `1px solid ${BRAND.border}` }}>
                         <td style={td}>
+                          {item.descricaoArquivo && (
+                            <div style={{ fontSize: 10.5, color: "#B6C7DD", marginTop: 5, lineHeight: 1.45, maxWidth: 330 }}>
+                              {item.descricaoArquivo}
+                            </div>
+                          )}
+                          {(item.dataDocumento || item.empresaNomeDetectada) && (
+                            <div style={{ fontSize: 9.5, color: BRAND.dim, marginTop: 4 }}>
+                              {item.dataDocumento ? `Doc.: ${item.dataDocumento}` : ""}{item.dataDocumento && item.empresaNomeDetectada ? " · " : ""}{item.empresaNomeDetectada ? `IA: ${item.empresaNomeDetectada}` : ""}
+                            </div>
+                          )}
+
                           <button
                             type="button"
                             onClick={() => (baixarOrcamento || abrirOrcamentoSalvo)?.(item)}
@@ -4566,14 +4722,14 @@ export default function App() {
   };
 
   // Salva no CRM/Gestão um orçamento anexado externamente.
-  const salvarOrcamentoAnexado = async (item) => {
+  const salvarOrcamentoAnexado = async (item, options = {}) => {
     setCrm((prev) => {
       const atualizado = [item, ...prev];
       store.set(KEY_CRM, atualizado);
       return atualizado;
     });
     await incOrcamentos(1);
-    setAnexarOpen(false);
+    if (!options.keepOpen) setAnexarOpen(false);
     pushToast("Orçamento anexado e adicionado ao acompanhamento.", "ok");
   };
 
