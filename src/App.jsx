@@ -438,6 +438,29 @@ async function lerTextoPDF(file) {
   return texto;
 }
 
+async function pdfParaImagemCartaoCNPJ(file) {
+  const buffer = await file.arrayBuffer();
+  const pdfjsLib = await getPdfJs();
+  const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+  const page = await pdf.getPage(1);
+
+  const base = page.getViewport({ scale: 1 });
+  const maiorLado = Math.max(base.width, base.height);
+  const escala = Math.max(1.4, Math.min(2.4, 1700 / maiorLado));
+  const viewport = page.getViewport({ scale: escala });
+
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+  canvas.width = Math.floor(viewport.width);
+  canvas.height = Math.floor(viewport.height);
+
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  await page.render({ canvasContext: ctx, viewport }).promise;
+  return canvas.toDataURL("image/jpeg", 0.88);
+}
+
 // Detecta automaticamente onde termina o cabeçalho e onde começa o rodapé
 // analisando a "tinta" (pixels não-brancos) de cada linha do timbrado renderizado.
 // Retorna as alturas em PONTOS (pt) do PDF — captação automática das medidas.
@@ -1136,12 +1159,18 @@ function ModalEmpresa({ empresa, onSave, onCancel, salvando, pushToast }) {
     setImportandoCNPJ(true);
     try {
       const texto = await lerTextoPDF(file);
-      if (!texto || texto.trim().length < 40) {
+      const temTextoPesquisavel = Boolean(texto && texto.trim().length >= 40);
+      let imagemCartao = "";
+      if (!temTextoPesquisavel) {
+        pushToast("PDF sem texto pesquisavel. Fazendo leitura visual com IA...", "aviso");
+        imagemCartao = await pdfParaImagemCartaoCNPJ(file);
+      }
+      if (false && (!texto || texto.trim().length < 40)) {
         throw new Error("Este PDF parece ser imagem ou não possui texto pesquisável. Será necessário OCR.");
       }
 
       let dados;
-      let origem = "IA";
+      let origem = imagemCartao ? "IA visual" : "IA";
 
       try {
         const response = await fetch("/api/read-company-card", {
@@ -1153,6 +1182,7 @@ function ModalEmpresa({ empresa, onSave, onCancel, salvando, pushToast }) {
           body: JSON.stringify({
             filename: file.name,
             texto,
+            imagem: imagemCartao,
           }),
         });
 
@@ -1166,6 +1196,9 @@ function ModalEmpresa({ empresa, onSave, onCancel, salvando, pushToast }) {
         if (!response.ok) throw new Error(data.error || "Erro ao ler Cartão CNPJ com IA.");
         dados = data.dados || {};
       } catch (iaError) {
+        if (!temTextoPesquisavel) {
+          throw new Error(iaError.message || "O PDF nao tem texto pesquisavel e a leitura visual da IA falhou.");
+        }
         console.warn("Leitura com IA indisponível, usando leitor local:", iaError);
         dados = extrairDadosCartaoCNPJ(texto);
         origem = "leitor local";
@@ -2131,6 +2164,34 @@ function LoginScreen({ onLogin, pushToast }) {
             <button onClick={async () => { if (!usuario.trim()) return pushToast("Informe seu e-mail primeiro.", "erro"); const { error } = await supabase.auth.resetPasswordForEmail(usuario.trim(), { redirectTo: window.location.origin }); pushToast(error ? error.message : "Enviamos as instruções para seu e-mail.", error ? "erro" : "ok"); }} style={{ border: 0, background: "transparent", color: "#93C5FD", cursor: "pointer", fontSize: 12 }}>Esqueci a senha</button>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function AccessStatusScreen({ perfil, onSignOut }) {
+  const status = perfil?.status || "pending";
+  const bloqueado = status === "blocked";
+  const titulo = bloqueado ? "Acesso bloqueado" : "Acesso aguardando aprovação";
+  const texto = bloqueado
+    ? "Seu cadastro existe, mas foi bloqueado pelo administrador do OrçaFlow."
+    : "Seu cadastro foi recebido. Um administrador precisa aprovar seu acesso antes de liberar o sistema.";
+
+  return (
+    <div style={{ minHeight: "100vh", background: `radial-gradient(circle at 20% 10%, ${BRAND.green2}22, transparent 30%), radial-gradient(circle at 80% 0%, ${BRAND.blue2}22, transparent 32%), ${BRAND.bg}`, color: BRAND.text, display: "flex", alignItems: "center", justifyContent: "center", padding: 18, fontFamily: "'Segoe UI', system-ui, sans-serif" }}>
+      <style>{`
+        .of-glass { background:linear-gradient(145deg,rgba(15,23,42,.86),rgba(3,7,18,.78)); border:1px solid rgba(0,176,255,.22); box-shadow:0 0 35px rgba(0,230,118,.08), inset 0 1px 0 rgba(255,255,255,.05); backdrop-filter:blur(18px); }
+      `}</style>
+      <div className="of-glass" style={{ width: "100%", maxWidth: 460, borderRadius: 24, padding: 30, textAlign: "center", border: `1px solid ${bloqueado ? BRAND.danger : BRAND.warn}55` }}>
+        <img src="/logo-orcaflow.png" alt="OrçaFlow" style={{ height: 76, objectFit: "contain", marginBottom: 12 }} />
+        <div style={{ fontSize: 22, fontWeight: 950, marginBottom: 8, color: bloqueado ? BRAND.danger : BRAND.warn }}>{titulo}</div>
+        <div style={{ fontSize: 13, color: BRAND.muted, lineHeight: 1.7, marginBottom: 16 }}>{texto}</div>
+        <div style={{ padding: 12, borderRadius: 12, background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, color: BRAND.text, fontSize: 12, marginBottom: 18 }}>
+          {perfil?.email || perfil?.name || "Usuário"}
+        </div>
+        <button onClick={onSignOut} style={{ padding: "11px 16px", borderRadius: 12, border: `1px solid ${BRAND.border2}`, background: "transparent", color: BRAND.muted, cursor: "pointer", fontWeight: 900 }}>
+          Sair
+        </button>
       </div>
     </div>
   );
@@ -3499,10 +3560,62 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
   const [nome, setNome] = useState("");
   const [senha, setSenha] = useState("");
   const [solicitacoes, setSolicitacoes] = useState([]);
+  const [acessos, setAcessos] = useState([]);
+  const [carregandoAcessos, setCarregandoAcessos] = useState(false);
 
   useEffect(() => {
     (async () => setSolicitacoes((await store.get(KEY_RESET)) || []))();
   }, []);
+
+  const carregarAcessos = useCallback(async () => {
+    if (usuarioAtual?.tipo !== "admin") return;
+    setCarregandoAcessos(true);
+    const { data, error } = await supabase
+      .from("app_users")
+      .select("*")
+      .order("requested_at", { ascending: false });
+
+    if (error) {
+      console.error("Erro ao carregar acessos:", error);
+      pushToast("Não foi possível carregar os cadastros. Rode o schema.sql atualizado.", "erro");
+    } else {
+      setAcessos(Array.isArray(data) ? data : []);
+    }
+    setCarregandoAcessos(false);
+  }, [pushToast, usuarioAtual?.tipo]);
+
+  useEffect(() => {
+    carregarAcessos();
+  }, [carregarAcessos]);
+
+  const atualizarAcesso = async (userId, patch) => {
+    const payload = {
+      ...patch,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (patch.status === "approved") {
+      payload.approved_at = new Date().toISOString();
+      payload.blocked_at = null;
+    }
+    if (patch.status === "blocked") {
+      payload.blocked_at = new Date().toISOString();
+    }
+
+    const { error } = await supabase
+      .from("app_users")
+      .update(payload)
+      .eq("user_id", userId);
+
+    if (error) {
+      console.error("Erro ao atualizar acesso:", error);
+      pushToast(error.message || "Erro ao atualizar acesso.", "erro");
+      return;
+    }
+
+    pushToast("Acesso atualizado.", "ok");
+    await carregarAcessos();
+  };
 
   const salvarSolicitacoes = (nova) => {
     setSolicitacoes(nova);
@@ -3630,8 +3743,71 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
       <div style={{ fontSize: 18, fontWeight: 950, marginBottom: 4 }}>Administrador de Usuários</div>
       <div style={{ fontSize: 12, color: BRAND.dim, marginBottom: 16 }}>Controle total dos perfis, ativação, cancelamento e acesso aos orçamentos.</div>
 
+      <div className="of-glass" style={{ borderRadius: 16, padding: 14, marginBottom: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", marginBottom: 10 }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 900 }}>Controle de acesso ao sistema</div>
+            <div style={{ fontSize: 11, color: BRAND.dim, marginTop: 3 }}>Aprove quem pode entrar, bloqueie cadastros e defina admin ou usuario.</div>
+          </div>
+          <button onClick={carregarAcessos} disabled={carregandoAcessos} style={{ padding: "8px 10px", borderRadius: 9, border: `1px solid ${BRAND.blue2}55`, background: `${BRAND.blue2}12`, color: "#93C5FD", cursor: carregandoAcessos ? "wait" : "pointer", fontWeight: 850 }}>
+            {carregandoAcessos ? "Atualizando..." : "Atualizar"}
+          </button>
+        </div>
+
+        {acessos.length === 0 ? (
+          <div style={{ fontSize: 12, color: BRAND.dim, padding: "12px 0" }}>
+            Nenhum cadastro encontrado ainda. O primeiro login aprovado vira administrador automaticamente.
+          </div>
+        ) : (
+          <div style={{ display: "grid", gap: 8 }}>
+            {acessos.map((a) => {
+              const isSelf = a.user_id === usuarioAtual?.id;
+              const statusCor = a.status === "approved" ? BRAND.green : a.status === "blocked" ? BRAND.danger : BRAND.warn;
+              return (
+                <div key={a.user_id} style={{ display: "grid", gridTemplateColumns: "minmax(220px,1.5fr) 130px 110px auto", gap: 8, alignItems: "center", padding: 10, borderRadius: 12, background: BRAND.panel2, border: `1px solid ${BRAND.border2}` }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 900, overflowWrap: "anywhere" }}>{a.email || a.name || "Usuário sem e-mail"}</div>
+                    <div style={{ fontSize: 10, color: BRAND.dim, marginTop: 3 }}>
+                      Solicitado: {tsFmt(a.requested_at)} {isSelf ? "· você" : ""}
+                    </div>
+                  </div>
+                  <select
+                    value={a.role || "usuario"}
+                    disabled={isSelf}
+                    onChange={(e) => atualizarAcesso(a.user_id, { role: e.target.value })}
+                    style={{ background: BRAND.panel, border: `1px solid ${BRAND.border2}`, color: BRAND.text, borderRadius: 9, padding: 8, fontSize: 12 }}
+                  >
+                    <option value="admin">admin</option>
+                    <option value="usuario">usuario</option>
+                  </select>
+                  <div style={{ color: statusCor, fontSize: 12, fontWeight: 950 }}>{a.status || "pending"}</div>
+                  <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                    {a.status !== "approved" && (
+                      <button onClick={() => atualizarAcesso(a.user_id, { status: "approved" })} style={{ padding: "8px 10px", borderRadius: 9, border: `1px solid ${BRAND.green2}55`, background: `${BRAND.green2}16`, color: BRAND.green, cursor: "pointer", fontWeight: 850 }}>
+                        Aprovar
+                      </button>
+                    )}
+                    {a.status !== "blocked" && !isSelf && (
+                      <button onClick={() => atualizarAcesso(a.user_id, { status: "blocked" })} style={{ padding: "8px 10px", borderRadius: 9, border: `1px solid ${BRAND.danger}55`, background: "transparent", color: BRAND.danger, cursor: "pointer", fontWeight: 850 }}>
+                        Bloquear
+                      </button>
+                    )}
+                    {a.status === "blocked" && (
+                      <button onClick={() => atualizarAcesso(a.user_id, { status: "pending" })} style={{ padding: "8px 10px", borderRadius: 9, border: `1px solid ${BRAND.warn}55`, background: `${BRAND.warn}12`, color: BRAND.warn, cursor: "pointer", fontWeight: 850 }}>
+                        Reabrir
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       <div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 16, padding: 14, marginBottom: 16 }}>
-        <div style={{ fontSize: 14, fontWeight: 900, marginBottom: 10 }}>Criar perfil</div>
+        <div style={{ fontSize: 14, fontWeight: 900, marginBottom: 10 }}>Perfis internos opcionais</div>
+        <div style={{ fontSize: 11, color: BRAND.dim, marginBottom: 10 }}>Use esta area apenas para alternar perfis operacionais dentro de uma conta ja aprovada.</div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8 }}>
           <input value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Nome do usuário" style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, borderRadius: 10, padding: "10px 12px", color: BRAND.text, fontSize: 12 }} />
           <input value={senha} onChange={(e) => setSenha(e.target.value)} placeholder="Senha criada por você" style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, borderRadius: 10, padding: "10px 12px", color: BRAND.text, fontSize: 12 }} />
@@ -3693,6 +3869,7 @@ export default function App() {
   const [crm, setCrm] = useState([]);
   const [usuarios, setUsuarios] = useState([]);
   const [usuarioAtual, setUsuarioAtual] = useState(null);
+  const [acessoPerfil, setAcessoPerfil] = useState(null);
 
   useEffect(() => {
     const onBackupImported = (event) => {
@@ -3708,15 +3885,39 @@ export default function App() {
       if (!user) {
         setAutenticado(false);
         setUsuarioAtual(null);
+        setAcessoPerfil(null);
         return;
       }
 
+      const { data: perfilAcesso, error: perfilErro } = await supabase.rpc("ensure_app_user");
+
+      if (perfilErro) {
+        console.error("Erro ao validar acesso:", perfilErro);
+        setAutenticado(false);
+        setUsuarioAtual(null);
+        setAcessoPerfil({
+          email: user.email,
+          status: "blocked",
+          name: user.email,
+        });
+        pushToast("Não foi possível validar seu acesso. Confira o schema do Supabase.", "erro");
+        return;
+      }
+
+      if (perfilAcesso?.status !== "approved") {
+        setAutenticado(false);
+        setUsuarioAtual(null);
+        setAcessoPerfil(perfilAcesso);
+        return;
+      }
+
+      setAcessoPerfil(null);
       setUsuarioAtual({
         id: user.id,
-        nome: user.email || "Usuário",
+        nome: perfilAcesso?.name || user.email || "Usuário",
         email: user.email,
-        tipo: "admin",
-        perfil: "Administrador",
+        tipo: perfilAcesso?.role === "admin" ? "admin" : "usuario",
+        perfil: perfilAcesso?.role === "admin" ? "Administrador" : "Usuário",
         ativo: true,
       });
       setAutenticado(true);
@@ -4342,6 +4543,23 @@ export default function App() {
   const INP = { background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, borderRadius: 10, padding: "11px 14px", color: BRAND.text, fontSize: UI.text, outline: "none", width: "100%", boxSizing: "border-box", lineHeight: 1.6, fontFamily: "inherit", transition: "all .22s ease" };
   const corDB = { ok: BRAND.green, erro: BRAND.danger, carregando: BRAND.warn };
 
+  if (!autenticado && acessoPerfil) {
+    return (
+      <>
+        <Toast toast={toast} />
+        <AccessStatusScreen
+          perfil={acessoPerfil}
+          onSignOut={async () => {
+            await supabase.auth.signOut();
+            setAcessoPerfil(null);
+            setUsuarioAtual(null);
+            setAutenticado(false);
+          }}
+        />
+      </>
+    );
+  }
+
   if (!autenticado) {
     return (
       <>
@@ -4419,11 +4637,18 @@ export default function App() {
 
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <div style={{ display: "flex", gap: 3, background: BRAND.bg, borderRadius: 10, padding: 4, border: `1px solid ${BRAND.border2}` }}>
-            {[["gestao", "📊 Gestão"], ["orcamento", "✦ Orçamento"], ["chat", "IA Chat"], ["empresas", "🏢 Empresas"], ["banco", "🗄 Banco"]].map(([v, l]) => (
+            {[
+              ["gestao", "📊 Gestão"],
+              ["orcamento", "✦ Orçamento"],
+              ["chat", "IA Chat"],
+              ["empresas", "🏢 Empresas"],
+              ...(usuarioAtual?.tipo === "admin" ? [["usuarios", "🔐 Acessos"]] : []),
+              ["banco", "🗄 Banco"],
+            ].map(([v, l]) => (
               <button key={v} onClick={() => setView(v)} style={{ padding: "7px 12px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 850, background: view === v ? `linear-gradient(135deg, ${BRAND.green2}, #15803D)` : "transparent", color: view === v ? "#fff" : BRAND.dim, transition: "all .22s ease" }}>{l}</button>
             ))}
           </div>
-          <button onClick={async () => { await supabase.auth.signOut(); setAutenticado(false); setUsuarioAtual(null); }} title="Sair" style={{ padding: "8px 10px", borderRadius: 10, border: `1px solid ${BRAND.border2}`, background: "transparent", color: BRAND.muted, cursor: "pointer", fontWeight: 900 }}>Sair</button>
+          <button onClick={async () => { await supabase.auth.signOut(); setAutenticado(false); setUsuarioAtual(null); setAcessoPerfil(null); }} title="Sair" style={{ padding: "8px 10px", borderRadius: 10, border: `1px solid ${BRAND.border2}`, background: "transparent", color: BRAND.muted, cursor: "pointer", fontWeight: 900 }}>Sair</button>
         </div>
       </div>
 
