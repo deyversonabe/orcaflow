@@ -15,7 +15,8 @@ Aplicacao React/Vite para gerar, revisar, salvar e exportar orcamentos comerciai
 - Gestao preparada para alto volume, com filtros rapidos, ordenacao, quantidade por pagina e paginacao.
 - Automacao comercial na Gestao: score de prioridade, fila de follow-up, historico de contatos por orcamento e botoes para IA gerar cobranca, e-mail e WhatsApp.
 - Historico de conversas por orcamento, com canal, direcao da mensagem, tipo de interacao, resumo IA e sugestao IA de resposta ao cliente.
-- Cadastro de empresa com leitura IA do PDF do Cartao CNPJ para preencher dados cadastrais, assinatura e rodape, com fallback local quando a IA estiver indisponivel.
+- Cadastro de empresa com leitura IA do PDF do Cartao CNPJ para preencher dados cadastrais, assinatura e rodape; PDFs escaneados usam OCR visual com IA e PDFs com texto mantem fallback local.
+- Controle de acesso com aprovacao: o primeiro usuario vira admin, novos cadastros ficam pendentes e so entram apos aprovacao.
 
 ## Variaveis de ambiente
 
