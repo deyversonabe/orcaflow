@@ -12,6 +12,7 @@ Aplicacao React/Vite para gerar, revisar, salvar e exportar orcamentos comerciai
 - O backend normaliza os valores da tabela para fechar com o valor global informado.
 - Backup completo com empresas, CRM/orcamentos, meta, logs, usuarios internos e solicitacoes.
 - Aba de chat IA comercial para e-mail, cobranca, WhatsApp, resposta a cliente e apoio na montagem de orcamentos.
+- Chat IA com contexto compactado para evitar envio de anexos pesados, logos, timbrados e PDFs salvos.
 - Gestao preparada para alto volume, com filtros rapidos, ordenacao, quantidade por pagina e paginacao.
 - Automacao comercial na Gestao: score de prioridade, fila de follow-up, historico de contatos por orcamento e botoes para IA gerar cobranca, e-mail e WhatsApp.
 - Historico de conversas por orcamento, com canal, direcao da mensagem, tipo de interacao, resumo IA e sugestao IA de resposta ao cliente.
