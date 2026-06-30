@@ -169,7 +169,7 @@ export default async function handler(req, res) {
     if (!enforceSameOrigin(req, res)) return;
     if (!(await requireSession(req, res))) return;
     if (!rateLimit(req, res, { id: "chat-assistant", limit: 24, windowMs: 60 * 1000 })) return;
-    if (rejectOversizedRequest(req, res, 800_000)) return;
+    if (rejectOversizedRequest(req, res, 1_800_000)) return;
 
     if (!process.env.OPENAI_API_KEY) {
       return res.status(500).json({
