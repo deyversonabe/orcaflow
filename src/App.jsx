@@ -1959,6 +1959,28 @@ function contextoCompactoChat(empresas = [], crm = []) {
   };
 }
 
+function empresasCompactasParaGeracao(empresas = [], selecao = []) {
+  const selecionadas = new Set((Array.isArray(selecao) ? selecao : []).map((item) => item.empId));
+  return (Array.isArray(empresas) ? empresas : [])
+    .filter((emp) => selecionadas.has(emp.id))
+    .map((emp) => ({
+      id: emp.id,
+      nome: emp.nome || "",
+      nomeFantasia: emp.nomeFantasia || "",
+      tom: textoCurto(emp.tom, 320),
+      dnaLinguagem: textoCurto(emp.dnaLinguagem, 4500),
+      estruturaOrcamento: textoCurto(emp.estruturaOrcamento, 2800),
+      padraoDocumental: textoCurto(emp.padraoDocumental, 2200),
+      assinaturaVisual: textoCurto(emp.assinaturaVisual, 1600),
+      diferenciais: textoCurto(emp.diferenciais, 900),
+      fonteTitulo: emp.fonteTitulo || "",
+      fonteCorpo: emp.fonteCorpo || "",
+      corPrimaria: emp.corPrimaria || "",
+      corSecundaria: emp.corSecundaria || "",
+      temPapelTimbrado: Boolean(emp.papelTimbrado),
+    }));
+}
+
 function ChatIAPanel({ empresas = [], crm = [], pushToast }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
@@ -4278,7 +4300,7 @@ export default function App() {
           cliente,
           texto,
           obs,
-          empresas,
+          empresas: empresasCompactasParaGeracao(empresas, selecao),
           selecao,
         }),
       });
