@@ -313,7 +313,7 @@ export default async function handler(req, res) {
     if (!enforceSameOrigin(req, res)) return;
     if (!(await requireSession(req, res))) return;
     if (!rateLimit(req, res, { id: "generate-budget", limit: 12, windowMs: 60 * 1000 })) return;
-    if (rejectOversizedRequest(req, res, 1_200_000)) return;
+    if (rejectOversizedRequest(req, res, 2_200_000)) return;
 
     if (!process.env.OPENAI_API_KEY) {
       return res.status(500).json({
@@ -352,18 +352,18 @@ export default async function handler(req, res) {
         return {
           indice,
           id: emp.id,
-          nome: emp.nome || "",
-          nomeFantasia: emp.nomeFantasia || "",
-          tom: emp.tom || "",
-          dnaLinguagem: emp.dnaLinguagem || "",
-          estruturaOrcamento: emp.estruturaOrcamento || "",
-          padraoDocumental: emp.padraoDocumental || "",
-          assinaturaVisual: emp.assinaturaVisual || "",
-          diferenciais: emp.diferenciais || "",
-          fonteTitulo: emp.fonteTitulo || "",
-          fonteCorpo: emp.fonteCorpo || "",
-          corPrimaria: emp.corPrimaria || "",
-          corSecundaria: emp.corSecundaria || "",
+          nome: limparTexto(emp.nome, 180),
+          nomeFantasia: limparTexto(emp.nomeFantasia, 140),
+          tom: limparTexto(emp.tom, 320),
+          dnaLinguagem: limparTexto(emp.dnaLinguagem, 4500),
+          estruturaOrcamento: limparTexto(emp.estruturaOrcamento, 2800),
+          padraoDocumental: limparTexto(emp.padraoDocumental, 2200),
+          assinaturaVisual: limparTexto(emp.assinaturaVisual, 1600),
+          diferenciais: limparTexto(emp.diferenciais, 900),
+          fonteTitulo: limparTexto(emp.fonteTitulo, 80),
+          fonteCorpo: limparTexto(emp.fonteCorpo, 80),
+          corPrimaria: limparTexto(emp.corPrimaria, 20),
+          corSecundaria: limparTexto(emp.corSecundaria, 20),
           temPapelTimbrado: Boolean(emp.papelTimbrado),
           valorGlobal: s.valorGlobal || "",
         };
