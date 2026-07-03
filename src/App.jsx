@@ -150,12 +150,12 @@ function diasAte(data) {
 }
 
 function gerarTextoWhatsPendencias(lista, empresas = []) {
-  const pendentes = lista.filter((o) => o.status !== "Finalizado");
+  const pendentes = lista.filter((o) => !isFinalizadoOrcamento(o));
   if (!pendentes.length) return "Não há orçamentos pendentes no momento.";
   const linhas = pendentes.map((o, i) => {
     const emp = empresas.find((e) => e.id === o.empresaId)?.nome || o.empresaNome || "Empresa";
     const dt = o.proximoContato ? ` | próximo contato: ${new Date(o.proximoContato + "T00:00:00").toLocaleDateString("pt-BR")}` : "";
-    return `${i + 1}. ${o.cliente || "Cliente"} — ${emp} — ${o.numero || "sem número"} — ${brl(o.valorGlobal)} — ${o.status}${dt}`;
+    return `${i + 1}. ${o.cliente || "Cliente"} — ${emp} — ${o.numero || "sem número"} — ${brl(o.valorGlobal)} — ${statusFunilOrcamento(o)}${dt}`;
   });
   return `Relatório de orçamentos pendentes\n\n${linhas.join("\n")}\n\nOrçaFlow CRM`;
 }
@@ -236,6 +236,157 @@ function getSectionOrder(dados) {
   }
   return ordered;
 }
+
+function textoBuscaVisual(valor = "") {
+  return String(valor || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function normalizarStatusOrcamento(itemOuStatus) {
+  const bruto = typeof itemOuStatus === "string" ? itemOuStatus : itemOuStatus?.status;
+  const status = textoBuscaVisual(clean(bruto || ""));
+
+  if (!status) return "Aberto";
+  if (/finaliz|fechad|concluid|aprovad|ganh|closed|won/.test(status)) return "Finalizado";
+  if (/andament|negoci|execu[cç][aã]o|process|em curso|ongoing/.test(status)) return "Andamento";
+  if (/abert|pendente|novo|anexad|importad|aguard|open/.test(status)) return "Aberto";
+
+  return "Aberto";
+}
+
+function isFinalizadoOrcamento(itemOuStatus) {
+  return normalizarStatusOrcamento(itemOuStatus) === "Finalizado";
+}
+
+function isAtrasadoOrcamento(item) {
+  if (isFinalizadoOrcamento(item)) return false;
+  const status = textoBuscaVisual(item?.status || "");
+  return status.includes("atrasad") || (diasAte(item?.proximoContato) !== null && diasAte(item?.proximoContato) < 0);
+}
+
+function statusFunilOrcamento(item) {
+  if (isAtrasadoOrcamento(item)) return "Atrasado";
+  return normalizarStatusOrcamento(item);
+}
+
+function perfilVisualEmpresa(emp = {}, dados = {}) {
+  const alvo = textoBuscaVisual([
+    emp.nome,
+    emp.nomeFantasia,
+    emp.dnaLinguagem,
+    emp.estruturaOrcamento,
+    emp.padraoDocumental,
+    emp.assinaturaVisual,
+    dados?.identidadeDocumento?.variante,
+    dados?.identidadeDocumento?.tituloDocumento,
+  ].join(" "));
+
+  if (/eletro\s*lider|pupo|agnelo|materiais\s+eletricos/.test(alvo)) {
+    return {
+      tipo: "varejo-eletrico",
+      tituloMaxLinhas: 2,
+      tituloMaxSize: 25,
+      tituloMinSize: 14,
+      numeroLabel: "Cotacao",
+      clienteLabel: "Dados do cliente",
+      valorLabel: "Total da cotacao",
+      extraTopo: 24,
+      assinatura: "fornecedor-compacto",
+      rodape: "compacto",
+    };
+  }
+
+  if (/h&h|decoracoes|decoracao|eventos|ambientacao/.test(alvo)) {
+    return {
+      tipo: "eventos",
+      tituloMaxLinhas: 2,
+      tituloMaxSize: 24,
+      tituloMinSize: 13,
+      numeroLabel: "Atendimento",
+      clienteLabel: "Destinatario",
+      valorLabel: "Valor global",
+      extraTopo: 8,
+      assinatura: "eventos",
+      rodape: "duas-linhas",
+    };
+  }
+
+  if (/orlovic/.test(alvo)) {
+    return {
+      tipo: "orlovic",
+      tituloMaxLinhas: 2,
+      tituloMaxSize: 22,
+      tituloMinSize: 12,
+      numeroLabel: "Proposta",
+      clienteLabel: "Contratante",
+      valorLabel: "Investimento",
+      extraTopo: 10,
+      assinatura: "institucional-direita",
+      rodape: "duas-linhas",
+    };
+  }
+
+  if (/ad\s+solucoes|consultoria|diagnostico|levantamento|laudo|parecer/.test(alvo)) {
+    return {
+      tipo: "consultoria",
+      tituloMaxLinhas: 2,
+      tituloMaxSize: 20,
+      tituloMinSize: 12,
+      numeroLabel: "Documento",
+      clienteLabel: "Solicitante",
+      valorLabel: "Valor global",
+      extraTopo: 6,
+      assinatura: "tecnica",
+      rodape: "duas-linhas",
+    };
+  }
+
+  if (/power|service|operacional|execucao/.test(alvo)) {
+    return {
+      tipo: "operacional",
+      tituloMaxLinhas: 2,
+      tituloMaxSize: 22,
+      tituloMinSize: 12,
+      numeroLabel: "Orcamento",
+      clienteLabel: "Cliente",
+      valorLabel: "Valor global",
+      extraTopo: 8,
+      assinatura: "operacional",
+      rodape: "compacto",
+    };
+  }
+
+  if (/construir|construcao|obra|reforma/.test(alvo)) {
+    return {
+      tipo: "construcao",
+      tituloMaxLinhas: 2,
+      tituloMaxSize: 23,
+      tituloMinSize: 12,
+      numeroLabel: "Proposta",
+      clienteLabel: "Cliente",
+      valorLabel: "Investimento global",
+      extraTopo: 8,
+      assinatura: "comercial",
+      rodape: "duas-linhas",
+    };
+  }
+
+  return {
+    tipo: "engenharia",
+    tituloMaxLinhas: 2,
+    tituloMaxSize: 22,
+    tituloMinSize: 12,
+    numeroLabel: "Proposta",
+    clienteLabel: "Destinatario",
+    valorLabel: "Valor global",
+    extraTopo: 8,
+    assinatura: "engenharia",
+    rodape: "duas-linhas",
+  };
+}
+
 const tsFmt = (iso) => {
   try {
     return iso ? new Date(iso).toLocaleString("pt-BR") : "—";
@@ -1774,6 +1925,7 @@ function MateriaisTabela({ emp, dados }) {
 
 function OrcamentoDoc({ emp, dados, editando, onChange }) {
   const difs = (emp.diferenciais || "").split(",").map((d) => d.trim()).filter(Boolean);
+  const perfil = perfilVisualEmpresa(emp, dados);
 
   const F = ({ campo, multiline }) => {
     const val = dados.campos?.[campo] || "";
@@ -1861,7 +2013,7 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
         <div style={{ position: "relative", overflow: "hidden" }}>
           <img src={emp.papelTimbrado} style={{ width: "100%", height: "auto", display: "block" }} alt="" />
           <div style={{ position: "absolute", top: 10, right: 18, background: "rgba(0,0,0,.58)", backdropFilter: "blur(4px)", borderRadius: 9, padding: "8px 13px", textAlign: "right" }}>
-            <div style={{ fontSize: 8, color: "rgba(255,255,255,.72)", letterSpacing: 1.5 }}>{docTitle}</div>
+            <div style={{ fontSize: 8, color: "rgba(255,255,255,.72)", letterSpacing: 1.5 }}>{perfil.numeroLabel}</div>
             <div style={{ fontSize: 13, fontWeight: 900, color: "#fff", fontFamily: "monospace" }}>{dados.numero}</div>
             
           </div>
@@ -1873,7 +2025,7 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
             {emp.assinatura && <div style={{ fontSize: 10.5, color: "rgba(255,255,255,.78)", fontFamily: "sans-serif" }}>{emp.assinatura}</div>}
           </div>
           <div style={{ textAlign: "right", background: "rgba(0,0,0,.18)", borderRadius: 10, padding: "11px 16px" }}>
-            <div style={{ fontSize: 8, color: "rgba(255,255,255,.65)", letterSpacing: 1.5 }}>{docTitle}</div>
+            <div style={{ fontSize: 8, color: "rgba(255,255,255,.65)", letterSpacing: 1.5 }}>{perfil.numeroLabel}</div>
             <div style={{ fontSize: 15, fontWeight: 900, color: "#fff", fontFamily: "monospace" }}>{dados.numero}</div>
             
           </div>
@@ -1882,7 +2034,7 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
 
       <div style={{ padding: "25px 30px" }}>
         <div style={{ marginBottom: 18, padding: "12px 15px", background: `${emp.corPrimaria || BRAND.green2}14`, borderRadius: 9, borderLeft: `4px solid ${emp.corPrimaria || BRAND.green2}` }}>
-          <span style={secLbl}>DESTINATÁRIO</span>
+          <span style={secLbl}>{perfil.clienteLabel}</span>
           <div style={{ fontFamily: emp.fonteCorpo, fontSize: (Number(emp.tamanhoCorpo) || 12) + 1, fontWeight: 800, color: "#000000" }}><F campo="cliente" /></div>
         </div>
 
@@ -1896,25 +2048,25 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
 
         <div style={{ marginBottom: 18, display: "flex", justifyContent: "flex-end" }}>
           <div style={{ background: `linear-gradient(135deg, ${emp.corPrimaria || BRAND.green2}, ${emp.corSecundaria || BRAND.blue2})`, borderRadius: 11, padding: "15px 23px", color: "#fff", textAlign: "right", minWidth: 210 }}>
-            <div style={{ fontSize: 8, opacity: 0.82, letterSpacing: 2, marginBottom: 4 }}>VALOR GLOBAL DO SERVIÇO</div>
+            <div style={{ fontSize: 8, opacity: 0.82, letterSpacing: 2, marginBottom: 4 }}>{perfil.valorLabel}</div>
             <div style={{ fontFamily: emp.fonteTitulo, fontSize: Math.round((Number(emp.tamanhoTitulo) || 24) * 0.82), fontWeight: 950 }}>{brl(dados.valorGlobal)}</div>
           </div>
         </div>
 
         {difs.length > 0 && <div style={{ marginBottom: 18 }}><span style={secLbl}>DIFERENCIAIS</span><div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>{difs.map((d, i) => <span key={i} style={{ padding: "5px 12px", background: `${emp.corPrimaria || BRAND.green2}12`, border: `1px solid ${emp.corPrimaria || BRAND.green2}30`, borderRadius: 20, fontSize: 10, color: emp.corSecundaria || BRAND.blue2, fontWeight: 800 }}>{d}</span>)}</div></div>}
 
-        <div style={{ borderTop: `2px solid ${emp.corPrimaria || BRAND.green2}`, paddingTop: 16, display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
+        {perfil.assinatura !== "fornecedor-compacto" && <div style={{ borderTop: `2px solid ${emp.corPrimaria || BRAND.green2}`, paddingTop: 16, display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
           <div>
             <div style={{ width: 170, borderBottom: `1px solid ${emp.corPrimaria || BRAND.green2}44`, marginBottom: 7 }} />
             <div style={{ fontFamily: emp.fonteCorpo, fontSize: (Number(emp.tamanhoCorpo) || 12) - 1, fontWeight: 800, color: "#000000" }}>{emp.assinatura || emp.nome}</div>
             
           </div>
           {emp.logo && <img src={emp.logo} style={{ maxHeight: 36, maxWidth: 110, objectFit: "contain", opacity: 0.18 }} alt="" />}
-        </div>
+        </div>}
       </div>
 
       <div style={{ background: emp.papelTimbrado ? `${emp.corPrimaria || BRAND.green2}14` : "#0F172A", borderTop: `1px solid ${emp.corPrimaria || BRAND.green2}22`, padding: "9px 28px", textAlign: "center" }}>
-        <div style={{ fontFamily: emp.fonteCorpo, fontSize: 9.5, color: emp.papelTimbrado ? "#475569" : "#94A3B8" }}>{emp.rodape || `${emp.nome}${emp.cnpj ? ` | ${emp.cnpj}` : ""}${emp.email ? ` | ${emp.email}` : ""}${emp.telefone ? ` | ${emp.telefone}` : ""}`}</div>
+        <div style={{ fontFamily: emp.fonteCorpo, fontSize: 9.5, color: emp.papelTimbrado ? "#475569" : "#94A3B8", overflowWrap: "anywhere", lineHeight: 1.45 }}>{emp.rodape || `${emp.nome}${emp.cnpj ? ` | ${emp.cnpj}` : ""}${emp.email ? ` | ${emp.email}` : ""}${emp.telefone ? ` | ${emp.telefone}` : ""}`}</div>
       </div>
     </div>
   );
@@ -2197,15 +2349,15 @@ function ChatIAPanel({ empresas = [], crm = [], pushToast }) {
 function DashboardPanel({ crm, empresas, meta, usuarioAtual, setView }) {
   const isAdmin = usuarioAtual?.tipo === "admin";
   const lista = isAdmin ? crm : crm.filter((o) => o.userId === usuarioAtual?.id);
-  const abertos = lista.filter((o) => o.status === "Aberto").length;
-  const andamento = lista.filter((o) => o.status === "Andamento").length;
-  const finalizados = lista.filter((o) => o.status === "Finalizado").length;
-  const atrasados = lista.filter((o) => o.status !== "Finalizado" && diasAte(o.proximoContato) !== null && diasAte(o.proximoContato) < 0).length;
-  const valorPotencial = lista.filter((o) => o.status !== "Finalizado").reduce((acc, o) => acc + (parseFloat(o.valorGlobal) || 0), 0);
+  const abertos = lista.filter((o) => statusFunilOrcamento(o) === "Aberto").length;
+  const andamento = lista.filter((o) => statusFunilOrcamento(o) === "Andamento").length;
+  const finalizados = lista.filter((o) => statusFunilOrcamento(o) === "Finalizado").length;
+  const atrasados = lista.filter((o) => statusFunilOrcamento(o) === "Atrasado").length;
+  const valorPotencial = lista.filter((o) => !isFinalizadoOrcamento(o)).reduce((acc, o) => acc + (parseFloat(o.valorGlobal) || 0), 0);
   const totalValor = lista.reduce((acc, o) => acc + (parseFloat(o.valorGlobal) || 0), 0);
   const ticketMedio = lista.length ? totalValor / lista.length : 0;
   const conversao = lista.length ? Math.round((finalizados / lista.length) * 100) : 0;
-  const proximos = lista.filter((o) => o.status !== "Finalizado" && o.proximoContato).sort((a,b) => String(a.proximoContato).localeCompare(String(b.proximoContato))).slice(0, 5);
+  const proximos = lista.filter((o) => !isFinalizadoOrcamento(o) && o.proximoContato).sort((a,b) => String(a.proximoContato).localeCompare(String(b.proximoContato))).slice(0, 5);
 
   const kpi = (label, valor, sub, cor, icon) => (
     <div className="of-dashboard-card">
@@ -2230,7 +2382,7 @@ function DashboardPanel({ crm, empresas, meta, usuarioAtual, setView }) {
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4,minmax(150px,1fr))", gap: 14, marginBottom: 18 }}>
-        {kpi("Orçamentos gerados", meta.totalOrcamentos || lista.length, `${empresas.length} empresa(s) cadastrada(s)`, BRAND.blue, "📄")}
+        {kpi("Orçamentos cadastrados", lista.length, `${empresas.length} empresa(s) cadastrada(s)`, BRAND.blue, "📄")}
         {kpi("Abertos", abertos, "Aguardando andamento", BRAND.blue, "🔎")}
         {kpi("Em andamento", andamento, "Em negociação", BRAND.warn, "⚙")}
         {kpi("Finalizados", finalizados, `${conversao}% de conversão`, BRAND.green, "✅")}
@@ -2407,18 +2559,18 @@ function CRMPanel({ crm, setCrm, empresas, pushToast, usuarioAtual }) {
   const isAdmin = usuarioAtual?.tipo === "admin";
   const visiveisPorUsuario = isAdmin ? crm : crm.filter((o) => o.userId === usuarioAtual?.id);
   const lista = visiveisPorUsuario.filter((o) => {
-    const alvo = `${o.cliente || ""} ${o.empresaNome || ""} ${o.numero || ""} ${o.status || ""}`.toLowerCase();
+    const alvo = `${o.cliente || ""} ${o.empresaNome || ""} ${o.numero || ""} ${o.status || ""} ${normalizarStatusOrcamento(o)}`.toLowerCase();
     const okBusca = !busca || alvo.includes(busca.toLowerCase());
-    const okStatus = statusFiltro === "Todos" || o.status === statusFiltro;
+    const okStatus = statusFiltro === "Todos" || normalizarStatusOrcamento(o) === statusFiltro;
     const okEmpresa = empresaFiltro === "Todas" || o.empresaId === empresaFiltro;
     return okBusca && okStatus && okEmpresa;
   });
 
   const totais = {
-    aberto: visiveisPorUsuario.filter((o) => o.status === "Aberto").length,
-    andamento: visiveisPorUsuario.filter((o) => o.status === "Andamento").length,
-    finalizado: visiveisPorUsuario.filter((o) => o.status === "Finalizado").length,
-    vencidos: visiveisPorUsuario.filter((o) => o.status !== "Finalizado" && diasAte(o.proximoContato) !== null && diasAte(o.proximoContato) < 0).length,
+    aberto: visiveisPorUsuario.filter((o) => statusFunilOrcamento(o) === "Aberto").length,
+    andamento: visiveisPorUsuario.filter((o) => statusFunilOrcamento(o) === "Andamento").length,
+    finalizado: visiveisPorUsuario.filter((o) => statusFunilOrcamento(o) === "Finalizado").length,
+    vencidos: visiveisPorUsuario.filter((o) => statusFunilOrcamento(o) === "Atrasado").length,
   };
 
   const salvarCRM = (nova) => {
@@ -2432,7 +2584,7 @@ function CRMPanel({ crm, setCrm, empresas, pushToast, usuarioAtual }) {
 
   const criarLembretesIA = () => {
     const nova = crm.map((o) => {
-      if (o.status === "Finalizado") return o;
+      if (isFinalizadoOrcamento(o)) return o;
       if (o.lembreteIA) return o;
       const atraso = diasAte(o.proximoContato);
       let texto = `Fazer follow-up do orçamento ${o.numero || ""} com ${o.cliente || "cliente"}.`;
@@ -2446,7 +2598,7 @@ function CRMPanel({ crm, setCrm, empresas, pushToast, usuarioAtual }) {
 
   const notificarHoje = async () => {
     const hoje = new Date().toISOString().slice(0, 10);
-    const vencidosHoje = visiveisPorUsuario.filter((o) => o.status !== "Finalizado" && (!o.proximoContato || o.proximoContato <= hoje));
+    const vencidosHoje = visiveisPorUsuario.filter((o) => !isFinalizadoOrcamento(o) && (!o.proximoContato || o.proximoContato <= hoje));
     if (!vencidosHoje.length) {
       pushToast("Não há cobranças pendentes para hoje.", "aviso");
       return;
@@ -2524,7 +2676,7 @@ function CRMPanel({ crm, setCrm, empresas, pushToast, usuarioAtual }) {
             </div>
             <div style={{ fontSize: 12, color: BRAND.muted }}>{o.empresaNome || "—"}</div>
             <div style={{ fontSize: 12, fontWeight: 850 }}>{brl(o.valorGlobal)}</div>
-            <select value={o.status || "Aberto"} onChange={(e) => updateItem(o.id, "status", e.target.value)} style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, color: BRAND.text, borderRadius: 9, padding: 8, fontSize: 12 }}>
+            <select value={normalizarStatusOrcamento(o)} onChange={(e) => updateItem(o.id, "status", e.target.value)} style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, color: BRAND.text, borderRadius: 9, padding: 8, fontSize: 12 }}>
               {["Aberto", "Andamento", "Finalizado"].map((s) => <option key={s}>{s}</option>)}
             </select>
             <input type="date" value={o.proximoContato || ""} onChange={(e) => updateItem(o.id, "proximoContato", e.target.value)} style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, color: BRAND.text, borderRadius: 9, padding: 8, fontSize: 12 }} />
@@ -2637,7 +2789,9 @@ function ultimaMensagemCliente(item) {
 }
 
 function avaliarPrioridadeOrcamento(item) {
-  if ((item?.status || "Aberto") === "Finalizado") {
+  const status = normalizarStatusOrcamento(item);
+
+  if (status === "Finalizado") {
     return { score: 0, nivel: "Fechado", cor: BRAND.green, motivos: ["Orçamento finalizado"], acao: "Arquivo comercial" };
   }
 
@@ -2662,11 +2816,11 @@ function avaliarPrioridadeOrcamento(item) {
     motivos.push("contato próximo");
   }
 
-  if ((item?.status || "Aberto") === "Aberto") {
+  if (status === "Aberto") {
     score += 14;
     motivos.push("em aberto");
   }
-  if (item?.status === "Andamento") {
+  if (status === "Andamento") {
     score += 10;
     motivos.push("em negociação");
   }
@@ -2749,10 +2903,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
   };
 
   const statusReal = (item) => {
-    if (item.status !== "Finalizado" && diasAte(item.proximoContato) !== null && diasAte(item.proximoContato) < 0) {
-      return "Atrasado";
-    }
-    return item.status || "Aberto";
+    return statusFunilOrcamento(item);
   };
 
   const hojeISO = new Date().toISOString().slice(0, 10);
@@ -2764,6 +2915,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
       o.empresa,
       o.numero,
       o.status,
+      normalizarStatusOrcamento(o),
       o.lembreteIA,
       o.lembrete,
       o.descricaoArquivo,
@@ -2776,15 +2928,16 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
       .toLowerCase();
 
     const okBusca = !busca || textoBusca.includes(busca.toLowerCase());
-    const okStatus = statusFiltro === "Todos" || (o.status || "Aberto") === statusFiltro;
+    const statusNormal = normalizarStatusOrcamento(o);
+    const okStatus = statusFiltro === "Todos" || statusNormal === statusFiltro;
     const okEmpresa = empresaFiltro === "Todas" || o.empresaId === empresaFiltro;
     const dias = diasAte(o.proximoContato);
     const okRapido =
       filtroRapido === "Todos" ||
-      (filtroRapido === "Atrasados" && o.status !== "Finalizado" && dias !== null && dias < 0) ||
-      (filtroRapido === "Hoje" && o.status !== "Finalizado" && (!o.proximoContato || o.proximoContato <= hojeISO)) ||
-      (filtroRapido === "Sem contato" && o.status !== "Finalizado" && !o.proximoContato) ||
-      (filtroRapido === "Em aberto" && o.status !== "Finalizado") ||
+      (filtroRapido === "Atrasados" && statusFunilOrcamento(o) === "Atrasado") ||
+      (filtroRapido === "Hoje" && !isFinalizadoOrcamento(o) && (!o.proximoContato || o.proximoContato <= hojeISO)) ||
+      (filtroRapido === "Sem contato" && !isFinalizadoOrcamento(o) && !o.proximoContato) ||
+      (filtroRapido === "Em aberto" && !isFinalizadoOrcamento(o)) ||
       (filtroRapido === "Prioridade alta" && avaliarPrioridadeOrcamento(o).score >= 50) ||
       (filtroRapido === "Anexados" && o.anexado);
 
@@ -2815,22 +2968,22 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
   const paginaItens = lista.slice(inicioPagina, inicioPagina + porPagina);
 
   const total = base.length;
-  const abertos = base.filter((o) => (o.status || "Aberto") === "Aberto").length;
-  const andamento = base.filter((o) => o.status === "Andamento").length;
-  const finalizados = base.filter((o) => o.status === "Finalizado").length;
+  const abertos = base.filter((o) => statusFunilOrcamento(o) === "Aberto").length;
+  const andamento = base.filter((o) => statusFunilOrcamento(o) === "Andamento").length;
+  const finalizados = base.filter((o) => statusFunilOrcamento(o) === "Finalizado").length;
   const atrasados = base.filter(
-    (o) => o.status !== "Finalizado" && diasAte(o.proximoContato) !== null && diasAte(o.proximoContato) < 0
+    (o) => statusFunilOrcamento(o) === "Atrasado"
   ).length;
 
   const valorTotal = base.reduce((soma, item) => soma + parseValorBR(item.valorGlobal ?? item.valor), 0);
   const valorPotencial = base
-    .filter((item) => item.status !== "Finalizado")
+    .filter((item) => !isFinalizadoOrcamento(item))
     .reduce((soma, item) => soma + parseValorBR(item.valorGlobal ?? item.valor), 0);
   const ticketMedio = total ? valorTotal / total : 0;
   const taxaConversao = total ? Math.round((finalizados / total) * 100) : 0;
   const precisamContato = abertos + andamento + atrasados;
   const filaFollowup = [...base]
-    .filter((item) => (item.status || "Aberto") !== "Finalizado")
+    .filter((item) => !isFinalizadoOrcamento(item))
     .map((item) => ({ item, prioridade: avaliarPrioridadeOrcamento(item) }))
     .filter(({ prioridade }) => prioridade.score >= 30)
     .sort((a, b) => b.prioridade.score - a.prioridade.score)
@@ -2967,10 +3120,10 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
     const prioridade = avaliarPrioridadeOrcamento(item);
 
     const pedido = tipo === "email"
-      ? `Gere um e-mail profissional de follow-up para o orçamento abaixo. Entregue assunto e corpo.\n\nCliente: ${item.cliente || ""}\nEmpresa proponente: ${item.empresaNome || emp?.nome || ""}\nNúmero: ${item.numero || ""}\nValor: ${brl(item.valorGlobal)}\nStatus: ${item.status || "Aberto"}\nPróximo contato: ${item.proximoContato || "não definido"}\nPrioridade: ${prioridade.nivel} (${prioridade.motivos.join(", ")})`
+      ? `Gere um e-mail profissional de follow-up para o orçamento abaixo. Entregue assunto e corpo.\n\nCliente: ${item.cliente || ""}\nEmpresa proponente: ${item.empresaNome || emp?.nome || ""}\nNúmero: ${item.numero || ""}\nValor: ${brl(item.valorGlobal)}\nStatus: ${statusFunilOrcamento(item)}\nPróximo contato: ${item.proximoContato || "não definido"}\nPrioridade: ${prioridade.nivel} (${prioridade.motivos.join(", ")})`
       : tipo === "whatsapp"
-        ? `Gere uma mensagem curta de WhatsApp para acompanhar este orçamento.\n\nCliente: ${item.cliente || ""}\nEmpresa proponente: ${item.empresaNome || emp?.nome || ""}\nNúmero: ${item.numero || ""}\nValor: ${brl(item.valorGlobal)}\nStatus: ${item.status || "Aberto"}\nPrioridade: ${prioridade.nivel}`
-        : `Gere uma mensagem de cobrança/follow-up firme, educada e comercial para este orçamento ainda sem retorno.\n\nCliente: ${item.cliente || ""}\nEmpresa proponente: ${item.empresaNome || emp?.nome || ""}\nNúmero: ${item.numero || ""}\nValor: ${brl(item.valorGlobal)}\nStatus: ${item.status || "Aberto"}\nPróximo contato: ${item.proximoContato || "não definido"}\nMotivos de prioridade: ${prioridade.motivos.join(", ")}`;
+        ? `Gere uma mensagem curta de WhatsApp para acompanhar este orçamento.\n\nCliente: ${item.cliente || ""}\nEmpresa proponente: ${item.empresaNome || emp?.nome || ""}\nNúmero: ${item.numero || ""}\nValor: ${brl(item.valorGlobal)}\nStatus: ${statusFunilOrcamento(item)}\nPrioridade: ${prioridade.nivel}`
+        : `Gere uma mensagem de cobrança/follow-up firme, educada e comercial para este orçamento ainda sem retorno.\n\nCliente: ${item.cliente || ""}\nEmpresa proponente: ${item.empresaNome || emp?.nome || ""}\nNúmero: ${item.numero || ""}\nValor: ${brl(item.valorGlobal)}\nStatus: ${statusFunilOrcamento(item)}\nPróximo contato: ${item.proximoContato || "não definido"}\nMotivos de prioridade: ${prioridade.motivos.join(", ")}`;
 
     try {
       const response = await fetch("/api/chat-assistant", {
@@ -3027,8 +3180,8 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
       .join("\n");
 
     const pedido = tipo === "resposta"
-      ? `Leia o historico comercial deste orcamento e gere a melhor resposta para o cliente. Seja claro, cordial, comercial e objetivo. Nao invente dados.\n\nCliente: ${item.cliente || ""}\nEmpresa proponente: ${item.empresaNome || emp?.nome || ""}\nNumero: ${item.numero || ""}\nValor: ${brl(item.valorGlobal ?? item.valor)}\nStatus: ${item.status || "Aberto"}\nUltima mensagem do cliente: ${ultimaCliente ? clean(ultimaCliente.mensagem || "", 1200) : "nao identificada"}\n\nHistorico:\n${linhaDoTempo}`
-      : `Resuma o historico comercial deste orcamento para o vendedor. Entregue: 1) resumo em 3 linhas, 2) objeções ou pontos de atencao, 3) proxima acao recomendada, 4) sugestao de mensagem curta. Nao invente dados.\n\nCliente: ${item.cliente || ""}\nEmpresa proponente: ${item.empresaNome || emp?.nome || ""}\nNumero: ${item.numero || ""}\nValor: ${brl(item.valorGlobal ?? item.valor)}\nStatus: ${item.status || "Aberto"}\n\nHistorico:\n${linhaDoTempo}`;
+      ? `Leia o historico comercial deste orcamento e gere a melhor resposta para o cliente. Seja claro, cordial, comercial e objetivo. Nao invente dados.\n\nCliente: ${item.cliente || ""}\nEmpresa proponente: ${item.empresaNome || emp?.nome || ""}\nNumero: ${item.numero || ""}\nValor: ${brl(item.valorGlobal ?? item.valor)}\nStatus: ${statusFunilOrcamento(item)}\nUltima mensagem do cliente: ${ultimaCliente ? clean(ultimaCliente.mensagem || "", 1200) : "nao identificada"}\n\nHistorico:\n${linhaDoTempo}`
+      : `Resuma o historico comercial deste orcamento para o vendedor. Entregue: 1) resumo em 3 linhas, 2) objeções ou pontos de atencao, 3) proxima acao recomendada, 4) sugestao de mensagem curta. Nao invente dados.\n\nCliente: ${item.cliente || ""}\nEmpresa proponente: ${item.empresaNome || emp?.nome || ""}\nNumero: ${item.numero || ""}\nValor: ${brl(item.valorGlobal ?? item.valor)}\nStatus: ${statusFunilOrcamento(item)}\n\nHistorico:\n${linhaDoTempo}`;
 
     try {
       const response = await fetch("/api/chat-assistant", {
@@ -3094,7 +3247,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
   };
 
   const criarLembretesIA = () => {
-    const pendentes = crm.filter((o) => o.status !== "Finalizado");
+    const pendentes = crm.filter((o) => !isFinalizadoOrcamento(o));
 
     if (!pendentes.length) {
       pushToast("Nenhum orçamento pendente para gerar lembrete.", "aviso");
@@ -3102,7 +3255,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
     }
 
     const atualizados = crm.map((item) => {
-      if (item.status === "Finalizado") return item;
+      if (isFinalizadoOrcamento(item)) return item;
 
       const prazo = diasAte(item.proximoContato);
       let lembrete = `Entrar em contato com ${item.cliente || "cliente"} para acompanhar o orçamento ${item.numero || ""}.`;
@@ -3111,7 +3264,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
         lembrete = `Cobrança urgente: orçamento ${item.numero || ""} de ${item.cliente || "cliente"} está com contato atrasado.`;
       } else if (prazo === 0) {
         lembrete = `Entrar em contato hoje com ${item.cliente || "cliente"} sobre o orçamento ${item.numero || ""}.`;
-      } else if (item.status === "Andamento") {
+      } else if (normalizarStatusOrcamento(item) === "Andamento") {
         lembrete = `Retomar negociação com ${item.cliente || "cliente"} e registrar o próximo passo do orçamento ${item.numero || ""}.`;
       }
 
@@ -3129,7 +3282,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
 
   const notificarPendentes = async () => {
     const hoje = new Date().toISOString().slice(0, 10);
-    const pendentesHoje = base.filter((o) => o.status !== "Finalizado" && (!o.proximoContato || o.proximoContato <= hoje));
+    const pendentesHoje = base.filter((o) => !isFinalizadoOrcamento(o) && (!o.proximoContato || o.proximoContato <= hoje));
 
     if (!pendentesHoje.length) {
       pushToast("Não há cobranças pendentes para hoje.", "aviso");
@@ -3186,7 +3339,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4,minmax(150px,1fr))", gap: 14, marginBottom: 18 }}>
-        <CardGestao titulo="Orçamentos gerados" valor={meta.totalOrcamentos || total} cor={BRAND.blue} icon={<FileText size={19} />} />
+        <CardGestao titulo="Orçamentos cadastrados" valor={total} cor={BRAND.blue} icon={<FileText size={19} />} />
         <CardGestao titulo="Abertos" valor={abertos} cor={BRAND.blue} icon={<Search size={19} />} />
         <CardGestao titulo="Em andamento" valor={andamento} cor={BRAND.warn} icon={<Bot size={19} />} />
         <CardGestao titulo="Finalizados" valor={finalizados} cor={BRAND.green} icon={<Shield size={19} />} />
@@ -3207,7 +3360,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
           </div>
 
           {["Aberto", "Andamento", "Finalizado", "Atrasado"].map((s) => {
-            const qtd = s === "Atrasado" ? atrasados : base.filter((i) => (i.status || "Aberto") === s).length;
+            const qtd = base.filter((i) => statusFunilOrcamento(i) === s).length;
             const pct = total ? Math.round((qtd / total) * 100) : 0;
 
             return (
@@ -3463,13 +3616,13 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
                         </td>
                         <td style={td}>
                           <select
-                            value={item.status || "Aberto"}
+                            value={normalizarStatusOrcamento(item)}
                             onChange={(e) => updateItem(item.id, "status", e.target.value)}
                             style={{
                               padding: "7px 10px",
                               borderRadius: 999,
-                              color: statusColor[item.status || "Aberto"] || BRAND.text,
-                              border: `1px solid ${statusColor[item.status || "Aberto"] || BRAND.border}`,
+                              color: statusColor[normalizarStatusOrcamento(item)] || BRAND.text,
+                              border: `1px solid ${statusColor[normalizarStatusOrcamento(item)] || BRAND.border}`,
                               background: BRAND.panel2,
                               fontWeight: 800,
                               outline: "none",
@@ -4417,12 +4570,13 @@ export default function App() {
       const pageW = pdf.internal.pageSize.getWidth();
       const pageH = pdf.internal.pageSize.getHeight();
 
+      const perfil = perfilVisualEmpresa(emp, dados);
       const titleFont = mapPdfFont(emp.fonteTitulo);
       const bodyFont = mapPdfFont(emp.fonteCorpo);
       const titleSize = Number(emp.tamanhoTitulo) || 14;
       const bodySize = Number(emp.tamanhoCorpo) || 12;
 
-      const marginX = 48;
+      const marginX = perfil.tipo === "varejo-eletrico" ? 68 : 48;
       const maxW = pageW - marginX * 2;
 
       // Margens calculadas a partir das zonas detectadas do timbrado (em pt).
@@ -4430,11 +4584,11 @@ export default function App() {
       const folgaTopo = 14;
       const folgaBase = 14;
       const topMargin = temTimbrado
-        ? Math.max(Number(emp.altoCabecalho) || Math.round(pageH * 0.18), 40) + folgaTopo
+        ? Math.max(Number(emp.altoCabecalho) || Math.round(pageH * 0.18), 40) + folgaTopo + (perfil.extraTopo || 0)
         : 122;
       const bottomMargin = temTimbrado
-        ? Math.max(Number(emp.altoRodape) || Math.round(pageH * 0.12), 24) + folgaBase
-        : 64;
+        ? Math.max(Number(emp.altoRodape) || Math.round(pageH * 0.12), 24) + folgaBase + 14
+        : 78;
       let y = topMargin;
 
       const addBase = () => {
@@ -4516,11 +4670,13 @@ export default function App() {
         if (!valor) return;
 
         ensure(70);
-        pdf.setFont("helvetica", "bold");
-        pdf.setFontSize(10);
-        pdf.setTextColor(0, 0, 0);
-        pdf.text(String(titulo).toUpperCase(), marginX, y);
-        y += 18;
+        if (String(titulo || "").trim()) {
+          pdf.setFont("helvetica", "bold");
+          pdf.setFontSize(10);
+          pdf.setTextColor(0, 0, 0);
+          pdf.text(String(titulo).toUpperCase(), marginX, y);
+          y += 18;
+        }
 
         pdf.setFont(bodyFont, "normal");
         pdf.setFontSize(bodySize);
@@ -4633,57 +4789,140 @@ export default function App() {
         writeSection(getSectionLabel(dados, key), dados.campos?.[key]);
       };
 
+      const fitTitle = (texto, width) => {
+        let size = Math.min(titleSize, perfil.tituloMaxSize || 24);
+        const minSize = perfil.tituloMinSize || 12;
+        let lines = [];
+        pdf.setFont(titleFont, "bold");
+        while (size >= minSize) {
+          pdf.setFontSize(size);
+          lines = pdf.splitTextToSize(String(texto || "").toUpperCase(), width);
+          if (lines.length <= (perfil.tituloMaxLinhas || 2)) break;
+          size -= 1;
+        }
+        return { size, lines };
+      };
+
+      const writeOpening = () => {
+        ensure(90);
+        const numero = dados.numero || orcNum();
+        const titulo = getDocTitle(dados).toUpperCase();
+        const titleWidth = perfil.tipo === "varejo-eletrico" ? maxW * 0.74 : maxW - 130;
+        const fitted = fitTitle(titulo, titleWidth);
+
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(7.5);
+        pdf.setTextColor(0, 0, 0);
+        pdf.text(String(perfil.numeroLabel || "Proposta").toUpperCase(), pageW - marginX, y, { align: "right" });
+        pdf.setFontSize(perfil.tipo === "varejo-eletrico" ? 9 : 10);
+        pdf.text(numero, pageW - marginX, y + 13, { align: "right" });
+
+        pdf.setFont(titleFont, "bold");
+        pdf.setFontSize(fitted.size);
+        pdf.setTextColor(0, 0, 0);
+        pdf.text(fitted.lines, marginX, y);
+        y += Math.max(34, fitted.lines.length * (fitted.size + 5)) + 12;
+
+        if (perfil.tipo === "consultoria") {
+          pdf.setDrawColor(0, 0, 0);
+          pdf.setLineWidth(0.4);
+          pdf.line(marginX, y, marginX + maxW * 0.42, y);
+          y += 16;
+        }
+      };
+
+      const writeValorGlobal = () => {
+        if (!dados.valorGlobal) return;
+        ensure(72);
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(10.5);
+        pdf.setTextColor(0, 0, 0);
+        pdf.text(String(perfil.valorLabel || "Valor global").toUpperCase(), marginX, y);
+        y += 19;
+        pdf.setFont(titleFont, "bold");
+        pdf.setFontSize(Math.max(16, Math.min(titleSize, perfil.tipo === "varejo-eletrico" ? 22 : 24)));
+        pdf.setTextColor(0, 0, 0);
+        pdf.text(brl(dados.valorGlobal), marginX, y);
+        y += 30;
+      };
+
+      const buildRodapeLines = () => {
+        const parts = emp.rodape
+          ? String(emp.rodape).split("|").map((p) => p.trim()).filter(Boolean)
+          : [emp.nome, emp.cnpj ? `CNPJ ${emp.cnpj}` : "", emp.email, emp.telefone].filter(Boolean);
+        if (!parts.length) return [];
+        if (perfil.rodape === "compacto") {
+          return [parts.slice(0, 2).join(" | "), parts.slice(2).join(" | ")].filter(Boolean);
+        }
+        return [parts.slice(0, 2).join(" | "), parts.slice(2, 4).join(" | "), parts.slice(4).join(" | ")].filter(Boolean);
+      };
+
+      const writeSignature = () => {
+        if (perfil.assinatura === "fornecedor-compacto") return;
+        ensure(64);
+        pdf.setFont(bodyFont, "normal");
+        pdf.setFontSize(Math.max(8, bodySize - 1));
+        pdf.setTextColor(0, 0, 0);
+
+        if (perfil.assinatura === "eventos") {
+          pdf.text(["Atenciosamente,", emp.assinatura || `Equipe ${emp.nome || ""}`].filter(Boolean), marginX, y);
+          y += 34;
+          return;
+        }
+
+        if (perfil.assinatura === "tecnica") {
+          pdf.setDrawColor(0, 0, 0);
+          pdf.setLineWidth(0.4);
+          pdf.rect(marginX, y, Math.min(260, maxW), 36);
+          pdf.setFont(bodyFont, "bold");
+          pdf.text(emp.assinatura || "Equipe tecnica", marginX + 10, y + 22);
+          y += 50;
+          return;
+        }
+
+        if (perfil.assinatura === "institucional-direita") {
+          pdf.setFont(bodyFont, "bold");
+          pdf.text(emp.assinatura || emp.nome || "Departamento Comercial", pageW - marginX, y, { align: "right" });
+          y += 24;
+          return;
+        }
+
+        pdf.setDrawColor(0, 0, 0);
+        pdf.setLineWidth(0.5);
+        pdf.line(marginX, y + 10, marginX + 180, y + 10);
+        y += 28;
+        pdf.setFont(bodyFont, "bold");
+        pdf.setFontSize(bodySize);
+        pdf.text(emp.assinatura || emp.nome || "Responsavel", marginX, y);
+        y += 20;
+      };
+
+      const writeRodape = () => {
+        if (emp.papelTimbrado) return;
+        const lines = buildRodapeLines();
+        if (!lines.length) return;
+        pdf.setFont(bodyFont, "normal");
+        pdf.setFontSize(7.5);
+        pdf.setTextColor(0, 0, 0);
+        const wrapped = lines.flatMap((line) => pdf.splitTextToSize(line, pageW - 110));
+        const startY = pageH - 24 - Math.max(0, wrapped.length - 1) * 9;
+        pdf.text(wrapped, pageW / 2, startY, { align: "center" });
+      };
+
       addBase();
 
-      pdf.setFont(titleFont, "bold");
-      pdf.setFontSize(titleSize);
-      pdf.setTextColor(0, 0, 0);
-      pdf.text(pdf.splitTextToSize(getDocTitle(dados).toUpperCase(), maxW - 120), marginX, y);
+      writeOpening();
 
-      // Número da proposta sempre dentro da área segura (nunca sobre o timbrado).
-      pdf.setFont("helvetica", "bold");
-      pdf.setFontSize(10);
-      pdf.setTextColor(0, 0, 0);
-      pdf.text(dados.numero || orcNum(), pageW - marginX, y, { align: "right" });
-      y += 28;
-
-      writeSection("Destinatário", dados.campos?.cliente || cliente);
+      writeSection(perfil.clienteLabel || "Destinatario", dados.campos?.cliente || cliente);
       if (dados.identidadeDocumento?.subtitulo) {
         writeSection("", dados.identidadeDocumento.subtitulo);
       }
       getSectionOrder(dados).forEach(writeOrderedSection);
 
-      if (dados.valorGlobal) {
-        ensure(72);
-        pdf.setFont("helvetica", "bold");
-        pdf.setFontSize(11);
-        pdf.setTextColor(0, 0, 0);
-        pdf.text("VALOR GLOBAL", marginX, y);
-        y += 20;
-        pdf.setFont(titleFont, "bold");
-        pdf.setFontSize(Math.max(16, Math.min(titleSize, 24)));
-        pdf.setTextColor(0, 0, 0);
-        pdf.text(brl(dados.valorGlobal), marginX, y);
-        y += 28;
-      }
+      writeValorGlobal();
 
-      ensure(70);
-      pdf.setDrawColor(0, 0, 0);
-      pdf.setLineWidth(0.5);
-      pdf.line(marginX, y + 10, marginX + 180, y + 10);
-      y += 28;
-      pdf.setFont(bodyFont, "bold");
-      pdf.setFontSize(bodySize);
-      pdf.setTextColor(0, 0, 0);
-      pdf.text(emp.assinatura || emp.nome || "Responsável", marginX, y);
-
-      const rodape = emp.rodape || `${emp.nome || ""}${emp.cnpj ? ` | ${emp.cnpj}` : ""}${emp.email ? ` | ${emp.email}` : ""}${emp.telefone ? ` | ${emp.telefone}` : ""}`;
-      if (rodape && !emp.papelTimbrado) {
-        pdf.setFont(bodyFont, "normal");
-        pdf.setFontSize(8);
-        pdf.setTextColor(0, 0, 0);
-        pdf.text(pdf.splitTextToSize(rodape, pageW - 70), pageW / 2, pageH - 28, { align: "center" });
-      }
+      writeSignature();
+      writeRodape();
 
       pdf.save(`${safeFileName(emp.nome)}-${safeFileName(dados.numero || "orcamento")}.pdf`);
       pushToast("PDF baixado com sucesso.", "ok");
