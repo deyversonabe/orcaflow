@@ -16,6 +16,12 @@ Aplicacao React/Vite para gerar, revisar, salvar e exportar orcamentos comerciai
 - Gestao preparada para alto volume, com filtros rapidos, ordenacao, quantidade por pagina e paginacao.
 - Importacao em massa de orcamentos antigos em PDF/DOCX com IA para identificar cliente, valor, descricao, data do documento/arquivo e empresa proponente para filtros.
 - Geracao de orcamentos com envio compacto das empresas selecionadas, evitando anexos pesados no payload da IA.
+- Perfis documentais automaticos por empresa para reduzir semelhanca entre PDFs gerados no mesmo sistema.
+- Exportacao PDF com abertura, numero, valor, assinatura e rodape variando por perfil de empresa.
+- Correcao de sobreposicao em timbrados com cabecalho alto, especialmente Eletro Lider.
+- Titulo do PDF agora ajusta tamanho/linhas antes de continuar o documento.
+- Rodape longo quebra linha para evitar e-mail/CNPJ saindo da pagina.
+- A IA bloqueia prazos, validade, condicoes comerciais/de execucao e textos genericos de preenchimento.
 - Automacao comercial na Gestao: score de prioridade, fila de follow-up, historico de contatos por orcamento e botoes para IA gerar cobranca, e-mail e WhatsApp.
 - Historico de conversas por orcamento, com canal, direcao da mensagem, tipo de interacao, resumo IA e sugestao IA de resposta ao cliente.
 - Cadastro de empresa com leitura IA do PDF do Cartao CNPJ para preencher dados cadastrais, assinatura e rodape; PDFs escaneados usam OCR visual com IA e PDFs com texto mantem fallback local.
