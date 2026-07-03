@@ -231,8 +231,195 @@ function normalizarMateriaisTabela(orcamentoEmpresa = {}, valorGlobal) {
   };
 }
 
+function textoBusca(valor = "") {
+  return String(valor || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function perfilDocumentoEmpresa(empresa = {}, indice = 0) {
+  const alvo = textoBusca(
+    [
+      empresa.nome,
+      empresa.nomeFantasia,
+      empresa.dnaLinguagem,
+      empresa.estruturaOrcamento,
+      empresa.padraoDocumental,
+      empresa.assinaturaVisual,
+    ].join(" ")
+  );
+
+  if (/eletro\s*lider|pupo|agnelo|materiais\s+eletricos/.test(alvo)) {
+    return {
+      tipo: "loja-materiais-eletricos",
+      tituloDocumento: "Orcamento comercial",
+      tom: "cotacao comercial objetiva de loja/distribuidora de materiais eletricos",
+      ordemSecoes: ["intro", "materiais", "escopo", "fechamento"],
+      rotulos: {
+        intro: "Dados da cotacao",
+        escopo: "Resumo do fornecimento",
+        materiais: "Itens cotados",
+        fechamento: "Registro comercial",
+      },
+      proibicoes: "Nao usar linguagem de obra, engenharia consultiva, equipe de campo, assinatura formal longa ou texto generico sobre materiais nao discriminados.",
+    };
+  }
+
+  if (/h&h|decoracoes|decoracao|eventos|ambientacao/.test(alvo)) {
+    return {
+      tipo: "eventos-ambientacao",
+      tituloDocumento: "Proposta de atendimento",
+      tom: "institucional leve, voltado a producao, organizacao e experiencia do evento",
+      ordemSecoes: ["intro", "escopo", "recursos", "fechamento"],
+      rotulos: {
+        intro: "Apresentacao",
+        escopo: "Servicos propostos",
+        recursos: "Estrutura envolvida",
+        fechamento: "Encerramento",
+      },
+      proibicoes: "Nao usar formato tecnico de engenharia, numeracao rigida de obra ou assinatura com rodape comercial extenso.",
+    };
+  }
+
+  if (/orlovic/.test(alvo)) {
+    return {
+      tipo: "modernizacao-infraestrutura",
+      tituloDocumento: "Proposta comercial",
+      tom: "executivo, corporativo e institucional para melhorias e conservacao de infraestrutura",
+      ordemSecoes: ["objetivo", "escopo", "consideracoes", "fechamento"],
+      rotulos: {
+        objetivo: "Objeto da contratacao",
+        escopo: "Escopo de servicos",
+        consideracoes: "Composicao da proposta",
+        fechamento: "Resumo executivo",
+      },
+      proibicoes: "Nao usar linguagem de licitacao, memorial descritivo, gatilhos de venda ou fechamento igual ao das outras empresas.",
+    };
+  }
+
+  if (/ad\s+solucoes|consultoria|diagnostico|levantamento|laudo|parecer/.test(alvo)) {
+    return {
+      tipo: "consultoria-tecnica",
+      tituloDocumento: "Proposta tecnica",
+      tom: "consultivo, metodologico e documental, com foco em analise e tomada de decisao",
+      ordemSecoes: ["objetivo", "escopo", "consideracoes", "fechamento"],
+      rotulos: {
+        objetivo: "Finalidade tecnica",
+        escopo: "Atividades previstas",
+        consideracoes: "Documentacao entregavel",
+        fechamento: "Conclusao tecnica",
+      },
+      proibicoes: "Nao citar execucao de obra, mobilizacao, caminhoes, instalacao de campo ou venda agressiva.",
+    };
+  }
+
+  if (/power|service|operacional|execucao/.test(alvo)) {
+    return {
+      tipo: "execucao-operacional",
+      tituloDocumento: "Orcamento operacional",
+      tom: "direto, pratico e voltado a capacidade de mobilizacao e execucao",
+      ordemSecoes: ["objetivo", "escopo", "recursos", "materiais", "fechamento"],
+      rotulos: {
+        objetivo: "Objetivo operacional",
+        escopo: "Descricao dos servicos",
+        recursos: "Recursos operacionais envolvidos",
+        materiais: "Pecas e materiais",
+        fechamento: "Resumo final",
+      },
+      proibicoes: "Nao parecer escritorio de engenharia consultiva e nao usar formato academico.",
+    };
+  }
+
+  if (/construir|construcao|obra|reforma/.test(alvo)) {
+    return {
+      tipo: "solucao-obras",
+      tituloDocumento: "Proposta de solucao",
+      tom: "comercial moderno, organizado e focado no resultado final da melhoria",
+      ordemSecoes: ["intro", "escopo", "itens", "fechamento"],
+      rotulos: {
+        intro: "Visao geral",
+        escopo: "Etapas de atendimento",
+        itens: "Servicos inclusos",
+        fechamento: "Resumo final",
+      },
+      proibicoes: "Nao usar memorial descritivo, linguagem de licitacao ou numeracao tecnica 1.1.",
+    };
+  }
+
+  if (/lider|engenharia\s+lider|eng\./.test(alvo)) {
+    return {
+      tipo: "engenharia-tecnica",
+      tituloDocumento: "Proposta tecnica comercial",
+      tom: "tecnico, claro e confiavel, com foco em engenharia eletrica e infraestrutura",
+      ordemSecoes: ["intro", "objetivo", "escopo", "consideracoes", "fechamento"],
+      rotulos: {
+        intro: "Apresentacao tecnica",
+        objetivo: "Objetivo",
+        escopo: "Escopo tecnico",
+        consideracoes: "Consideracoes tecnicas",
+        fechamento: "Conclusao",
+      },
+      proibicoes: "Nao usar texto de loja de materiais, eventos ou consultoria pura quando houver execucao tecnica.",
+    };
+  }
+
+  const variantes = [
+    "proposta institucional",
+    "orcamento executivo",
+    "documento comercial sintetico",
+    "proposta tecnica objetiva",
+  ];
+
+  return {
+    tipo: `perfil-${indice + 1}`,
+    tituloDocumento: variantes[indice % variantes.length],
+    tom: "identidade documental propria e diferente das demais empresas selecionadas",
+    ordemSecoes: ["intro", "objetivo", "escopo", "fechamento"],
+    rotulos: {},
+    proibicoes: "Nao repetir a estrutura, o fechamento ou os rotulos usados por outra empresa.",
+  };
+}
+
+const PADROES_GENERICOS_PROIBIDOS = [
+  /prestacao de mao de obra mencionada de forma geral/i,
+  /materiais citados sem lista/i,
+  /natureza tecnica especifica.*nao detalhada/i,
+  /sem lista de itens/i,
+  /nao discriminados no resumo/i,
+  /nao detalhad[ao] no resumo/i,
+];
+
+const PADROES_COMERCIAIS_PROIBIDOS = [
+  /validade da proposta/i,
+  /forma[s]? de pagamento/i,
+  /condi[cç][oõ]es comerciais/i,
+  /condi[cç][oõ]es de execu[cç][aã]o/i,
+  /\bprazo[s]?\b/i,
+  /cronograma/i,
+  /garantia/i,
+];
+
+function normalizarTextoDocumento(valor = "") {
+  const texto = String(valor || "").trim();
+  if (!texto) return "";
+
+  const linhas = texto
+    .split(/\n+/)
+    .map((linha) => linha.trim())
+    .filter(Boolean)
+    .filter((linha) => {
+      const semAcento = textoBusca(linha);
+      return !PADROES_GENERICOS_PROIBIDOS.some((rx) => rx.test(semAcento)) &&
+        !PADROES_COMERCIAIS_PROIBIDOS.some((rx) => rx.test(semAcento));
+    });
+
+  return linhas.join("\n");
+}
+
 function normalizarIdentidadeDocumento(orcamentoEmpresa = {}, empresa = {}, indice = 0) {
   const identidade = orcamentoEmpresa.identidadeDocumento || orcamentoEmpresa.identidade || {};
+  const perfil = empresa.perfilDocumento || {};
   const variantes = [
     "tecnica-executiva",
     "comercial-consultiva",
@@ -247,22 +434,23 @@ function normalizarIdentidadeDocumento(orcamentoEmpresa = {}, empresa = {}, indi
     : Array.isArray(orcamentoEmpresa.ordemSecoes)
       ? orcamentoEmpresa.ordemSecoes
       : [];
+  const ordemPerfil = Array.isArray(perfil.ordemSecoes) ? perfil.ordemSecoes : [];
 
   return {
-    tituloDocumento: limparTexto(identidade.tituloDocumento || orcamentoEmpresa.tituloDocumento || "Proposta Comercial", 80),
+    tituloDocumento: limparTexto(identidade.tituloDocumento || orcamentoEmpresa.tituloDocumento || perfil.tituloDocumento || "Proposta Comercial", 80),
     subtitulo: limparTexto(identidade.subtitulo || "", 120),
     variante,
     assinaturaVisual: limparTexto(identidade.assinaturaVisual || empresa.nomeFantasia || empresa.nome || variante, 120),
-    ordemSecoes: ordemRecebida.map((secao) => limparTexto(secao, 30)).filter(Boolean),
+    ordemSecoes: (ordemRecebida.length ? ordemRecebida : ordemPerfil).map((secao) => limparTexto(secao, 30)).filter(Boolean),
     rotulos: {
-      intro: limparTexto(identidade.rotulos?.intro || identidade.labels?.intro || "Apresentacao", 40),
-      objetivo: limparTexto(identidade.rotulos?.objetivo || identidade.labels?.objetivo || "Objetivo", 40),
-      escopo: limparTexto(identidade.rotulos?.escopo || identidade.labels?.escopo || "Escopo do Servico", 40),
-      materiais: limparTexto(identidade.rotulos?.materiais || identidade.labels?.materiais || "Materiais e Equipamentos", 45),
-      consideracoes: limparTexto(identidade.rotulos?.consideracoes || identidade.labels?.consideracoes || "Consideracoes Tecnicas", 45),
-      recursos: limparTexto(identidade.rotulos?.recursos || identidade.labels?.recursos || "Recursos Operacionais", 45),
-      itens: limparTexto(identidade.rotulos?.itens || identidade.labels?.itens || "Itens Incluidos", 40),
-      fechamento: limparTexto(identidade.rotulos?.fechamento || identidade.labels?.fechamento || "Fechamento", 40),
+      intro: limparTexto(identidade.rotulos?.intro || identidade.labels?.intro || perfil.rotulos?.intro || "Apresentacao", 40),
+      objetivo: limparTexto(identidade.rotulos?.objetivo || identidade.labels?.objetivo || perfil.rotulos?.objetivo || "Objetivo", 40),
+      escopo: limparTexto(identidade.rotulos?.escopo || identidade.labels?.escopo || perfil.rotulos?.escopo || "Escopo do Servico", 40),
+      materiais: limparTexto(identidade.rotulos?.materiais || identidade.labels?.materiais || perfil.rotulos?.materiais || "Materiais e Equipamentos", 45),
+      consideracoes: limparTexto(identidade.rotulos?.consideracoes || identidade.labels?.consideracoes || perfil.rotulos?.consideracoes || "Consideracoes Tecnicas", 45),
+      recursos: limparTexto(identidade.rotulos?.recursos || identidade.labels?.recursos || perfil.rotulos?.recursos || "Recursos Operacionais", 45),
+      itens: limparTexto(identidade.rotulos?.itens || identidade.labels?.itens || perfil.rotulos?.itens || "Itens Incluidos", 40),
+      fechamento: limparTexto(identidade.rotulos?.fechamento || identidade.labels?.fechamento || perfil.rotulos?.fechamento || "Fechamento", 40),
     },
   };
 }
@@ -348,6 +536,7 @@ export default async function handler(req, res) {
       .map((s, indice) => {
         const emp = empresas.find((e) => e.id === s.empId);
         if (!emp) return null;
+        const perfilDocumento = perfilDocumentoEmpresa(emp, indice);
 
         return {
           indice,
@@ -366,6 +555,7 @@ export default async function handler(req, res) {
           corSecundaria: limparTexto(emp.corSecundaria, 20),
           temPapelTimbrado: Boolean(emp.papelTimbrado),
           valorGlobal: s.valorGlobal || "",
+          perfilDocumento,
         };
       })
       .filter(Boolean);
@@ -390,15 +580,18 @@ Os orcamentos NAO podem parecer copias entre si. Para cada empresa, crie uma ide
 - ritmo de frase, vocabulario e fechamento diferentes;
 - forma de apresentar escopo diferente;
 - sem misturar o DNA de uma empresa com outra.
+- use "perfilDocumento" de cada empresa como comando obrigatorio de linguagem, abertura, fechamento e rotulos.
+- se duas empresas forem geradas na mesma rodada, compare uma com a outra e evite repetir a mesma abertura, mesmo fechamento, mesmo titulo e mesma sequencia de secoes.
 
 MATERIAIS E PRECIFICACAO
-- Se o texto do usuario trouxer lista de materiais, equipamentos ou itens com valores originais/custos, gere "materiaisTabela".
+- Gere "materiaisTabela" SOMENTE quando o usuario trouxer uma lista real de materiais, produtos ou itens, de preferencia com quantidade, unidade, valor original/custo ou descricao itemizada.
+- Se o usuario mencionar "materiais" de forma generica, sem lista, nao crie tabela, nao crie itens ficticios e deixe "materiaisTabela" vazio.
 - A tabela deve ter descricao, unidade, quantidade, valorOriginal, acrescimoPercentual, valorUnitario e subtotal.
 - Use o valor global informado da empresa como total final da tabela quando ele existir.
 - Distribua o acrescimo proporcionalmente aos valores originais para que a soma dos subtotais feche dentro do valor global.
 - Se houver materiais sem valor original, use pesoPercentual para indicar a distribuicao sugerida; o servidor fara o fechamento matematico final.
 - Nao invente materiais que nao estejam no resumo.
-- Nao invente datas, prazos, garantias, validade ou condicoes nao informadas.
+- Nunca escreva frases como "materiais citados sem lista", "prestacao de mao de obra mencionada de forma geral", "natureza tecnica nao detalhada" ou qualquer observacao de falta de informacao.
 
 REGRAS GERAIS
 - Nao use emojis.
@@ -407,6 +600,9 @@ REGRAS GERAIS
 - Use apenas informacoes fornecidas pelo usuario e pelo cadastro da empresa.
 - Se uma informacao nao foi fornecida, deixe o campo vazio ou escreva somente o que for tecnicamente seguro.
 - O valor global deve ser usado somente quando estiver informado na selecao da empresa.
+- Nao incluir prazo, data, validade, garantia, condicoes de pagamento, condicoes comerciais, cronograma ou condicoes para execucao.
+- Nao criar rodape, assinatura longa ou dados cadastrais iguais para todas as empresas; o fechamento deve seguir o perfil de cada empresa.
+- Quando o resumo for curto, entregue documento curto e limpo. Nao preencha com texto generico.
 
 CLIENTE / DESTINATARIO:
 ${cliente}
@@ -514,6 +710,15 @@ RETORNE SOMENTE JSON VALIDO, SEM MARKDOWN, NESTE FORMATO EXATO:
 
     for (const empresa of empresasSelecionadas) {
       const atual = parsed.empresas[empresa.id] || {};
+      for (const campo of ["intro", "objetivo", "escopo", "materiais", "consideracoes", "recursos", "fechamento"]) {
+        atual[campo] = normalizarTextoDocumento(atual[campo]);
+      }
+
+      const itensLimpos = Array.isArray(parsed.itens)
+        ? parsed.itens.map((item) => normalizarTextoDocumento(item)).filter(Boolean)
+        : [];
+      parsed.itens = itensLimpos;
+
       const fechamento = normalizarMateriaisTabela(atual, empresa.valorGlobal);
       parsed.empresas[empresa.id] = {
         ...atual,
