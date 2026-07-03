@@ -612,6 +612,31 @@ async function pdfParaImagemCartaoCNPJ(file) {
   return canvas.toDataURL("image/jpeg", 0.88);
 }
 
+async function imagemParaLeitura(file) {
+  const dataUrl = await lerArquivoComoDataURL(file);
+
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const maiorLado = Math.max(img.width, img.height);
+      const escala = maiorLado > 1800 ? 1800 / maiorLado : 1;
+      const width = Math.max(1, Math.round(img.width * escala));
+      const height = Math.max(1, Math.round(img.height * escala));
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+
+      canvas.width = width;
+      canvas.height = height;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, width, height);
+      ctx.drawImage(img, 0, 0, width, height);
+      resolve(canvas.toDataURL("image/jpeg", 0.88));
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
 // Detecta automaticamente onde termina o cabeçalho e onde começa o rodapé
 // analisando a "tinta" (pixels não-brancos) de cada linha do timbrado renderizado.
 // Retorna as alturas em PONTOS (pt) do PDF — captação automática das medidas.
@@ -4313,7 +4338,9 @@ export default function App() {
   const [editando, setEditando] = useState(false);
   const [step, setStep] = useState("montagem");
   const [transcrevendo, setTranscrevendo] = useState(false);
+  const [lendoAnexoServico, setLendoAnexoServico] = useState(false);
   const refAudio = useRef(null);
+  const refAnexoServico = useRef(null);
   const MAX = 12;
 
   const handleSalvar = async (form) => {
@@ -4432,6 +4459,113 @@ export default function App() {
       pushToast(error.message || "Erro ao transcrever áudio.", "erro");
     } finally {
       setTranscrevendo(false);
+      setIaStatus("");
+    }
+  };
+
+  const anexarDocumentoServico = async (file) => {
+    if (!file) return;
+
+    const nome = (file.name || "").toLowerCase();
+    const isPdf = nome.endsWith(".pdf") || file.type === "application/pdf";
+    const isImagem =
+      [".png", ".jpg", ".jpeg", ".webp"].some((ext) => nome.endsWith(ext)) ||
+      /^image\/(?:png|jpe?g|webp)$/i.test(file.type || "");
+
+    if (!isPdf && !isImagem) {
+      pushToast("Formato invalido. Envie PDF, PNG, JPG, JPEG ou WEBP.", "erro");
+      return;
+    }
+
+    const limiteMB = 15;
+    if (file.size > limiteMB * 1024 * 1024) {
+      pushToast(`Arquivo muito grande. Limite maximo: ${limiteMB} MB.`, "erro");
+      return;
+    }
+
+    setLendoAnexoServico(true);
+    setIaStatus("Lendo PDF/imagem com IA...");
+
+    try {
+      let textoExtraido = "";
+      let imagem = "";
+
+      if (isPdf) {
+        try {
+          textoExtraido = await lerTextoPDF(file);
+        } catch (error) {
+          console.warn("Falha ao extrair texto do PDF:", error);
+        }
+
+        try {
+          imagem = await pdfParaImagemCartaoCNPJ(file);
+        } catch (error) {
+          console.warn("Falha ao renderizar PDF para OCR:", error);
+        }
+      } else {
+        imagem = await imagemParaLeitura(file);
+      }
+
+      if (!clean(textoExtraido) && !imagem) {
+        throw new Error("Nao consegui ler texto nem imagem deste arquivo.");
+      }
+
+      const response = await fetch("/api/read-service-attachment", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(await authHeaders()),
+        },
+        body: JSON.stringify({
+          filename: file.name || "anexo",
+          mimeType: file.type || "",
+          texto: clean(textoExtraido, 65000),
+          imagem,
+        }),
+      });
+
+      let data = {};
+      try {
+        data = await response.json();
+      } catch {
+        throw new Error("A resposta da leitura veio invalida.");
+      }
+
+      if (!response.ok) {
+        throw new Error(data.error || "Falha ao ler anexo com IA.");
+      }
+
+      const dados = data.dados || {};
+      const partes = [];
+      if (dados.descricaoServico) partes.push(clean(dados.descricaoServico, 2200));
+      if (dados.materiaisTexto) partes.push(`Itens/materiais identificados:\n${clean(dados.materiaisTexto, 2200)}`);
+      if (Number(dados.valorGlobalIdentificado || 0) > 0) {
+        partes.push(`Valor identificado no anexo: ${brl(dados.valorGlobalIdentificado)}`);
+      }
+      if (dados.observacoes) partes.push(`Observacoes do anexo:\n${clean(dados.observacoes, 700)}`);
+
+      const bloco = partes.filter(Boolean).join("\n\n").trim();
+      if (!bloco) {
+        throw new Error("A IA nao encontrou informacoes uteis no anexo.");
+      }
+
+      if (!cliente.trim() && dados.cliente) {
+        setCliente(clean(dados.cliente, 180));
+      }
+
+      setTexto((atual) => {
+        const textoAtual = String(atual || "").trim();
+        const novoBloco = `Leitura do anexo (${file.name || "arquivo"}):\n${bloco}`;
+        if (!textoAtual) return novoBloco;
+        return `${textoAtual}\n\n${novoBloco}`;
+      });
+
+      pushToast("PDF/imagem lido com IA. Revise a descricao antes de gerar.", "ok");
+    } catch (error) {
+      console.error("Erro ao ler anexo:", error);
+      pushToast(error.message || "Erro ao ler PDF/imagem.", "erro");
+    } finally {
+      setLendoAnexoServico(false);
       setIaStatus("");
     }
   };
@@ -5234,6 +5368,34 @@ export default function App() {
                     }}
                   >
                     {transcrevendo ? "Transcrevendo áudio..." : "📎 Anexar áudio/vídeo"}
+                  </button>
+                  <input
+                    ref={refAnexoServico}
+                    type="file"
+                    accept=".pdf,.png,.jpg,.jpeg,.webp,application/pdf,image/png,image/jpeg,image/webp"
+                    style={{ display: "none" }}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = "";
+                      anexarDocumentoServico(file);
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => refAnexoServico.current?.click()}
+                    disabled={lendoAnexoServico}
+                    style={{
+                      padding: "8px 13px",
+                      borderRadius: 9,
+                      border: `1px solid ${BRAND.green2}55`,
+                      background: lendoAnexoServico ? BRAND.border2 : `${BRAND.green2}16`,
+                      color: lendoAnexoServico ? BRAND.dim : "#86EFAC",
+                      cursor: lendoAnexoServico ? "not-allowed" : "pointer",
+                      fontSize: 12,
+                      fontWeight: 850,
+                    }}
+                  >
+                    {lendoAnexoServico ? "Lendo PDF/imagem..." : "Anexar PDF/imagem"}
                   </button>
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6 }}><span style={{ fontSize: 10, color: texto.length > 60 ? BRAND.green : BRAND.dim }}>{texto.length > 60 ? "✓ Suficiente para análise" : "⚠ Adicione mais detalhes"}</span><span style={{ fontSize: 10, color: BRAND.dim }}>{texto.length} chars</span></div></div><div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 14, padding: "14px 17px" }}><div style={{ fontSize: 9, fontWeight: 900, color: BRAND.dim, letterSpacing: 2, marginBottom: 8 }}>📌 OBSERVAÇÕES OPCIONAIS</div><textarea value={obs} onChange={(e) => setObs(e.target.value)} rows={2} placeholder="Condições especiais, restrições ou observações complementares..." style={{ ...INP, resize: "vertical" }} /></div></div>}
