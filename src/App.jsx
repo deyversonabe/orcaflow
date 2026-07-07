@@ -1287,7 +1287,7 @@ function Toast({ toast }) {
         display: "flex",
         alignItems: "center",
         gap: 9,
-        whiteSpace: "nowrap",
+        whiteSpace: "normal",
       }}
     >
       <span style={{ width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0 }} />
@@ -2145,11 +2145,11 @@ function empresasCompactasParaGeracao(empresas = [], selecao = []) {
       nome: emp.nome || "",
       nomeFantasia: emp.nomeFantasia || "",
       tom: textoCurto(emp.tom, 320),
-      dnaLinguagem: textoCurto(emp.dnaLinguagem, 4500),
-      estruturaOrcamento: textoCurto(emp.estruturaOrcamento, 2800),
-      padraoDocumental: textoCurto(emp.padraoDocumental, 2200),
-      assinaturaVisual: textoCurto(emp.assinaturaVisual, 1600),
-      diferenciais: textoCurto(emp.diferenciais, 900),
+      dnaLinguagem: textoCurto(emp.dnaLinguagem, 3200),
+      estruturaOrcamento: textoCurto(emp.estruturaOrcamento, 1800),
+      padraoDocumental: textoCurto(emp.padraoDocumental, 1400),
+      assinaturaVisual: textoCurto(emp.assinaturaVisual, 900),
+      diferenciais: textoCurto(emp.diferenciais, 600),
       fonteTitulo: emp.fonteTitulo || "",
       fonteCorpo: emp.fonteCorpo || "",
       corPrimaria: emp.corPrimaria || "",
@@ -4333,6 +4333,7 @@ export default function App() {
   const [selecao, setSelecao] = useState([]);
   const [gerando, setGerando] = useState(false);
   const [iaStatus, setIaStatus] = useState("");
+  const [erroGeracao, setErroGeracao] = useState("");
   const [orcamentos, setOrcamentos] = useState({});
   const [activeTab, setActiveTab] = useState(null);
   const [editando, setEditando] = useState(false);
@@ -4380,6 +4381,7 @@ export default function App() {
     setOrcamentos({});
     setActiveTab(null);
     setEditando(false);
+    setErroGeracao("");
   };
 
   const resetOrcamento = () => {
@@ -4519,7 +4521,7 @@ export default function App() {
         body: JSON.stringify({
           filename: file.name || "anexo",
           mimeType: file.type || "",
-          texto: clean(textoExtraido, 65000),
+          texto: textoCurto(textoExtraido, 65000),
           imagem,
         }),
       });
@@ -4575,33 +4577,41 @@ export default function App() {
 
     setGerando(true);
     setIaStatus("Gerando orçamentos com IA...");
+    setErroGeracao("");
 
     try {
+      const payload = {
+        cliente: textoCurto(cliente, 280),
+        texto: textoCurto(texto, 16000),
+        obs: textoCurto(obs, 5000),
+        empresas: empresasCompactasParaGeracao(empresas, selecao),
+        selecao,
+      };
+
       const response = await fetch("/api/generate-budget", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           ...(await authHeaders()),
         },
-        body: JSON.stringify({
-          cliente,
-          texto,
-          obs,
-          empresas: empresasCompactasParaGeracao(empresas, selecao),
-          selecao,
-        }),
+        body: JSON.stringify(payload),
       });
 
       let data = {};
+      const raw = await response.text();
 
       try {
-        data = await response.json();
+        data = raw ? JSON.parse(raw) : {};
       } catch {
-        throw new Error("A IA retornou uma resposta inválida.");
+        data = {
+          error: raw ? textoCurto(raw, 500) : "A API retornou uma resposta vazia.",
+          code: "INVALID_API_RESPONSE",
+        };
       }
 
       if (!response.ok) {
-        throw new Error(data.error || "Erro ao gerar orçamento com IA.");
+        const sufixo = data.code ? ` (${data.code})` : "";
+        throw new Error(`${data.error || "Erro ao gerar orçamento com IA."}${sufixo}`);
       }
 
       const novos = {};
@@ -4668,7 +4678,9 @@ export default function App() {
       setStep("preview");
     } catch (error) {
       console.error("Erro ao gerar orçamento:", error);
-      pushToast(error.message || "Erro ao gerar orçamento com IA.", "erro");
+      const mensagem = error.message || "Erro ao gerar orçamento com IA.";
+      setErroGeracao(mensagem);
+      pushToast(mensagem, "erro");
     } finally {
       setGerando(false);
       setIaStatus("");
@@ -5339,7 +5351,7 @@ export default function App() {
           </div>
 
           <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column" }}>
-            {step === "montagem" && <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 14, maxWidth: 820 }}><div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 14, padding: "15px 17px" }}><div style={{ fontSize: 9, fontWeight: 900, color: BRAND.green, letterSpacing: 2, marginBottom: 10 }}>📋 DADOS DO ORÇAMENTO</div><div style={{ fontSize: 9, color: BRAND.dim, fontWeight: 800, letterSpacing: 1, marginBottom: 6 }}>CLIENTE / EMPRESA DESTINATÁRIA *</div><input value={cliente} onChange={(e) => setCliente(e.target.value)} placeholder="Ex: Grupo Industrial Martins S.A." style={INP} /></div><div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 14, padding: "15px 17px" }}><div style={{ fontSize: 9, fontWeight: 900, color: BRAND.green, letterSpacing: 2, marginBottom: 6 }}>✍️ DESCRIÇÃO DO SERVIÇO *</div><div style={{ fontSize: 11, color: BRAND.dim, marginBottom: 10, lineHeight: 1.6 }}>Descreva o serviço com detalhes para montar o orçamento.</div><textarea value={texto} onChange={(e) => setTexto(e.target.value)} rows={8} placeholder="Descreva o serviço completo aqui..." style={{ ...INP, resize: "vertical", minHeight: 160, lineHeight: 1.75 }} />
+            {step === "montagem" && <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 14, maxWidth: 820 }}>{erroGeracao && <div style={{ background: `${BRAND.danger}12`, border: `1px solid ${BRAND.danger}88`, borderRadius: 12, padding: "11px 13px", color: "#FCA5A5", fontSize: 12, fontWeight: 800, lineHeight: 1.55, whiteSpace: "normal" }}>Falha ao gerar: {erroGeracao}</div>}<div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 14, padding: "15px 17px" }}><div style={{ fontSize: 9, fontWeight: 900, color: BRAND.green, letterSpacing: 2, marginBottom: 10 }}>📋 DADOS DO ORÇAMENTO</div><div style={{ fontSize: 9, color: BRAND.dim, fontWeight: 800, letterSpacing: 1, marginBottom: 6 }}>CLIENTE / EMPRESA DESTINATÁRIA *</div><input value={cliente} onChange={(e) => setCliente(e.target.value)} placeholder="Ex: Grupo Industrial Martins S.A." style={INP} /></div><div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 14, padding: "15px 17px" }}><div style={{ fontSize: 9, fontWeight: 900, color: BRAND.green, letterSpacing: 2, marginBottom: 6 }}>✍️ DESCRIÇÃO DO SERVIÇO *</div><div style={{ fontSize: 11, color: BRAND.dim, marginBottom: 10, lineHeight: 1.6 }}>Descreva o serviço com detalhes para montar o orçamento.</div><textarea value={texto} onChange={(e) => setTexto(e.target.value)} rows={8} placeholder="Descreva o serviço completo aqui..." style={{ ...INP, resize: "vertical", minHeight: 160, lineHeight: 1.75 }} />
                 <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
                   <input
                     ref={refAudio}
