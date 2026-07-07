@@ -13,7 +13,7 @@ export async function requireSession(req, res) {
   const anonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
 
   if (!token || !url || !anonKey) {
-    res.status(401).json({ error: "Sessão inválida ou expirada." });
+    res.status(401).json({ error: "Sessão inválida ou expirada.", code: "AUTH_SESSION_INVALID" });
     return null;
   }
 
@@ -22,12 +22,12 @@ export async function requireSession(req, res) {
       headers: { apikey: anonKey, Authorization: `Bearer ${token}` },
     });
     if (!response.ok) {
-      res.status(401).json({ error: "Sessão inválida ou expirada." });
+      res.status(401).json({ error: "Sessão inválida ou expirada.", code: "AUTH_SESSION_INVALID" });
       return null;
     }
     return response.json();
   } catch {
-    res.status(503).json({ error: "Serviço de autenticação indisponível." });
+    res.status(503).json({ error: "Serviço de autenticação indisponível.", code: "AUTH_SERVICE_UNAVAILABLE" });
     return null;
   }
 }
@@ -45,7 +45,7 @@ export function enforceSameOrigin(req, res) {
   const expected = `${forwardedProto}://${forwardedHost}`;
 
   if (origin !== expected) {
-    res.status(403).json({ error: "Origem não autorizada." });
+    res.status(403).json({ error: "Origem não autorizada.", code: "ORIGIN_NOT_ALLOWED" });
     return false;
   }
   return true;
@@ -64,7 +64,7 @@ export function rateLimit(req, res, { id, limit, windowMs }) {
   current.count += 1;
   if (current.count > limit) {
     res.setHeader("Retry-After", Math.ceil((current.resetAt - now) / 1000));
-    res.status(429).json({ error: "Muitas solicitações. Aguarde e tente novamente." });
+    res.status(429).json({ error: "Muitas solicitações. Aguarde e tente novamente.", code: "RATE_LIMITED" });
     return false;
   }
 
@@ -74,7 +74,7 @@ export function rateLimit(req, res, { id, limit, windowMs }) {
 export function rejectOversizedRequest(req, res, maxBytes) {
   const contentLength = Number(req.headers["content-length"] || 0);
   if (contentLength > maxBytes) {
-    res.status(413).json({ error: "Solicitação maior que o limite permitido." });
+    res.status(413).json({ error: "Solicitação maior que o limite permitido.", code: "REQUEST_TOO_LARGE" });
     return true;
   }
   return false;

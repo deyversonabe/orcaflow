@@ -459,9 +459,9 @@ function isGpt5Model(modelo = "") {
   return /^gpt-5(?:\.|$|-)/i.test(String(modelo || ""));
 }
 
-function normalizarReasoningEffort(valor = "high") {
+function normalizarReasoningEffort(valor = "low") {
   const effort = String(valor || "").trim().toLowerCase();
-  return ["low", "medium", "high", "xhigh"].includes(effort) ? effort : "high";
+  return ["low", "medium", "high", "xhigh"].includes(effort) ? effort : "low";
 }
 
 function normalizarVerbosity(valor = "medium") {
@@ -469,12 +469,13 @@ function normalizarVerbosity(valor = "medium") {
   return ["low", "medium", "high"].includes(verbosity) ? verbosity : "medium";
 }
 
-function montarPayloadOpenAI(prompt) {
+function montarPayloadOpenAI(prompt, quantidadeEmpresas = 1) {
   const model = process.env.OPENAI_BUDGET_MODEL || "gpt-5.5";
+  const maxOutput = Math.min(7200, 3000 + Math.max(1, Number(quantidadeEmpresas) || 1) * 1400);
   const payload = {
     model,
     input: prompt,
-    max_output_tokens: 9000,
+    max_output_tokens: maxOutput,
   };
 
   if (isGpt5Model(model)) {
@@ -501,11 +502,12 @@ export default async function handler(req, res) {
     if (!enforceSameOrigin(req, res)) return;
     if (!(await requireSession(req, res))) return;
     if (!rateLimit(req, res, { id: "generate-budget", limit: 12, windowMs: 60 * 1000 })) return;
-    if (rejectOversizedRequest(req, res, 2_200_000)) return;
+    if (rejectOversizedRequest(req, res, 4_200_000)) return;
 
     if (!process.env.OPENAI_API_KEY) {
       return res.status(500).json({
         error: "OPENAI_API_KEY nao configurada no Vercel.",
+        code: "MISSING_OPENAI_API_KEY",
       });
     }
 
@@ -521,15 +523,16 @@ export default async function handler(req, res) {
     ) {
       return res.status(400).json({
         error: "Dados insuficientes para gerar o orcamento.",
+        code: "INSUFFICIENT_DATA",
       });
     }
 
     if (cliente.length > 300 || texto.length > 20_000 || String(obs || "").length > 10_000) {
-      return res.status(400).json({ error: "Os textos enviados ultrapassam o limite permitido." });
+      return res.status(400).json({ error: "Os textos enviados ultrapassam o limite permitido.", code: "TEXT_TOO_LONG" });
     }
 
     if (empresas.length > 80 || selecao.length > 20) {
-      return res.status(400).json({ error: "Quantidade de empresas acima do limite permitido." });
+      return res.status(400).json({ error: "Quantidade de empresas acima do limite permitido.", code: "TOO_MANY_COMPANIES" });
     }
 
     const empresasSelecionadas = selecao
@@ -563,6 +566,7 @@ export default async function handler(req, res) {
     if (!empresasSelecionadas.length) {
       return res.status(400).json({
         error: "Nenhuma empresa selecionada foi encontrada.",
+        code: "SELECTED_COMPANY_NOT_FOUND",
       });
     }
 
@@ -673,14 +677,20 @@ RETORNE SOMENTE JSON VALIDO, SEM MARKDOWN, NESTE FORMATO EXATO:
         Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(montarPayloadOpenAI(prompt)),
+      body: JSON.stringify(montarPayloadOpenAI(prompt, empresasSelecionadas.length)),
     });
 
-    const data = await response.json();
+    let data = {};
+    try {
+      data = await response.json();
+    } catch {
+      data = {};
+    }
 
     if (!response.ok) {
       return res.status(response.status).json({
         error: data?.error?.message || "Erro ao gerar orcamento com IA.",
+        code: data?.error?.code || "OPENAI_REQUEST_FAILED",
       });
     }
 
@@ -689,6 +699,7 @@ RETORNE SOMENTE JSON VALIDO, SEM MARKDOWN, NESTE FORMATO EXATO:
     if (!outputText) {
       return res.status(500).json({
         error: "A IA nao retornou conteudo.",
+        code: "EMPTY_AI_RESPONSE",
       });
     }
 
@@ -699,12 +710,14 @@ RETORNE SOMENTE JSON VALIDO, SEM MARKDOWN, NESTE FORMATO EXATO:
     } catch {
       return res.status(500).json({
         error: "A IA retornou um formato invalido.",
+        code: "INVALID_AI_JSON",
       });
     }
 
     if (!parsed.empresas || typeof parsed.empresas !== "object") {
       return res.status(500).json({
         error: "A IA nao retornou os orcamentos por empresa.",
+        code: "MISSING_COMPANY_BUDGETS",
       });
     }
 
@@ -737,6 +750,7 @@ RETORNE SOMENTE JSON VALIDO, SEM MARKDOWN, NESTE FORMATO EXATO:
 
     return res.status(500).json({
       error: "Erro interno ao gerar orcamento.",
+      code: "GENERATE_BUDGET_INTERNAL_ERROR",
     });
   }
 }
