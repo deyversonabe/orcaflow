@@ -3,6 +3,7 @@ import { jsPDF } from "jspdf";
 import { authHeaders, supabase } from "./supabase.js";
 import { store } from "./store.js";
 import { ClientesCRMPanel } from "./ClientesCRMPanel.jsx";
+import { WhatsAppInboxPanel, KEY_WHATSAPP_INBOX } from "./WhatsAppInboxPanel.jsx";
 import { abrirWhatsRelatorio, gerarRelatorioSemanalNara, normalizarWhatsDestino, WHATS_REPORT_NUMBER, WEEKLY_REPORT_PENDING_KEY } from "./weeklyReport.js";
 
 import {
@@ -60,7 +61,8 @@ const KEY_CHAT = "orcaflow_chat_ia";
 const KEY_CLIENTES = "orcaflow_clientes_crm";
 const KEY_WHATS_RELATORIO = "orcaflow_whats_relatorio";
 const KEY_WEEKLY_REPORT_PENDING = WEEKLY_REPORT_PENDING_KEY;
-const BACKUP_KEYS = [KEY_EMP, KEY_CRM, KEY_META, KEY_LOG, KEY_USERS, KEY_RESET, KEY_CHAT, KEY_CLIENTES, KEY_WHATS_RELATORIO, KEY_WEEKLY_REPORT_PENDING];
+const KEY_WHATSAPP_MONITOR = KEY_WHATSAPP_INBOX;
+const BACKUP_KEYS = [KEY_EMP, KEY_CRM, KEY_META, KEY_LOG, KEY_USERS, KEY_RESET, KEY_CHAT, KEY_CLIENTES, KEY_WHATS_RELATORIO, KEY_WEEKLY_REPORT_PENDING, KEY_WHATSAPP_MONITOR];
 
 const ADMIN_PADRAO = {
   id: "admin-master",
@@ -1415,6 +1417,7 @@ function useDB() {
           clientesCRM: dados[KEY_CLIENTES] || [],
           whatsRelatorio: typeof dados[KEY_WHATS_RELATORIO] === "string" ? dados[KEY_WHATS_RELATORIO] : "",
           relatorioSemanalPendente: dados[KEY_WEEKLY_REPORT_PENDING] || {},
+          whatsappInbox: dados[KEY_WHATSAPP_MONITOR] || [],
           dados,
         }, null, 2)],
         { type: "application/json" }
@@ -1448,6 +1451,7 @@ function useDB() {
         const resetImport = Array.isArray(parsed.solicitacoesSenha) ? parsed.solicitacoesSenha : dados[KEY_RESET];
         const chatImport = Array.isArray(parsed.chatIA) ? parsed.chatIA : dados[KEY_CHAT];
         const clientesImport = Array.isArray(parsed.clientesCRM) ? parsed.clientesCRM : dados[KEY_CLIENTES];
+        const whatsappInboxImport = Array.isArray(parsed.whatsappInbox) ? parsed.whatsappInbox : dados[KEY_WHATSAPP_MONITOR];
         const relatorioPendenteImport = parsed.relatorioSemanalPendente && typeof parsed.relatorioSemanalPendente === "object"
           ? parsed.relatorioSemanalPendente
           : dados[KEY_WEEKLY_REPORT_PENDING] && typeof dados[KEY_WEEKLY_REPORT_PENDING] === "object"
@@ -1470,6 +1474,7 @@ function useDB() {
           [KEY_CLIENTES]: Array.isArray(clientesImport) ? clientesImport : [],
           [KEY_WHATS_RELATORIO]: whatsRelatorioImport,
           [KEY_WEEKLY_REPORT_PENDING]: relatorioPendenteImport,
+          [KEY_WHATSAPP_MONITOR]: Array.isArray(whatsappInboxImport) ? whatsappInboxImport : [],
         };
 
         const results = await Promise.all(BACKUP_KEYS.map((key) => store.set(key, payload[key])));
@@ -4752,7 +4757,7 @@ export default function App() {
         ativo: true,
       });
       setAutenticado(true);
-      await store.migrate([KEY_EMP, KEY_LOG, KEY_META, KEY_CRM, KEY_CHAT, KEY_CLIENTES, KEY_WHATS_RELATORIO, KEY_WEEKLY_REPORT_PENDING]);
+      await store.migrate([KEY_EMP, KEY_LOG, KEY_META, KEY_CRM, KEY_CHAT, KEY_CLIENTES, KEY_WHATS_RELATORIO, KEY_WEEKLY_REPORT_PENDING, KEY_WHATSAPP_MONITOR]);
       setCrm((await store.get(KEY_CRM)) || []);
       setClientesCRM((await store.get(KEY_CLIENTES)) || []);
       const pendente = await store.get(KEY_WEEKLY_REPORT_PENDING);
@@ -6131,6 +6136,7 @@ export default function App() {
               ["gestao", "📊 Gestão"],
               ["clientes", "👥 Clientes"],
               ["orcamento", "✦ Orçamento"],
+              ["whatsapp", "WhatsApp"],
               ["chat", "Nara"],
               ["empresas", "🏢 Empresas"],
               ...(usuarioAtual?.tipo === "admin" ? [["usuarios", "🔐 Acessos"]] : []),
@@ -6171,6 +6177,17 @@ export default function App() {
           baixarOrcamento={baixarOrcamento}
           lerTextoPDF={lerTextoPDF}
           imagemParaLeitura={imagemParaLeitura}
+        />
+      )}
+
+      {view === "whatsapp" && (
+        <WhatsAppInboxPanel
+          crm={crm}
+          clientes={clientesCRM}
+          setClientes={setClientesCRM}
+          empresas={empresas}
+          pushToast={pushToast}
+          usuarioAtual={usuarioAtual}
         />
       )}
 
