@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { jsPDF } from "jspdf";
 import { authHeaders, supabase } from "./supabase.js";
 import { store } from "./store.js";
+import { ClientesCRMPanel } from "./ClientesCRMPanel.jsx";
 
 import {
   FileText,
@@ -54,7 +56,9 @@ const KEY_CRM = "orcaflow_crm_orcamentos";
 const KEY_USERS = "orcaflow_users";
 const KEY_RESET = "orcaflow_reset_senha";
 const KEY_CHAT = "orcaflow_chat_ia";
-const BACKUP_KEYS = [KEY_EMP, KEY_CRM, KEY_META, KEY_LOG, KEY_USERS, KEY_RESET, KEY_CHAT];
+const KEY_CLIENTES = "orcaflow_clientes_crm";
+const KEY_WHATS_RELATORIO = "orcaflow_whats_relatorio";
+const BACKUP_KEYS = [KEY_EMP, KEY_CRM, KEY_META, KEY_LOG, KEY_USERS, KEY_RESET, KEY_CHAT, KEY_CLIENTES, KEY_WHATS_RELATORIO];
 
 const ADMIN_PADRAO = {
   id: "admin-master",
@@ -150,14 +154,60 @@ function diasAte(data) {
 }
 
 function gerarTextoWhatsPendencias(lista, empresas = []) {
-  const pendentes = lista.filter((o) => !isFinalizadoOrcamento(o));
-  if (!pendentes.length) return "Não há orçamentos pendentes no momento.";
-  const linhas = pendentes.map((o, i) => {
-    const emp = empresas.find((e) => e.id === o.empresaId)?.nome || o.empresaNome || "Empresa";
-    const dt = o.proximoContato ? ` | próximo contato: ${new Date(o.proximoContato + "T00:00:00").toLocaleDateString("pt-BR")}` : "";
-    return `${i + 1}. ${o.cliente || "Cliente"} — ${emp} — ${o.numero || "sem número"} — ${brl(o.valorGlobal)} — ${statusFunilOrcamento(o)}${dt}`;
+  const itens = Array.isArray(lista) ? lista : [];
+  const pendentes = itens
+    .filter((o) => !isFinalizadoOrcamento(o))
+    .map((o) => ({ item: o, prioridade: avaliarPrioridadeOrcamento(o) }))
+    .sort((a, b) => b.prioridade.score - a.prioridade.score);
+
+  if (!pendentes.length) return "Nara: nao ha orcamentos pendentes no momento.";
+
+  const hoje = new Date().toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
+  const atrasados = pendentes.filter(({ item }) => isAtrasadoOrcamento(item)).length;
+  const criticos = pendentes.filter(({ prioridade }) => prioridade.score >= 70).length;
+  const semContato = pendentes.filter(({ item }) => !item.proximoContato).length;
+  const valorTotal = pendentes.reduce((soma, { item }) => soma + parseValorBR(item.valorGlobal ?? item.valor ?? item.valorTotal), 0);
+
+  const resumoContato = (item) => {
+    const dias = diasAte(item.proximoContato);
+    if (dias === null) return "sem proximo contato definido";
+    if (dias < 0) return `contato atrasado ha ${Math.abs(dias)} dia(s)`;
+    if (dias === 0) return "contato previsto para hoje";
+    return `proximo contato em ${dias} dia(s)`;
+  };
+
+  const linhas = pendentes.slice(0, 12).map(({ item, prioridade }, i) => {
+    const emp = empresas.find((e) => e.id === item.empresaId)?.nome || item.empresaNome || "Empresa nao identificada";
+    const motivos = prioridade.motivos?.length ? ` Motivo: ${prioridade.motivos.join(", ")}.` : "";
+    const lembrete = item.lembreteIA || item.lembrete || "Definir retorno comercial objetivo.";
+    return [
+      `${i + 1}. ${item.cliente || "Cliente nao informado"} (${item.numero || "sem numero"})`,
+      `Empresa: ${emp}`,
+      `Valor: ${brl(item.valorGlobal ?? item.valor ?? item.valorTotal)} | Status: ${statusFunilOrcamento(item)} | Prioridade: ${prioridade.nivel} ${prioridade.score}`,
+      `Situacao: ${resumoContato(item)}.${motivos}`,
+      `Acao sugerida pela Nara: ${prioridade.acao || lembrete}`,
+    ].join("\n");
   });
-  return `Relatório de orçamentos pendentes\n\n${linhas.join("\n")}\n\nOrçaFlow CRM`;
+
+  const excedentes = pendentes.length > 12 ? `\n\nMais ${pendentes.length - 12} orcamento(s) ficaram fora desta previa. Consulte o OrcaFlow para ver a fila completa.` : "";
+
+  return [
+    "Nara - Relatorio de orcamentos que precisam de atencao",
+    `Gerado em: ${hoje}`,
+    "",
+    "Resumo executivo:",
+    `- Total em acompanhamento: ${pendentes.length}`,
+    `- Criticos: ${criticos}`,
+    `- Atrasados: ${atrasados}`,
+    `- Sem proximo contato: ${semContato}`,
+    `- Valor potencial: ${brl(valorTotal)}`,
+    "",
+    "Prioridade de acao:",
+    linhas.join("\n\n"),
+    excedentes,
+    "",
+    "Orientacao da Nara: priorizar os casos criticos e atrasados primeiro, depois registrar o retorno no historico do cliente para manter a estrategia atualizada.",
+  ].filter(Boolean).join("\n");
 }
 
 async function logOp(acao, nome, id) {
@@ -225,12 +275,22 @@ function getSectionLabel(dados, key) {
   return clean(dados?.identidadeDocumento?.rotulos?.[key] || SECTION_FALLBACK_LABELS[key] || key).toUpperCase();
 }
 
-function getSectionOrder(dados) {
+function getSectionOrder(dados, perfil = null) {
+  const preferidasPorPerfil = {
+    "varejo-eletrico": ["materiais", "intro", "escopo", "fechamento"],
+    eventos: ["intro", "recursos", "materiais", "escopo", "fechamento"],
+    orlovic: ["objetivo", "escopo", "materiais", "consideracoes", "fechamento"],
+    consultoria: ["objetivo", "materiais", "consideracoes", "escopo", "fechamento"],
+    operacional: ["objetivo", "recursos", "escopo", "materiais", "fechamento"],
+    construcao: ["intro", "escopo", "itens", "materiais", "fechamento"],
+    engenharia: ["intro", "objetivo", "materiais", "escopo", "consideracoes", "fechamento"],
+  };
   const received = Array.isArray(dados?.identidadeDocumento?.ordemSecoes)
     ? dados.identidadeDocumento.ordemSecoes
     : [];
+  const base = preferidasPorPerfil[perfil?.tipo] || received;
   const allowed = new Set(DEFAULT_SECTION_ORDER);
-  const ordered = received.map((item) => clean(item)).filter((item) => allowed.has(item));
+  const ordered = base.map((item) => clean(item)).filter((item) => allowed.has(item));
   for (const item of DEFAULT_SECTION_ORDER) {
     if (!ordered.includes(item)) ordered.push(item);
   }
@@ -385,6 +445,62 @@ function perfilVisualEmpresa(emp = {}, dados = {}) {
     assinatura: "engenharia",
     rodape: "duas-linhas",
   };
+}
+
+const CORES_PERFIL_DOCUMENTO = {
+  "varejo-eletrico": { primaria: "#111827", secundaria: "#F59E0B" },
+  eventos: { primaria: "#B91C1C", secundaria: "#F97316" },
+  orlovic: { primaria: "#374151", secundaria: "#64748B" },
+  consultoria: { primaria: "#111827", secundaria: "#475569" },
+  operacional: { primaria: "#15803D", secundaria: "#0369A1" },
+  construcao: { primaria: "#B45309", secundaria: "#92400E" },
+  engenharia: { primaria: "#0F766E", secundaria: "#1D4ED8" },
+};
+
+function corDocumento(emp = {}, perfil = null, canal = "primaria") {
+  const p = perfil || perfilVisualEmpresa(emp);
+  const fallback = CORES_PERFIL_DOCUMENTO[p.tipo]?.[canal] || (canal === "secundaria" ? BRAND.blue2 : BRAND.green2);
+  const valor = canal === "secundaria" ? emp.corSecundaria : emp.corPrimaria;
+  if (!valor) return fallback;
+
+  const normal = String(valor).trim().toLowerCase();
+  const defaultPrimaria = BRAND.green2.toLowerCase();
+  const defaultSecundaria = BRAND.blue2.toLowerCase();
+  if (normal === defaultPrimaria || normal === defaultSecundaria) return fallback;
+
+  return valor;
+}
+
+function assinaturaDocumento(emp = {}, perfil = null) {
+  const p = perfil || perfilVisualEmpresa(emp);
+  const assinaturaAtual = clean(emp.assinatura || "");
+  const nome = clean(emp.nomeFantasia || emp.nome || "");
+
+  if (assinaturaAtual && !/^departamento comercial\b/i.test(assinaturaAtual)) {
+    return assinaturaAtual;
+  }
+
+  const base = nome || "Empresa";
+  const porPerfil = {
+    "varejo-eletrico": `Atendimento comercial - ${base}`,
+    eventos: `Producao e operacoes - ${base}`,
+    orlovic: `Gestao corporativa - ${base}`,
+    consultoria: `Consultoria tecnica - ${base}`,
+    operacional: `Coordenacao operacional - ${base}`,
+    construcao: `Gestao de obras e solucoes - ${base}`,
+    engenharia: `Responsavel tecnico-comercial - ${base}`,
+  };
+
+  return porPerfil[p.tipo] || base;
+}
+
+function rodapeDocumento(emp = {}) {
+  const atual = clean(emp.rodape || "");
+  if (atual) return atual;
+  return [emp.nome, emp.cnpj ? `CNPJ ${emp.cnpj}` : "", emp.email, emp.telefone]
+    .map((p) => clean(p))
+    .filter(Boolean)
+    .join(" | ");
 }
 
 const tsFmt = (iso) => {
@@ -714,6 +830,110 @@ function detectarZonasTimbrado(canvas, alturaPt) {
 
 // Converte o PDF do timbrado em imagem e captura automaticamente:
 // dimensões reais da página (em pontos) e as zonas de cabeçalho/rodapé.
+function rgbToHex(r, g, b) {
+  const toHex = (v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0");
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+function rgbToHsl(r, g, b) {
+  r /= 255;
+  g /= 255;
+  b /= 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  let h = 0;
+  let s = 0;
+  const l = (max + min) / 2;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r:
+        h = (g - b) / d + (g < b ? 6 : 0);
+        break;
+      case g:
+        h = (b - r) / d + 2;
+        break;
+      default:
+        h = (r - g) / d + 4;
+    }
+    h /= 6;
+  }
+  return { h, s, l };
+}
+
+function distanciaCor(a, b) {
+  return Math.sqrt((a.r - b.r) ** 2 + (a.g - b.g) ** 2 + (a.b - b.b) ** 2);
+}
+
+function ajustarCor(rgb, fator = 0.74) {
+  return rgbToHex(rgb.r * fator, rgb.g * fator, rgb.b * fator);
+}
+
+function extrairCoresTimbrado(canvas) {
+  try {
+    const ctx = canvas.getContext("2d");
+    const { width, height } = canvas;
+    const data = ctx.getImageData(0, 0, width, height).data;
+    const stepX = Math.max(1, Math.floor(width / 180));
+    const stepY = Math.max(1, Math.floor(height / 260));
+    const buckets = new Map();
+
+    for (let y = 0; y < height; y += stepY) {
+      for (let x = 0; x < width; x += stepX) {
+        const i = (y * width + x) * 4;
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
+        const a = data[i + 3];
+        if (a < 60) continue;
+
+        const { s, l } = rgbToHsl(r, g, b);
+        const nearWhite = r > 238 && g > 238 && b > 238;
+        const nearBlack = r < 28 && g < 28 && b < 28;
+        const lowSignalGray = s < 0.08 && l > 0.82;
+        if (nearWhite || lowSignalGray || nearBlack) continue;
+
+        const qr = Math.round(r / 24) * 24;
+        const qg = Math.round(g / 24) * 24;
+        const qb = Math.round(b / 24) * 24;
+        const key = `${qr},${qg},${qb}`;
+        const atual = buckets.get(key) || { r: 0, g: 0, b: 0, peso: 0, count: 0 };
+        const peso = 1 + s * 4 + (l > 0.12 && l < 0.86 ? 1 : 0);
+        atual.r += r * peso;
+        atual.g += g * peso;
+        atual.b += b * peso;
+        atual.peso += peso;
+        atual.count += 1;
+        buckets.set(key, atual);
+      }
+    }
+
+    const cores = Array.from(buckets.values())
+      .filter((c) => c.count >= 3)
+      .map((c) => {
+        const rgb = { r: c.r / c.peso, g: c.g / c.peso, b: c.b / c.peso };
+        const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
+        return { ...rgb, score: c.peso * (1 + hsl.s * 2), sat: hsl.s, lum: hsl.l };
+      })
+      .filter((c) => c.lum > 0.08 && c.lum < 0.92)
+      .sort((a, b) => b.score - a.score);
+
+    if (!cores.length) return null;
+
+    const primaria = cores.find((c) => c.sat > 0.16) || cores[0];
+    const secundaria = cores.find((c) => c !== primaria && distanciaCor(c, primaria) > 82) || cores.find((c) => c !== primaria) || null;
+
+    return {
+      primaria: rgbToHex(primaria.r, primaria.g, primaria.b),
+      secundaria: secundaria ? rgbToHex(secundaria.r, secundaria.g, secundaria.b) : ajustarCor(primaria, primaria.lum > 0.45 ? 0.68 : 1.28),
+    };
+  } catch (error) {
+    console.warn("Nao foi possivel extrair cores do timbrado:", error);
+    return null;
+  }
+}
+
 async function pdfParaImagemTimbrado(file) {
   const buffer = await file.arrayBuffer();
 
@@ -741,6 +961,7 @@ async function pdfParaImagemTimbrado(file) {
   await page.render({ canvasContext: ctx, viewport }).promise;
 
   const zonas = detectarZonasTimbrado(canvas, alturaPt);
+  const cores = extrairCoresTimbrado(canvas);
 
   return {
     imagem: canvas.toDataURL("image/png", 1),
@@ -748,6 +969,7 @@ async function pdfParaImagemTimbrado(file) {
     alturaPt,
     altoCabecalho: zonas.altoCabecalho,
     altoRodape: zonas.altoRodape,
+    cores,
   };
 }
 
@@ -779,7 +1001,8 @@ async function imagemParaTimbrado(dataUrl) {
           ctx.fillRect(0, 0, canvas.width, canvas.height);
           ctx.drawImage(im, 0, 0, canvas.width, canvas.height);
           const zonas = detectarZonasTimbrado(canvas, alturaPt);
-          resolve({ imagem: dataUrl, larguraPt, alturaPt, altoCabecalho: zonas.altoCabecalho, altoRodape: zonas.altoRodape });
+          const cores = extrairCoresTimbrado(canvas);
+          resolve({ imagem: dataUrl, larguraPt, alturaPt, altoCabecalho: zonas.altoCabecalho, altoRodape: zonas.altoRodape, cores });
         } catch {
           resolve(fallback);
         }
@@ -1169,7 +1392,7 @@ function useDB() {
       const dados = {};
       await Promise.all(
         BACKUP_KEYS.map(async (key) => {
-          dados[key] = (await store.get(key)) || (key === KEY_META ? {} : []);
+          dados[key] = (await store.get(key)) || (key === KEY_META ? {} : key === KEY_WHATS_RELATORIO ? "" : []);
         })
       );
       dados[KEY_EMP] = empresasRef.current;
@@ -1187,6 +1410,8 @@ function useDB() {
           usuarios: dados[KEY_USERS] || [],
           solicitacoesSenha: dados[KEY_RESET] || [],
           chatIA: dados[KEY_CHAT] || [],
+          clientesCRM: dados[KEY_CLIENTES] || [],
+          whatsRelatorio: typeof dados[KEY_WHATS_RELATORIO] === "string" ? dados[KEY_WHATS_RELATORIO] : "",
           dados,
         }, null, 2)],
         { type: "application/json" }
@@ -1219,6 +1444,12 @@ function useDB() {
         const usersImport = Array.isArray(parsed.usuarios) ? parsed.usuarios : dados[KEY_USERS];
         const resetImport = Array.isArray(parsed.solicitacoesSenha) ? parsed.solicitacoesSenha : dados[KEY_RESET];
         const chatImport = Array.isArray(parsed.chatIA) ? parsed.chatIA : dados[KEY_CHAT];
+        const clientesImport = Array.isArray(parsed.clientesCRM) ? parsed.clientesCRM : dados[KEY_CLIENTES];
+        const whatsRelatorioImport = typeof parsed.whatsRelatorio === "string"
+          ? parsed.whatsRelatorio
+          : typeof dados[KEY_WHATS_RELATORIO] === "string"
+            ? dados[KEY_WHATS_RELATORIO]
+            : "";
 
         const payload = {
           [KEY_EMP]: empresasImport,
@@ -1228,12 +1459,15 @@ function useDB() {
           [KEY_USERS]: Array.isArray(usersImport) ? usersImport : [],
           [KEY_RESET]: Array.isArray(resetImport) ? resetImport : [],
           [KEY_CHAT]: Array.isArray(chatImport) ? chatImport : [],
+          [KEY_CLIENTES]: Array.isArray(clientesImport) ? clientesImport : [],
+          [KEY_WHATS_RELATORIO]: whatsRelatorioImport,
         };
 
         const results = await Promise.all(BACKUP_KEYS.map((key) => store.set(key, payload[key])));
         if (results.every(Boolean)) {
           setEmpresas(payload[KEY_EMP]);
           setMeta(payload[KEY_META]);
+          window.dispatchEvent(new CustomEvent("orcaflow:clientes-imported", { detail: { clientes: payload[KEY_CLIENTES] } }));
           window.dispatchEvent(new CustomEvent("orcaflow:backup-imported", { detail: { crm: payload[KEY_CRM] } }));
           await logOp("IMPORT", `${payload[KEY_EMP].length} empresas / ${payload[KEY_CRM].length} orcamentos`, "batch");
           pushToast(`✓ Backup importado: ${payload[KEY_EMP].length} empresa(s) e ${payload[KEY_CRM].length} orcamento(s)`, "ok");
@@ -1454,9 +1688,11 @@ function ModalEmpresa({ empresa, onSave, onCancel, salvando, pushToast }) {
       set("timbradoAlturaPt", resultado.alturaPt);
       set("altoCabecalho", resultado.altoCabecalho);
       set("altoRodape", resultado.altoRodape);
+      if (resultado.cores?.primaria) set("corPrimaria", resultado.cores.primaria);
+      if (resultado.cores?.secundaria) set("corSecundaria", resultado.cores.secundaria);
 
       pushToast(
-        `Timbrado anexado. Cabeçalho ~${resultado.altoCabecalho}pt e rodapé ~${resultado.altoRodape}pt detectados.`,
+        `Timbrado anexado. Cabeçalho ~${resultado.altoCabecalho}pt, rodapé ~${resultado.altoRodape}pt${resultado.cores?.primaria ? " e cores do timbrado detectadas" : ""}.`,
         "ok"
       );
     } catch (error) {
@@ -1534,7 +1770,9 @@ function ModalEmpresa({ empresa, onSave, onCancel, salvando, pushToast }) {
         put("site", dados.site);
         put("endereco", dados.endereco);
         if (!next.assinatura && dados.assinatura) next.assinatura = dados.assinatura;
-        if (!next.assinatura && (dados.nome || prev.nome)) next.assinatura = `Departamento Comercial · ${dados.nome || prev.nome}`;
+        if (!next.assinatura && (dados.nome || prev.nome)) {
+          next.assinatura = assinaturaDocumento({ ...next, nome: dados.nome || prev.nome });
+        }
         if (!next.rodape && dados.rodape) next.rodape = dados.rodape;
         if (!next.rodape) {
           const parts = [dados.nome || prev.nome, dados.cnpj, dados.email, dados.telefone].filter(Boolean);
@@ -1900,20 +2138,76 @@ function ModalEmpresa({ empresa, onSave, onCancel, salvando, pushToast }) {
   );
 }
 
-function MateriaisTabela({ emp, dados }) {
+function MateriaisTabela({ emp, dados, perfil }) {
   const rows = materialRows(dados);
   if (!rows.length) return null;
 
   const total = materialTotal(rows);
-  const precificacao = dados?.precificacao || {};
-  const cor = emp.corPrimaria || BRAND.green2;
+  const tipo = perfil?.tipo || perfilVisualEmpresa(emp, dados).tipo;
+  const cor = corDocumento(emp, perfil, "primaria");
+  const corSec = corDocumento(emp, perfil, "secundaria");
+
+  if (tipo === "operacional") {
+    return (
+      <div style={{ marginTop: 10 }}>
+        <div style={{ display: "grid", gap: 8 }}>
+          {rows.map((item, i) => (
+            <div key={`${item.descricao}-${i}`} style={{ display: "grid", gridTemplateColumns: "1fr 72px 110px", gap: 10, alignItems: "center", padding: "10px 12px", borderLeft: `5px solid ${cor}`, background: i % 2 === 0 ? "#F8FAFC" : "#FFFFFF", borderBottom: "1px solid #E2E8F0" }}>
+              <div style={{ fontFamily: emp.fonteCorpo, fontSize: Number(emp.tamanhoCorpo) || 12, color: "#000", lineHeight: 1.35 }}>
+                <strong>{String(i + 1).padStart(2, "0")}</strong> - {item.descricao}
+                {item.observacao && <div style={{ fontSize: 9, color: "#475569", marginTop: 2 }}>{item.observacao}</div>}
+              </div>
+              <div style={{ textAlign: "center", color: "#000", fontSize: 10, fontWeight: 800 }}>{item.quantidade || 1} {item.unidade || "un"}</div>
+              <div style={{ textAlign: "right", color: "#000", fontSize: 12, fontWeight: 900 }}>{brl(item.subtotal)}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
+          <div style={{ borderTop: `2px solid ${cor}`, paddingTop: 7, minWidth: 190, textAlign: "right", color: "#000", fontWeight: 950 }}>TOTAL DOS ITENS: {brl(total)}</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (tipo === "consultoria") {
+    return (
+      <div style={{ marginTop: 12, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 620, borderTop: "2px solid #111827", borderBottom: "1px solid #CBD5E1" }}>
+          <thead>
+            <tr>
+              {["DESCRICAO", "QTD", "UN", "VALOR UNIT.", "VALOR FINAL"].map((h, i) => (
+                <th key={h} style={{ padding: "8px 8px", color: "#111827", textAlign: i === 0 ? "left" : "right", fontFamily: "sans-serif", fontSize: 8, letterSpacing: 1.1, fontWeight: 900, borderBottom: "1px solid #CBD5E1" }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((item, i) => (
+              <tr key={`${item.descricao}-${i}`} style={{ borderBottom: "1px solid #E2E8F0" }}>
+                <td style={{ padding: "9px 8px", fontFamily: emp.fonteCorpo, fontSize: Number(emp.tamanhoCorpo) || 12, color: "#000", minWidth: 220 }}>{item.descricao}</td>
+                <td style={{ padding: "9px 8px", textAlign: "right", color: "#000", fontSize: 10 }}>{item.quantidade || 1}</td>
+                <td style={{ padding: "9px 8px", textAlign: "right", color: "#000", fontSize: 10 }}>{item.unidade || "un"}</td>
+                <td style={{ padding: "9px 8px", textAlign: "right", color: "#000", fontSize: 10 }}>{brl(item.valorUnitario)}</td>
+                <td style={{ padding: "9px 8px", textAlign: "right", color: "#000", fontSize: 11, fontWeight: 850 }}>{brl(item.subtotal)}</td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td colSpan={4} style={{ padding: "10px 8px", textAlign: "right", color: "#000", fontSize: 10, fontWeight: 850 }}>Valor consolidado dos itens</td>
+              <td style={{ padding: "10px 8px", textAlign: "right", color: "#000", fontSize: 12, fontWeight: 950 }}>{brl(total)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    );
+  }
 
   return (
     <div style={{ marginTop: 10, overflowX: "auto" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720 }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 620 }}>
         <thead>
           <tr style={{ background: cor }}>
-            {["ITEM", "QTD", "UN", "ORIGINAL", "ACRESC.", "UNITARIO", "SUBTOTAL"].map((h, i) => (
+            {["ITEM", "QTD", "UN", "VALOR UNIT.", "VALOR FINAL"].map((h, i) => (
               <th key={h} style={{ padding: "8px 10px", color: "#fff", textAlign: i === 0 ? "left" : "right", fontFamily: "sans-serif", fontSize: 8, letterSpacing: 1.2, fontWeight: 900 }}>{h}</th>
             ))}
           </tr>
@@ -1927,8 +2221,6 @@ function MateriaisTabela({ emp, dados }) {
               </td>
               <td style={{ padding: "9px 10px", textAlign: "right", color: "#000", fontSize: 11 }}>{item.quantidade || 1}</td>
               <td style={{ padding: "9px 10px", textAlign: "right", color: "#000", fontSize: 11 }}>{item.unidade || "un"}</td>
-              <td style={{ padding: "9px 10px", textAlign: "right", color: "#000", fontSize: 11 }}>{parseValorBR(item.valorOriginal) > 0 ? brl(item.valorOriginal) : "-"}</td>
-              <td style={{ padding: "9px 10px", textAlign: "right", color: "#000", fontSize: 11 }}>{parseValorBR(item.acrescimoPercentual) ? `${Number(item.acrescimoPercentual).toFixed(2)}%` : "-"}</td>
               <td style={{ padding: "9px 10px", textAlign: "right", color: "#000", fontSize: 11 }}>{brl(item.valorUnitario)}</td>
               <td style={{ padding: "9px 10px", textAlign: "right", color: "#000", fontSize: 11, fontWeight: 850 }}>{brl(item.subtotal)}</td>
             </tr>
@@ -1936,8 +2228,8 @@ function MateriaisTabela({ emp, dados }) {
         </tbody>
         <tfoot>
           <tr>
-            <td colSpan={5} style={{ padding: "10px", textAlign: "right", color: "#000", fontSize: 10, fontWeight: 850 }}>
-              {precificacao.criterio ? `Criterio: ${precificacao.criterio.replace(/_/g, " ")}` : "Total da tabela"}
+            <td colSpan={3} style={{ padding: "10px", textAlign: "right", color: "#000", fontSize: 10, fontWeight: 850 }}>
+              Total dos itens
             </td>
             <td style={{ padding: "10px", textAlign: "right", color: "#000", fontSize: 11, fontWeight: 900 }}>TOTAL</td>
             <td style={{ padding: "10px", textAlign: "right", color: "#000", fontSize: 12, fontWeight: 950 }}>{brl(total)}</td>
@@ -1951,12 +2243,14 @@ function MateriaisTabela({ emp, dados }) {
 function OrcamentoDoc({ emp, dados, editando, onChange }) {
   const difs = (emp.diferenciais || "").split(",").map((d) => d.trim()).filter(Boolean);
   const perfil = perfilVisualEmpresa(emp, dados);
+  const cor = corDocumento(emp, perfil, "primaria");
+  const corSec = corDocumento(emp, perfil, "secundaria");
 
   const F = ({ campo, multiline }) => {
     const val = dados.campos?.[campo] || "";
     const base = {
       width: "100%",
-      border: `1.5px dashed ${emp.corPrimaria || BRAND.green2}`,
+      border: `1.5px dashed ${cor}`,
       borderRadius: 6,
       padding: "7px 10px",
       fontFamily: emp.fonteCorpo,
@@ -1980,12 +2274,12 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
       <div key="itens" style={{ marginBottom: 18 }}>
         <span style={secLbl}>{getSectionLabel(dados, "itens")}</span>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead><tr style={{ background: emp.corPrimaria || BRAND.green2 }}><th style={{ padding: "9px 13px", color: "#fff", textAlign: "left", fontFamily: "sans-serif", fontSize: 8, letterSpacing: 1.5, fontWeight: 900 }}>DESCRICAO DA ETAPA / ITEM</th><th style={{ padding: "9px 13px", color: "#fff", textAlign: "center", fontFamily: "sans-serif", fontSize: 8, letterSpacing: 1.5, fontWeight: 900, width: 86 }}>STATUS</th></tr></thead>
+          <thead><tr style={{ background: cor }}><th style={{ padding: "9px 13px", color: "#fff", textAlign: "left", fontFamily: "sans-serif", fontSize: 8, letterSpacing: 1.5, fontWeight: 900 }}>DESCRICAO DA ETAPA / ITEM</th><th style={{ padding: "9px 13px", color: "#fff", textAlign: "center", fontFamily: "sans-serif", fontSize: 8, letterSpacing: 1.5, fontWeight: 900, width: 86 }}>STATUS</th></tr></thead>
           <tbody>
             {dados.itensIA.map((it, i) => (
-              <tr key={i} style={{ background: i % 2 === 0 ? `${emp.corPrimaria || BRAND.green2}0a` : emp.corFundo || "#fff", borderBottom: `1px solid ${emp.corPrimaria || BRAND.green2}18` }}>
+              <tr key={i} style={{ background: i % 2 === 0 ? `${cor}0a` : emp.corFundo || "#fff", borderBottom: `1px solid ${cor}18` }}>
                 <td style={{ padding: "10px 13px", fontFamily: emp.fonteCorpo, fontSize: Number(emp.tamanhoCorpo) || 12, color: "#000000" }}>{it}</td>
-                <td style={{ padding: "10px 13px", textAlign: "center" }}><span style={{ padding: "3px 9px", borderRadius: 12, background: `${emp.corPrimaria || BRAND.green2}18`, color: emp.corSecundaria || BRAND.blue2, fontSize: 8.5, fontWeight: 800 }}>Incluido</span></td>
+                <td style={{ padding: "10px 13px", textAlign: "center" }}><span style={{ padding: "3px 9px", borderRadius: 12, background: `${cor}18`, color: corSec, fontSize: 8.5, fontWeight: 800 }}>Incluido</span></td>
               </tr>
             ))}
           </tbody>
@@ -2005,7 +2299,7 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
         <div key="materiais" style={{ marginBottom: 18 }}>
           <span style={secLbl}>{getSectionLabel(dados, "materiais")}</span>
           {hasText || editando ? <div style={{ lineHeight: 1.85, marginBottom: hasTable ? 10 : 0 }}><F campo="materiais" multiline /></div> : null}
-          <MateriaisTabela emp={emp} dados={dados} />
+          <MateriaisTabela emp={emp} dados={dados} perfil={perfil} />
         </div>
       );
     }
@@ -2017,7 +2311,7 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
     const content = <div style={{ lineHeight: 1.85 }}><F campo={key} multiline /></div>;
     if (key === "fechamento") {
       return (
-        <div key={key} style={{ marginBottom: 22, padding: "13px 15px", borderRadius: 9, background: `${emp.corPrimaria || BRAND.green2}0a`, borderLeft: `4px solid ${emp.corPrimaria || BRAND.green2}` }}>
+        <div key={key} style={{ marginBottom: 22, padding: "13px 15px", borderRadius: 9, background: `${cor}0a`, borderLeft: `4px solid ${cor}` }}>
           <span style={secLbl}>{getSectionLabel(dados, key)}</span>
           <div style={{ fontStyle: "italic" }}>{content}</div>
         </div>
@@ -2044,10 +2338,10 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
           </div>
         </div>
       ) : (
-        <div style={{ background: `linear-gradient(135deg, ${emp.corPrimaria || BRAND.green2}, ${emp.corSecundaria || BRAND.blue2})`, padding: "22px 28px", minHeight: emp.altoCabecalho || 120, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ background: `linear-gradient(135deg, ${cor}, ${corSec})`, padding: "22px 28px", minHeight: emp.altoCabecalho || 120, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
             {emp.logo ? <img src={emp.logo} style={{ maxHeight: 48, maxWidth: 150, objectFit: "contain", display: "block", marginBottom: 6 }} alt="" /> : <div style={{ fontFamily: emp.fonteTitulo, fontSize: Number(emp.tamanhoTitulo) || 24, fontWeight: 900, color: "#fff", marginBottom: 4 }}>{emp.nome}</div>}
-            {emp.assinatura && <div style={{ fontSize: 10.5, color: "rgba(255,255,255,.78)", fontFamily: "sans-serif" }}>{emp.assinatura}</div>}
+            <div style={{ fontSize: 10.5, color: "rgba(255,255,255,.78)", fontFamily: "sans-serif" }}>{assinaturaDocumento(emp, perfil)}</div>
           </div>
           <div style={{ textAlign: "right", background: "rgba(0,0,0,.18)", borderRadius: 10, padding: "11px 16px" }}>
             <div style={{ fontSize: 8, color: "rgba(255,255,255,.65)", letterSpacing: 1.5 }}>{perfil.numeroLabel}</div>
@@ -2058,7 +2352,7 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
       )}
 
       <div style={{ padding: "25px 30px" }}>
-        <div style={{ marginBottom: 18, padding: "12px 15px", background: `${emp.corPrimaria || BRAND.green2}14`, borderRadius: 9, borderLeft: `4px solid ${emp.corPrimaria || BRAND.green2}` }}>
+        <div style={{ marginBottom: 18, padding: "12px 15px", background: `${cor}14`, borderRadius: 9, borderLeft: `4px solid ${cor}` }}>
           <span style={secLbl}>{perfil.clienteLabel}</span>
           <div style={{ fontFamily: emp.fonteCorpo, fontSize: (Number(emp.tamanhoCorpo) || 12) + 1, fontWeight: 800, color: "#000000" }}><F campo="cliente" /></div>
         </div>
@@ -2069,29 +2363,29 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
           </div>
         )}
 
-        {getSectionOrder(dados).map(renderSection)}
+        {getSectionOrder(dados, perfil).map(renderSection)}
 
         <div style={{ marginBottom: 18, display: "flex", justifyContent: "flex-end" }}>
-          <div style={{ background: `linear-gradient(135deg, ${emp.corPrimaria || BRAND.green2}, ${emp.corSecundaria || BRAND.blue2})`, borderRadius: 11, padding: "15px 23px", color: "#fff", textAlign: "right", minWidth: 210 }}>
+          <div style={{ background: `linear-gradient(135deg, ${cor}, ${corSec})`, borderRadius: 11, padding: "15px 23px", color: "#fff", textAlign: "right", minWidth: 210 }}>
             <div style={{ fontSize: 8, opacity: 0.82, letterSpacing: 2, marginBottom: 4 }}>{perfil.valorLabel}</div>
             <div style={{ fontFamily: emp.fonteTitulo, fontSize: Math.round((Number(emp.tamanhoTitulo) || 24) * 0.82), fontWeight: 950 }}>{brl(dados.valorGlobal)}</div>
           </div>
         </div>
 
-        {difs.length > 0 && <div style={{ marginBottom: 18 }}><span style={secLbl}>DIFERENCIAIS</span><div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>{difs.map((d, i) => <span key={i} style={{ padding: "5px 12px", background: `${emp.corPrimaria || BRAND.green2}12`, border: `1px solid ${emp.corPrimaria || BRAND.green2}30`, borderRadius: 20, fontSize: 10, color: emp.corSecundaria || BRAND.blue2, fontWeight: 800 }}>{d}</span>)}</div></div>}
+        {difs.length > 0 && <div style={{ marginBottom: 18 }}><span style={secLbl}>DIFERENCIAIS</span><div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>{difs.map((d, i) => <span key={i} style={{ padding: "5px 12px", background: `${cor}12`, border: `1px solid ${cor}30`, borderRadius: 20, fontSize: 10, color: corSec, fontWeight: 800 }}>{d}</span>)}</div></div>}
 
-        {perfil.assinatura !== "fornecedor-compacto" && <div style={{ borderTop: `2px solid ${emp.corPrimaria || BRAND.green2}`, paddingTop: 16, display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
+        {perfil.assinatura !== "fornecedor-compacto" && <div style={{ borderTop: `2px solid ${cor}`, paddingTop: 16, display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
           <div>
-            <div style={{ width: 170, borderBottom: `1px solid ${emp.corPrimaria || BRAND.green2}44`, marginBottom: 7 }} />
-            <div style={{ fontFamily: emp.fonteCorpo, fontSize: (Number(emp.tamanhoCorpo) || 12) - 1, fontWeight: 800, color: "#000000" }}>{emp.assinatura || emp.nome}</div>
+            <div style={{ width: 170, borderBottom: `1px solid ${cor}44`, marginBottom: 7 }} />
+            <div style={{ fontFamily: emp.fonteCorpo, fontSize: (Number(emp.tamanhoCorpo) || 12) - 1, fontWeight: 800, color: "#000000", overflowWrap: "anywhere" }}>{assinaturaDocumento(emp, perfil)}</div>
             
           </div>
           {emp.logo && <img src={emp.logo} style={{ maxHeight: 36, maxWidth: 110, objectFit: "contain", opacity: 0.18 }} alt="" />}
         </div>}
       </div>
 
-      <div style={{ background: emp.papelTimbrado ? `${emp.corPrimaria || BRAND.green2}14` : "#0F172A", borderTop: `1px solid ${emp.corPrimaria || BRAND.green2}22`, padding: "9px 28px", textAlign: "center" }}>
-        <div style={{ fontFamily: emp.fonteCorpo, fontSize: 9.5, color: emp.papelTimbrado ? "#475569" : "#94A3B8", overflowWrap: "anywhere", lineHeight: 1.45 }}>{emp.rodape || `${emp.nome}${emp.cnpj ? ` | ${emp.cnpj}` : ""}${emp.email ? ` | ${emp.email}` : ""}${emp.telefone ? ` | ${emp.telefone}` : ""}`}</div>
+      <div style={{ background: emp.papelTimbrado ? `${cor}14` : "#0F172A", borderTop: `1px solid ${cor}22`, padding: "9px 28px", textAlign: "center" }}>
+        <div style={{ fontFamily: emp.fonteCorpo, fontSize: 9.5, color: emp.papelTimbrado ? "#475569" : "#94A3B8", overflowWrap: "anywhere", lineHeight: 1.45 }}>{rodapeDocumento(emp)}</div>
       </div>
     </div>
   );
@@ -2100,7 +2394,7 @@ function textoCurto(valor, limite = 900) {
   return clean(valor || "").slice(0, limite);
 }
 
-function contextoCompactoChat(empresas = [], crm = []) {
+function contextoCompactoChat(empresas = [], crm = [], clientes = []) {
   return {
     empresas: (Array.isArray(empresas) ? empresas : []).slice(0, 24).map((emp) => ({
       nome: emp?.nome || "",
@@ -2133,6 +2427,29 @@ function contextoCompactoChat(empresas = [], crm = []) {
         })),
       };
     }),
+    clientesCRM: (Array.isArray(clientes) ? clientes : []).slice(0, 30).map((cliente) => {
+      const contatos = Array.isArray(cliente?.contatos) ? cliente.contatos : [];
+      return {
+        nome: cliente?.nome || "",
+        empresa: cliente?.empresa || "",
+        cargo: cliente?.cargo || "",
+        decisor: cliente?.decisor || "",
+        segmento: cliente?.segmento || "",
+        status: cliente?.status || "",
+        temperatura: cliente?.temperatura || "",
+        proximoContato: cliente?.proximoContato || "",
+        valorPotencial: cliente?.valorPotencial || "",
+        proximoPasso: textoCurto(cliente?.proximoPasso, 500),
+        lembreteNara: textoCurto(cliente?.lembreteJade, 500),
+        historicoRecente: contatos.slice(0, 4).map((msg) => ({
+          canal: msg?.canal || "",
+          direcao: msg?.direcao || "",
+          tipo: msg?.tipo || "",
+          mensagem: textoCurto(msg?.mensagem || msg?.arquivoResumo, 500),
+          criadoEm: msg?.criadoEm || "",
+        })),
+      };
+    }),
   };
 }
 
@@ -2158,7 +2475,7 @@ function empresasCompactasParaGeracao(empresas = [], selecao = []) {
     }));
 }
 
-function ChatIAPanel({ empresas = [], crm = [], pushToast }) {
+function ChatIAPanel({ empresas = [], crm = [], clientes = [], pushToast }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [mode, setMode] = useState("geral");
@@ -2235,7 +2552,7 @@ function ChatIAPanel({ empresas = [], crm = [], pushToast }) {
         body: JSON.stringify({
           mode,
           messages: base.slice(-12).map((msg) => ({ role: msg.role, content: textoCurto(msg.content, 3000) })),
-          context: contextoCompactoChat(empresas, crm),
+          context: contextoCompactoChat(empresas, crm, clientes),
         }),
       });
 
@@ -2304,8 +2621,8 @@ function ChatIAPanel({ empresas = [], crm = [], pushToast }) {
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", padding: "18px 16px", maxWidth: 1180, width: "100%", margin: "0 auto", boxSizing: "border-box" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
         <div>
-          <div style={{ fontSize: 18, fontWeight: 950, color: BRAND.text }}>Chat IA Comercial</div>
-          <div style={{ fontSize: 12, color: BRAND.dim, marginTop: 3 }}>E-mails, cobrancas, respostas, follow-up e apoio para orcamentos.</div>
+          <div style={{ fontSize: 18, fontWeight: 950, color: BRAND.text }}>Nara - IA Comercial</div>
+          <div style={{ fontSize: 12, color: BRAND.dim, marginTop: 3 }}>E-mails, cobrancas, respostas, follow-up e estrategia para orcamentos.</div>
         </div>
         <button onClick={limpar} disabled={!messages.length || loading} title="Limpar historico" style={{ display: "flex", alignItems: "center", gap: 7, padding: "8px 12px", borderRadius: 9, border: `1px solid ${BRAND.danger}40`, background: "transparent", color: messages.length ? BRAND.danger : BRAND.dim, cursor: messages.length && !loading ? "pointer" : "not-allowed", fontWeight: 850 }}>
           <Trash2 size={15} /> Limpar
@@ -2332,7 +2649,7 @@ function ChatIAPanel({ empresas = [], crm = [], pushToast }) {
           <div style={{ height: "100%", minHeight: 260, display: "grid", placeItems: "center", textAlign: "center", color: BRAND.dim }}>
             <div>
               <Bot size={36} style={{ opacity: 0.45, marginBottom: 10 }} />
-              <div style={{ fontSize: 15, fontWeight: 900, color: BRAND.muted, marginBottom: 6 }}>Pronto para escrever com voce</div>
+              <div style={{ fontSize: 15, fontWeight: 900, color: BRAND.muted, marginBottom: 6 }}>Nara pronta para escrever com voce</div>
               <div style={{ fontSize: 12, lineHeight: 1.6, maxWidth: 520 }}>Selecione um atalho ou digite diretamente o que precisa gerar.</div>
             </div>
           </div>
@@ -2340,7 +2657,7 @@ function ChatIAPanel({ empresas = [], crm = [], pushToast }) {
         {messages.map(bubble)}
         {loading && (
           <div style={{ display: "flex", justifyContent: "flex-start", marginBottom: 12 }}>
-            <div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 14, padding: "12px 14px", color: BRAND.muted, fontSize: 13 }}>IA escrevendo...</div>
+            <div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 14, padding: "12px 14px", color: BRAND.muted, fontSize: 13 }}>Nara escrevendo...</div>
           </div>
         )}
         <div ref={endRef} />
@@ -2454,7 +2771,7 @@ function DashboardPanel({ crm, empresas, meta, usuarioAtual, setView }) {
               </div>
             ))}
           </div>
-          <button onClick={() => setView("crm")} style={{ marginTop: 14, width: "100%", padding: "10px 14px", borderRadius: 12, border: `1px solid ${BRAND.blue2}66`, background: `${BRAND.blue2}18`, color: "#93C5FD", fontWeight: 900, cursor: "pointer" }}>Abrir CRM</button>
+          <button onClick={() => setView("clientes")} style={{ marginTop: 14, width: "100%", padding: "10px 14px", borderRadius: 12, border: `1px solid ${BRAND.blue2}66`, background: `${BRAND.blue2}18`, color: "#93C5FD", fontWeight: 900, cursor: "pointer" }}>Abrir CRM</button>
         </div>
       </div>
 
@@ -2895,6 +3212,17 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
   const isAdmin = usuarioAtual?.tipo === "admin";
   const base = isAdmin ? crm : crm.filter((o) => o.userId === usuarioAtual?.id);
 
+  useEffect(() => {
+    let ativo = true;
+    (async () => {
+      const salvo = await store.get(KEY_WHATS_RELATORIO);
+      if (ativo && typeof salvo === "string" && salvo.trim()) setWhats(salvo);
+    })();
+    return () => {
+      ativo = false;
+    };
+  }, []);
+
   const draftConversa = (id) => conversaDrafts[id] || {
     canal: "WhatsApp",
     direcao: "saida",
@@ -3305,6 +3633,34 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
     pushToast("IA gerou lembretes para os orçamentos pendentes.", "ok");
   };
 
+  const normalizarWhatsRelatorio = (valor) => {
+    const numero = onlyDigits(valor);
+    if (!numero) return "";
+    return numero.startsWith("55") ? numero : `55${numero}`;
+  };
+
+  const abrirWhats = (listaRelatorio = base) => {
+    let numero = normalizarWhatsRelatorio(whats);
+
+    if (!numero || numero.length < 12) {
+      const informado = window.prompt("Qual WhatsApp deve receber o resumo da Nara? Informe DDD + numero.", whats || "");
+      numero = normalizarWhatsRelatorio(informado || "");
+    }
+
+    if (!numero || numero.length < 12) {
+      pushToast("Informe um WhatsApp valido com DDD para receber o relatorio.", "erro");
+      return false;
+    }
+
+    setWhats(numero);
+    store.set(KEY_WHATS_RELATORIO, numero);
+
+    const msg = gerarTextoWhatsPendencias(listaRelatorio, empresas);
+    window.open(`https://wa.me/${numero}?text=${encodeURIComponent(msg)}`, "_blank", "noopener,noreferrer");
+    pushToast("Relatorio de atencao aberto no WhatsApp.", "ok");
+    return true;
+  };
+
   const notificarPendentes = async () => {
     const hoje = new Date().toISOString().slice(0, 10);
     const pendentesHoje = base.filter((o) => !isFinalizadoOrcamento(o) && (!o.proximoContato || o.proximoContato <= hoje));
@@ -3313,6 +3669,9 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
       pushToast("Não há cobranças pendentes para hoje.", "aviso");
       return;
     }
+
+    const abriuWhats = abrirWhats(pendentesHoje);
+    if (!abriuWhats) return;
 
     if ("Notification" in window) {
       const permissao = await Notification.requestPermission();
@@ -3324,18 +3683,6 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
     }
 
     pushToast(`${pendentesHoje.length} orçamento(s) pendente(s) para acompanhar.`, "ok");
-  };
-
-  const abrirWhats = () => {
-    const numero = onlyDigits(whats);
-
-    if (!numero || numero.length < 10) {
-      pushToast("Informe o WhatsApp com DDD para enviar o relatório.", "erro");
-      return;
-    }
-
-    const msg = gerarTextoWhatsPendencias(base, empresas);
-    window.open(`https://wa.me/55${numero.replace(/^55/, "")}?text=${encodeURIComponent(msg)}`, "_blank");
   };
 
   return (
@@ -3847,15 +4194,18 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
       </div>
 
       <div style={{ ...painelGestao, marginTop: 16 }}>
-        <div style={{ fontSize: 14, fontWeight: 950, marginBottom: 6 }}>Relatório para WhatsApp</div>
+        <div style={{ fontSize: 14, fontWeight: 950, marginBottom: 6 }}>Resumo de atenção no WhatsApp</div>
         <div style={{ fontSize: 12, color: BRAND.dim, marginBottom: 10 }}>
-          O navegador não envia WhatsApp agendado sozinho. Este botão abre o WhatsApp com o relatório pronto. Para envio automático programado, será necessário backend com API oficial da Meta/WhatsApp.
+          Informe o WhatsApp que deve receber o resumo da Nara. O número fica salvo e o botão Notificar pendentes abre a mensagem pronta com os orçamentos que precisam de atenção.
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <input value={whats} onChange={(e) => setWhats(e.target.value)} placeholder="DDD + número do WhatsApp do usuário" style={{ ...inputGestao, flex: 1 }} />
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <input value={whats} onChange={(e) => setWhats(e.target.value)} placeholder="Ex: 16999998888" style={{ ...inputGestao, flex: "1 1 240px" }} />
           <button onClick={abrirWhats} className="of-neon-btn" style={{ padding: "10px 16px", borderRadius: 12, cursor: "pointer" }}>
-            Enviar relatório
+            Salvar e enviar resumo
           </button>
+        </div>
+        <div style={{ fontSize: 11, color: BRAND.dim, marginTop: 8 }}>
+          Para envio automatico sem abrir o WhatsApp, sera necessario integrar a API oficial do WhatsApp Business.
         </div>
       </div>
     </div>
@@ -4261,6 +4611,7 @@ export default function App() {
   const refImport = useRef(null);
 
   const [crm, setCrm] = useState([]);
+  const [clientesCRM, setClientesCRM] = useState([]);
   const [usuarios, setUsuarios] = useState([]);
   const [usuarioAtual, setUsuarioAtual] = useState(null);
   const [acessoPerfil, setAcessoPerfil] = useState(null);
@@ -4269,9 +4620,18 @@ export default function App() {
     const onBackupImported = (event) => {
       const detail = event.detail || {};
       if (Array.isArray(detail.crm)) setCrm(detail.crm);
+      if (Array.isArray(detail.clientes)) setClientesCRM(detail.clientes);
+    };
+    const onClientesImported = (event) => {
+      const detail = event.detail || {};
+      if (Array.isArray(detail.clientes)) setClientesCRM(detail.clientes);
     };
     window.addEventListener("orcaflow:backup-imported", onBackupImported);
-    return () => window.removeEventListener("orcaflow:backup-imported", onBackupImported);
+    window.addEventListener("orcaflow:clientes-imported", onClientesImported);
+    return () => {
+      window.removeEventListener("orcaflow:backup-imported", onBackupImported);
+      window.removeEventListener("orcaflow:clientes-imported", onClientesImported);
+    };
   }, []);
 
   useEffect(() => {
@@ -4280,6 +4640,7 @@ export default function App() {
         setAutenticado(false);
         setUsuarioAtual(null);
         setAcessoPerfil(null);
+        setClientesCRM([]);
         return;
       }
 
@@ -4315,8 +4676,9 @@ export default function App() {
         ativo: true,
       });
       setAutenticado(true);
-      await store.migrate([KEY_EMP, KEY_LOG, KEY_META, KEY_CRM, KEY_CHAT]);
+      await store.migrate([KEY_EMP, KEY_LOG, KEY_META, KEY_CRM, KEY_CHAT, KEY_CLIENTES, KEY_WHATS_RELATORIO]);
       setCrm((await store.get(KEY_CRM)) || []);
+      setClientesCRM((await store.get(KEY_CLIENTES)) || []);
     };
 
     supabase.auth.getSession().then(({ data }) => applyUser(data.session?.user || null));
@@ -4699,7 +5061,6 @@ export default function App() {
     }
 
     try {
-      const { jsPDF } = await import("jspdf");
 
       // Quando há timbrado, a PÁGINA do PDF é criada com as MESMAS dimensões
       // do arquivo enviado. Assim o timbrado entra inteiro (sem corte e sem
@@ -4717,6 +5078,8 @@ export default function App() {
       const pageH = pdf.internal.pageSize.getHeight();
 
       const perfil = perfilVisualEmpresa(emp, dados);
+      const corPrimariaDoc = corDocumento(emp, perfil, "primaria");
+      const corSecundariaDoc = corDocumento(emp, perfil, "secundaria");
       const titleFont = mapPdfFont(emp.fonteTitulo);
       const bodyFont = mapPdfFont(emp.fonteCorpo);
       const titleSize = Number(emp.tamanhoTitulo) || 14;
@@ -4818,10 +5181,29 @@ export default function App() {
         ensure(70);
         if (String(titulo || "").trim()) {
           pdf.setFont("helvetica", "bold");
-          pdf.setFontSize(10);
+          pdf.setFontSize(perfil.tipo === "consultoria" ? 9 : perfil.tipo === "operacional" ? 9.5 : 10);
           pdf.setTextColor(0, 0, 0);
-          pdf.text(String(titulo).toUpperCase(), marginX, y);
-          y += 18;
+          if (perfil.tipo === "consultoria") {
+            pdf.text(String(titulo).toUpperCase(), marginX, y);
+            pdf.setDrawColor(17, 24, 39);
+            pdf.setLineWidth(0.35);
+            pdf.line(marginX, y + 5, marginX + maxW * 0.38, y + 5);
+            y += 20;
+          } else if (perfil.tipo === "operacional") {
+            const [sr, sg, sb] = hexToRgb(corPrimariaDoc);
+            pdf.setFillColor(sr, sg, sb);
+            pdf.rect(marginX, y - 8, 4, 13, "F");
+            pdf.text(String(titulo).toUpperCase(), marginX + 10, y);
+            y += 18;
+          } else if (perfil.tipo === "varejo-eletrico") {
+            pdf.setFont(titleFont, "bold");
+            pdf.setFontSize(10.5);
+            pdf.text(String(titulo).toUpperCase(), marginX, y);
+            y += 17;
+          } else {
+            pdf.text(String(titulo).toUpperCase(), marginX, y);
+            y += 18;
+          }
         }
 
         pdf.setFont(bodyFont, "normal");
@@ -4848,11 +5230,7 @@ export default function App() {
         pdf.text(getSectionLabel(dados, "materiais"), marginX, y);
         y += 16;
 
-        const [r, g, b] = hexToRgb(emp.corPrimaria || BRAND.green2);
-        const widths = [180, 34, 30, 66, 48, 64, maxW - 422];
-        const labels = ["ITEM", "QTD", "UN", "ORIGINAL", "ACRESC.", "UNIT.", "SUBTOTAL"];
-        const aligns = ["left", "right", "right", "right", "right", "right", "right"];
-
+        const [r, g, b] = hexToRgb(corPrimariaDoc);
         const drawText = (text, x, width, lineY, align = "left", size = 7.5) => {
           pdf.setFontSize(size);
           const lines = pdf.splitTextToSize(String(text || ""), width - 6);
@@ -4861,8 +5239,350 @@ export default function App() {
           return lines.length;
         };
 
+        if (perfil.tipo === "operacional") {
+          pdf.setFont("helvetica", "bold");
+          pdf.setFontSize(7);
+          pdf.setTextColor(r, g, b);
+          pdf.text("ITEM / EXECUCAO", marginX + 8, y);
+          pdf.text("QTD", marginX + maxW - 172, y, { align: "right" });
+          pdf.text("VALOR FINAL", marginX + maxW, y, { align: "right" });
+          y += 8;
+
+          rows.forEach((item, index) => {
+            const descW = maxW - 188;
+            const descLines = pdf.splitTextToSize(String(item.descricao || ""), descW);
+            const rowHeight = Math.max(30, descLines.length * 9 + (item.observacao ? 14 : 8));
+            ensure(rowHeight + 10);
+
+            pdf.setFillColor(index % 2 === 0 ? 248 : 255, index % 2 === 0 ? 250 : 255, index % 2 === 0 ? 252 : 255);
+            pdf.rect(marginX, y, maxW, rowHeight, "F");
+            pdf.setFillColor(r, g, b);
+            pdf.rect(marginX, y, 4, rowHeight, "F");
+            pdf.setDrawColor(226, 232, 240);
+            pdf.line(marginX, y + rowHeight, marginX + maxW, y + rowHeight);
+
+            pdf.setTextColor(0, 0, 0);
+            pdf.setFont(bodyFont, "bold");
+            pdf.setFontSize(7.5);
+            pdf.text(String(index + 1).padStart(2, "0"), marginX + 10, y + 13);
+            pdf.setFont(bodyFont, "normal");
+            pdf.text(descLines, marginX + 30, y + 13);
+
+            if (item.observacao) {
+              pdf.setFontSize(6.8);
+              pdf.setTextColor(70, 85, 105);
+              pdf.text(pdf.splitTextToSize(String(item.observacao), descW), marginX + 30, y + 13 + descLines.length * 9);
+            }
+
+            pdf.setFont("helvetica", "bold");
+            pdf.setFontSize(7.2);
+            pdf.setTextColor(0, 0, 0);
+            pdf.text(`${item.quantidade || 1} ${item.unidade || "un"}`, marginX + maxW - 156, y + 14, { align: "right" });
+            pdf.text(brl(item.subtotal), marginX + maxW, y + 14, { align: "right" });
+            y += rowHeight;
+          });
+
+          ensure(24);
+          pdf.setDrawColor(r, g, b);
+          pdf.setLineWidth(0.8);
+          pdf.line(marginX + maxW - 210, y + 6, marginX + maxW, y + 6);
+          pdf.setFont("helvetica", "bold");
+          pdf.setFontSize(8.5);
+          pdf.setTextColor(0, 0, 0);
+          pdf.text("TOTAL DOS ITENS", marginX + maxW - 92, y + 20, { align: "right" });
+          pdf.text(brl(materialTotal(rows)), marginX + maxW, y + 20, { align: "right" });
+          y += 34;
+          return;
+        }
+
+        if (perfil.tipo === "consultoria") {
+          const widths = [maxW - 208, 34, 30, 64, 80];
+          const labels = ["DESCRICAO", "QTD", "UN", "VALOR UNIT.", "VALOR FINAL"];
+          const aligns = ["left", "right", "right", "right", "right"];
+
+          ensure(24);
+          pdf.setDrawColor(17, 24, 39);
+          pdf.setLineWidth(0.8);
+          pdf.line(marginX, y, marginX + maxW, y);
+          y += 13;
+          pdf.setFont("helvetica", "bold");
+          pdf.setTextColor(17, 24, 39);
+          let x = marginX;
+          labels.forEach((label, i) => {
+            drawText(label, x, widths[i], y, aligns[i], 6.8);
+            x += widths[i];
+          });
+          y += 10;
+          pdf.setDrawColor(203, 213, 225);
+          pdf.line(marginX, y, marginX + maxW, y);
+
+          rows.forEach((item) => {
+            const descLines = pdf.splitTextToSize(String(item.descricao || ""), widths[0] - 6);
+            const rowHeight = Math.max(22, descLines.length * 9 + 7);
+            ensure(rowHeight + 8);
+            y += 2;
+
+            pdf.setTextColor(0, 0, 0);
+            x = marginX;
+            pdf.setFont(bodyFont, "normal");
+            pdf.setFontSize(7.4);
+            pdf.text(descLines, x + 3, y + 11);
+            x += widths[0];
+            drawText(item.quantidade || 1, x, widths[1], y + 11, "right", 7.1); x += widths[1];
+            drawText(item.unidade || "un", x, widths[2], y + 11, "right", 7.1); x += widths[2];
+            drawText(brl(item.valorUnitario), x, widths[3], y + 11, "right", 7.1); x += widths[3];
+            pdf.setFont(bodyFont, "bold");
+            drawText(brl(item.subtotal), x, widths[4], y + 11, "right", 7.1);
+
+            y += rowHeight;
+            pdf.setDrawColor(226, 232, 240);
+            pdf.line(marginX, y, marginX + maxW, y);
+          });
+
+          ensure(24);
+          y += 4;
+          pdf.setFont("helvetica", "bold");
+          pdf.setFontSize(8.2);
+          pdf.setTextColor(0, 0, 0);
+          pdf.text("VALOR CONSOLIDADO DOS ITENS", marginX + maxW - 105, y + 14, { align: "right" });
+          pdf.text(brl(materialTotal(rows)), marginX + maxW, y + 14, { align: "right" });
+          y += 34;
+          return;
+        }
+
+        if (perfil.tipo === "varejo-eletrico") {
+          const widths = [maxW - 164, 36, 34, 94];
+          ensure(30);
+          pdf.setDrawColor(17, 24, 39);
+          pdf.setLineWidth(1.2);
+          pdf.line(marginX, y, marginX + maxW, y);
+          y += 13;
+          pdf.setFont("helvetica", "bold");
+          pdf.setTextColor(17, 24, 39);
+          ["PRODUTO / MATERIAL", "QTD", "UN", "TOTAL FINAL"].forEach((label, i) => {
+            const x = marginX + widths.slice(0, i).reduce((acc, w) => acc + w, 0);
+            drawText(label, x, widths[i], y, i === 0 ? "left" : "right", 7.2);
+          });
+          y += 10;
+          pdf.setDrawColor(17, 24, 39);
+          pdf.line(marginX, y, marginX + maxW, y);
+
+          rows.forEach((item, index) => {
+            const descLines = pdf.splitTextToSize(String(item.descricao || ""), widths[0] - 28);
+            const rowHeight = Math.max(24, descLines.length * 9 + 8);
+            ensure(rowHeight + 8);
+            y += 2;
+            pdf.setFont(bodyFont, "bold");
+            pdf.setFontSize(6.8);
+            pdf.setTextColor(100, 116, 139);
+            pdf.text(String(index + 1).padStart(3, "0"), marginX + 3, y + 11);
+            pdf.setFont(bodyFont, "normal");
+            pdf.setFontSize(7.6);
+            pdf.setTextColor(0, 0, 0);
+            pdf.text(descLines, marginX + 24, y + 11);
+            let x = marginX + widths[0];
+            drawText(item.quantidade || 1, x, widths[1], y + 11, "right", 7.3); x += widths[1];
+            drawText(item.unidade || "un", x, widths[2], y + 11, "right", 7.3); x += widths[2];
+            pdf.setFont(bodyFont, "bold");
+            drawText(brl(item.subtotal), x, widths[3], y + 11, "right", 7.6);
+            y += rowHeight;
+            pdf.setDrawColor(226, 232, 240);
+            pdf.line(marginX, y, marginX + maxW, y);
+          });
+
+          ensure(24);
+          y += 6;
+          pdf.setDrawColor(17, 24, 39);
+          pdf.setLineWidth(0.9);
+          pdf.line(marginX + maxW - 210, y, marginX + maxW, y);
+          pdf.setFont("helvetica", "bold");
+          pdf.setFontSize(8.8);
+          pdf.text("TOTAL DA COTACAO", marginX + maxW - 92, y + 16, { align: "right" });
+          pdf.text(brl(materialTotal(rows)), marginX + maxW, y + 16, { align: "right" });
+          y += 34;
+          return;
+        }
+
+        if (perfil.tipo === "eventos") {
+          const [er, eg, eb] = hexToRgb(corPrimariaDoc);
+          rows.forEach((item, index) => {
+            const descLines = pdf.splitTextToSize(String(item.descricao || ""), maxW - 170);
+            const rowHeight = Math.max(34, descLines.length * 9 + 14);
+            ensure(rowHeight + 10);
+            pdf.setFillColor(index % 2 === 0 ? 255 : 254, index % 2 === 0 ? 247 : 242, index % 2 === 0 ? 237 : 242);
+            pdf.rect(marginX, y, maxW, rowHeight, "F");
+            pdf.setDrawColor(er, eg, eb);
+            pdf.setLineWidth(0.45);
+            pdf.rect(marginX, y, maxW, rowHeight);
+            pdf.setFillColor(er, eg, eb);
+            pdf.rect(marginX, y, 32, rowHeight, "F");
+            pdf.setFont("helvetica", "bold");
+            pdf.setFontSize(8);
+            pdf.setTextColor(255, 255, 255);
+            pdf.text(String(index + 1).padStart(2, "0"), marginX + 16, y + 20, { align: "center" });
+            pdf.setFont(bodyFont, "normal");
+            pdf.setFontSize(7.8);
+            pdf.setTextColor(0, 0, 0);
+            pdf.text(descLines, marginX + 44, y + 13);
+            pdf.setFont("helvetica", "bold");
+            pdf.setFontSize(7.2);
+            pdf.text(`${item.quantidade || 1} ${item.unidade || "un"}`, marginX + maxW - 104, y + 13, { align: "right" });
+            pdf.setFontSize(8.1);
+            pdf.text(brl(item.subtotal), marginX + maxW - 10, y + 13, { align: "right" });
+            y += rowHeight + 7;
+          });
+
+          ensure(24);
+          pdf.setFont("helvetica", "bold");
+          pdf.setFontSize(8.6);
+          pdf.setTextColor(er, eg, eb);
+          pdf.text("VALOR DO ATENDIMENTO", marginX + maxW - 104, y + 12, { align: "right" });
+          pdf.setTextColor(0, 0, 0);
+          pdf.text(brl(materialTotal(rows)), marginX + maxW, y + 12, { align: "right" });
+          y += 32;
+          return;
+        }
+
+        if (perfil.tipo === "orlovic") {
+          const widths = [42, maxW - 206, 42, 42, 80];
+          const labels = ["ITEM", "ESCOPO", "QTD", "UN", "VALOR"];
+          ensure(26);
+          pdf.setFont("helvetica", "bold");
+          pdf.setFontSize(7.2);
+          pdf.setTextColor(55, 65, 81);
+          pdf.setDrawColor(148, 163, 184);
+          pdf.rect(marginX, y, maxW, 19);
+          let x = marginX;
+          labels.forEach((label, i) => {
+            drawText(label, x, widths[i], y + 12, i <= 1 ? "left" : "right", 6.8);
+            if (i < labels.length - 1) pdf.line(x + widths[i], y, x + widths[i], y + 19);
+            x += widths[i];
+          });
+          y += 19;
+
+          rows.forEach((item, index) => {
+            const descLines = pdf.splitTextToSize(String(item.descricao || ""), widths[1] - 8);
+            const rowHeight = Math.max(24, descLines.length * 9 + 8);
+            ensure(rowHeight + 8);
+            x = marginX;
+            pdf.setDrawColor(226, 232, 240);
+            pdf.rect(marginX, y, maxW, rowHeight);
+            pdf.setFont(bodyFont, "bold");
+            pdf.setFontSize(7.3);
+            pdf.setTextColor(0, 0, 0);
+            drawText(String(index + 1).padStart(2, "0"), x, widths[0], y + 12, "left", 7.2); x += widths[0];
+            pdf.setFont(bodyFont, "normal");
+            pdf.text(descLines, x + 3, y + 12); x += widths[1];
+            drawText(item.quantidade || 1, x, widths[2], y + 12, "right", 7.2); x += widths[2];
+            drawText(item.unidade || "un", x, widths[3], y + 12, "right", 7.2); x += widths[3];
+            pdf.setFont(bodyFont, "bold");
+            drawText(brl(item.subtotal), x, widths[4], y + 12, "right", 7.2);
+            y += rowHeight;
+          });
+
+          ensure(24);
+          pdf.setFont("helvetica", "bold");
+          pdf.setFontSize(8.2);
+          pdf.text("INVESTIMENTO DOS ITENS", marginX + maxW - 112, y + 15, { align: "right" });
+          pdf.text(brl(materialTotal(rows)), marginX + maxW, y + 15, { align: "right" });
+          y += 34;
+          return;
+        }
+
+        if (perfil.tipo === "construcao") {
+          rows.forEach((item, index) => {
+            const descLines = pdf.splitTextToSize(String(item.descricao || ""), maxW - 146);
+            const rowHeight = Math.max(30, descLines.length * 9 + 12);
+            ensure(rowHeight + 8);
+            pdf.setFillColor(255, 251, 235);
+            pdf.rect(marginX, y, maxW, rowHeight, "F");
+            pdf.setDrawColor(245, 158, 11);
+            pdf.setLineWidth(0.35);
+            pdf.line(marginX, y, marginX + maxW, y);
+            pdf.setFont("helvetica", "bold");
+            pdf.setFontSize(7);
+            pdf.setTextColor(146, 64, 14);
+            pdf.text(`ETAPA ${String(index + 1).padStart(2, "0")}`, marginX + 8, y + 13);
+            pdf.setFont(bodyFont, "normal");
+            pdf.setFontSize(7.7);
+            pdf.setTextColor(0, 0, 0);
+            pdf.text(descLines, marginX + 80, y + 13);
+            pdf.setFont("helvetica", "bold");
+            pdf.setFontSize(7.5);
+            pdf.text(brl(item.subtotal), marginX + maxW - 8, y + 13, { align: "right" });
+            y += rowHeight + 5;
+          });
+
+          ensure(24);
+          pdf.setFont("helvetica", "bold");
+          pdf.setFontSize(8.5);
+          pdf.setTextColor(0, 0, 0);
+          pdf.text("INVESTIMENTO CONSOLIDADO", marginX + maxW - 116, y + 14, { align: "right" });
+          pdf.text(brl(materialTotal(rows)), marginX + maxW, y + 14, { align: "right" });
+          y += 34;
+          return;
+        }
+
+        if (perfil.tipo === "engenharia") {
+          const widths = [maxW - 192, 36, 36, 56, 64];
+          const labels = ["DESCRICAO TECNICA", "QTD", "UN", "UNIT.", "TOTAL"];
+          const [tr, tg, tb] = hexToRgb(corPrimariaDoc);
+          ensure(24);
+          pdf.setDrawColor(tr, tg, tb);
+          pdf.setLineWidth(0.8);
+          pdf.line(marginX, y, marginX + maxW, y);
+          y += 12;
+          pdf.setFont("helvetica", "bold");
+          pdf.setFontSize(6.8);
+          pdf.setTextColor(tr, tg, tb);
+          let x = marginX;
+          labels.forEach((label, i) => {
+            drawText(label, x, widths[i], y, i === 0 ? "left" : "right", 6.8);
+            x += widths[i];
+          });
+          y += 10;
+          rows.forEach((item) => {
+            const descLines = pdf.splitTextToSize(String(item.descricao || ""), widths[0] - 6);
+            const rowHeight = Math.max(22, descLines.length * 8.5 + 7);
+            ensure(rowHeight + 6);
+            x = marginX;
+            pdf.setDrawColor(203, 213, 225);
+            pdf.line(marginX, y + rowHeight, marginX + maxW, y + rowHeight);
+            pdf.setFont(bodyFont, "normal");
+            pdf.setFontSize(7.2);
+            pdf.setTextColor(0, 0, 0);
+            pdf.text(descLines, x + 3, y + 11); x += widths[0];
+            drawText(item.quantidade || 1, x, widths[1], y + 11, "right", 7.1); x += widths[1];
+            drawText(item.unidade || "un", x, widths[2], y + 11, "right", 7.1); x += widths[2];
+            drawText(brl(item.valorUnitario), x, widths[3], y + 11, "right", 7.1); x += widths[3];
+            pdf.setFont(bodyFont, "bold");
+            drawText(brl(item.subtotal), x, widths[4], y + 11, "right", 7.1);
+            y += rowHeight;
+          });
+
+          ensure(24);
+          pdf.setFont("helvetica", "bold");
+          pdf.setFontSize(8.4);
+          pdf.setTextColor(0, 0, 0);
+          pdf.text("TOTAL TECNICO DOS ITENS", marginX + maxW - 106, y + 15, { align: "right" });
+          pdf.text(brl(materialTotal(rows)), marginX + maxW, y + 15, { align: "right" });
+          y += 34;
+          return;
+        }
+
+        const widths = [maxW - 208, 34, 30, 64, 80];
+        const labels = ["ITEM", "QTD", "UN", "VALOR UNIT.", "VALOR FINAL"];
+        const aligns = ["left", "right", "right", "right", "right"];
+        const headerColor = perfil.tipo === "varejo-eletrico"
+          ? [17, 24, 39]
+          : perfil.tipo === "orlovic"
+            ? [55, 65, 81]
+            : perfil.tipo === "eventos"
+              ? hexToRgb(corSecundariaDoc || corPrimariaDoc)
+              : [r, g, b];
+
         ensure(22);
-        pdf.setFillColor(r, g, b);
+        pdf.setFillColor(headerColor[0], headerColor[1], headerColor[2]);
         pdf.rect(marginX, y, maxW, 18, "F");
         pdf.setFont("helvetica", "bold");
         pdf.setTextColor(255, 255, 255);
@@ -4902,11 +5622,9 @@ export default function App() {
           pdf.setFontSize(7.2);
           drawText(item.quantidade || 1, x, widths[1], y + 12, "right", 7.2); x += widths[1];
           drawText(item.unidade || "un", x, widths[2], y + 12, "right", 7.2); x += widths[2];
-          drawText(parseValorBR(item.valorOriginal) > 0 ? brl(item.valorOriginal) : "-", x, widths[3], y + 12, "right", 7.2); x += widths[3];
-          drawText(parseValorBR(item.acrescimoPercentual) ? `${Number(item.acrescimoPercentual).toFixed(2)}%` : "-", x, widths[4], y + 12, "right", 7.2); x += widths[4];
-          drawText(brl(item.valorUnitario), x, widths[5], y + 12, "right", 7.2); x += widths[5];
+          drawText(brl(item.valorUnitario), x, widths[3], y + 12, "right", 7.2); x += widths[3];
           pdf.setFont(bodyFont, "bold");
-          drawText(brl(item.subtotal), x, widths[6], y + 12, "right", 7.2);
+          drawText(brl(item.subtotal), x, widths[4], y + 12, "right", 7.2);
 
           y += rowHeight;
         });
@@ -4980,6 +5698,37 @@ export default function App() {
       const writeValorGlobal = () => {
         if (!dados.valorGlobal) return;
         ensure(72);
+        if (perfil.tipo === "consultoria") {
+          pdf.setDrawColor(17, 24, 39);
+          pdf.setLineWidth(0.6);
+          pdf.line(marginX, y, marginX + maxW, y);
+          y += 18;
+          pdf.setFont("helvetica", "bold");
+          pdf.setFontSize(8.5);
+          pdf.setTextColor(0, 0, 0);
+          pdf.text(String(perfil.valorLabel || "Valor global").toUpperCase(), marginX, y);
+          pdf.setFont(titleFont, "bold");
+          pdf.setFontSize(17);
+          pdf.text(brl(dados.valorGlobal), marginX + maxW, y, { align: "right" });
+          y += 28;
+          return;
+        }
+
+        if (perfil.tipo === "operacional") {
+          const [vr, vg, vb] = hexToRgb(corPrimariaDoc);
+          pdf.setFillColor(vr, vg, vb);
+          pdf.rect(marginX + maxW - 210, y - 2, 210, 46, "F");
+          pdf.setFont("helvetica", "bold");
+          pdf.setFontSize(7.5);
+          pdf.setTextColor(255, 255, 255);
+          pdf.text(String(perfil.valorLabel || "Valor global").toUpperCase(), marginX + maxW - 12, y + 13, { align: "right" });
+          pdf.setFont(titleFont, "bold");
+          pdf.setFontSize(18);
+          pdf.text(brl(dados.valorGlobal), marginX + maxW - 12, y + 34, { align: "right" });
+          y += 62;
+          return;
+        }
+
         pdf.setFont("helvetica", "bold");
         pdf.setFontSize(10.5);
         pdf.setTextColor(0, 0, 0);
@@ -4993,9 +5742,7 @@ export default function App() {
       };
 
       const buildRodapeLines = () => {
-        const parts = emp.rodape
-          ? String(emp.rodape).split("|").map((p) => p.trim()).filter(Boolean)
-          : [emp.nome, emp.cnpj ? `CNPJ ${emp.cnpj}` : "", emp.email, emp.telefone].filter(Boolean);
+        const parts = rodapeDocumento(emp).split("|").map((p) => p.trim()).filter(Boolean);
         if (!parts.length) return [];
         if (perfil.rodape === "compacto") {
           return [parts.slice(0, 2).join(" | "), parts.slice(2).join(" | ")].filter(Boolean);
@@ -5005,31 +5752,57 @@ export default function App() {
 
       const writeSignature = () => {
         if (perfil.assinatura === "fornecedor-compacto") return;
-        ensure(64);
+        ensure(86);
         pdf.setFont(bodyFont, "normal");
         pdf.setFontSize(Math.max(8, bodySize - 1));
         pdf.setTextColor(0, 0, 0);
+        const assinaturaTexto = assinaturaDocumento(emp, perfil);
+        const assinaturaLines = pdf.splitTextToSize(assinaturaTexto, Math.min(260, maxW * 0.72));
 
         if (perfil.assinatura === "eventos") {
-          pdf.text(["Atenciosamente,", emp.assinatura || `Equipe ${emp.nome || ""}`].filter(Boolean), marginX, y);
-          y += 34;
+          pdf.setFont(bodyFont, "normal");
+          pdf.text("Atenciosamente,", marginX, y);
+          pdf.setFont(bodyFont, "bold");
+          pdf.text(assinaturaLines, marginX, y + 16);
+          y += 24 + assinaturaLines.length * 10;
           return;
         }
 
         if (perfil.assinatura === "tecnica") {
           pdf.setDrawColor(0, 0, 0);
           pdf.setLineWidth(0.4);
-          pdf.rect(marginX, y, Math.min(260, maxW), 36);
+          const boxW = Math.min(290, maxW);
+          const boxH = Math.max(42, 24 + assinaturaLines.length * 10);
+          pdf.rect(marginX, y, boxW, boxH);
+          pdf.setFont("helvetica", "bold");
+          pdf.setFontSize(6.8);
+          pdf.text("RESPONSAVEL PELO DOCUMENTO", marginX + 10, y + 12);
           pdf.setFont(bodyFont, "bold");
-          pdf.text(emp.assinatura || "Equipe tecnica", marginX + 10, y + 22);
-          y += 50;
+          pdf.setFontSize(Math.max(8, bodySize - 2));
+          pdf.text(assinaturaLines, marginX + 10, y + 27);
+          y += boxH + 16;
+          return;
+        }
+
+        if (perfil.assinatura === "operacional") {
+          const [sr, sg, sb] = hexToRgb(corPrimariaDoc);
+          pdf.setFillColor(sr, sg, sb);
+          pdf.rect(marginX, y - 2, 4, 44, "F");
+          pdf.setFont("helvetica", "bold");
+          pdf.setFontSize(7);
+          pdf.text("ATENDIMENTO OPERACIONAL", marginX + 12, y + 8);
+          pdf.setFont(bodyFont, "bold");
+          pdf.setFontSize(Math.max(8, bodySize - 1));
+          pdf.text(assinaturaLines, marginX + 12, y + 24);
+          y += 58;
           return;
         }
 
         if (perfil.assinatura === "institucional-direita") {
           pdf.setFont(bodyFont, "bold");
-          pdf.text(emp.assinatura || emp.nome || "Departamento Comercial", pageW - marginX, y, { align: "right" });
-          y += 24;
+          const rightLines = pdf.splitTextToSize(assinaturaTexto, Math.min(260, maxW * 0.65));
+          pdf.text(rightLines, pageW - marginX, y, { align: "right" });
+          y += 12 + rightLines.length * 10;
           return;
         }
 
@@ -5039,8 +5812,8 @@ export default function App() {
         y += 28;
         pdf.setFont(bodyFont, "bold");
         pdf.setFontSize(bodySize);
-        pdf.text(emp.assinatura || emp.nome || "Responsavel", marginX, y);
-        y += 20;
+        pdf.text(assinaturaLines, marginX, y);
+        y += 12 + assinaturaLines.length * 10;
       };
 
       const writeRodape = () => {
@@ -5063,7 +5836,7 @@ export default function App() {
       if (dados.identidadeDocumento?.subtitulo) {
         writeSection("", dados.identidadeDocumento.subtitulo);
       }
-      getSectionOrder(dados).forEach(writeOrderedSection);
+      getSectionOrder(dados, perfil).forEach(writeOrderedSection);
 
       writeValorGlobal();
 
@@ -5240,8 +6013,9 @@ export default function App() {
           <div style={{ display: "flex", gap: 3, background: BRAND.bg, borderRadius: 10, padding: 4, border: `1px solid ${BRAND.border2}` }}>
             {[
               ["gestao", "📊 Gestão"],
+              ["clientes", "👥 Clientes"],
               ["orcamento", "✦ Orçamento"],
-              ["chat", "IA Chat"],
+              ["chat", "Nara"],
               ["empresas", "🏢 Empresas"],
               ...(usuarioAtual?.tipo === "admin" ? [["usuarios", "🔐 Acessos"]] : []),
               ["banco", "🗄 Banco"],
@@ -5249,7 +6023,7 @@ export default function App() {
               <button key={v} onClick={() => setView(v)} style={{ padding: "7px 12px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 850, background: view === v ? `linear-gradient(135deg, ${BRAND.green2}, #15803D)` : "transparent", color: view === v ? "#fff" : BRAND.dim, transition: "all .22s ease" }}>{l}</button>
             ))}
           </div>
-          <button onClick={async () => { await supabase.auth.signOut(); setAutenticado(false); setUsuarioAtual(null); setAcessoPerfil(null); }} title="Sair" style={{ padding: "8px 10px", borderRadius: 10, border: `1px solid ${BRAND.border2}`, background: "transparent", color: BRAND.muted, cursor: "pointer", fontWeight: 900 }}>Sair</button>
+          <button onClick={async () => { await supabase.auth.signOut(); setAutenticado(false); setUsuarioAtual(null); setAcessoPerfil(null); setClientesCRM([]); }} title="Sair" style={{ padding: "8px 10px", borderRadius: 10, border: `1px solid ${BRAND.border2}`, background: "transparent", color: BRAND.muted, cursor: "pointer", fontWeight: 900 }}>Sair</button>
         </div>
       </div>
 
@@ -5268,10 +6042,26 @@ export default function App() {
         />
       )}
 
+      {view === "clientes" && (
+        <ClientesCRMPanel
+          clientes={clientesCRM}
+          setClientes={setClientesCRM}
+          crm={crm}
+          empresas={empresas}
+          pushToast={pushToast}
+          usuarioAtual={usuarioAtual}
+          abrirOrcamentoSalvo={abrirOrcamentoSalvo}
+          baixarOrcamento={baixarOrcamento}
+          lerTextoPDF={lerTextoPDF}
+          imagemParaLeitura={imagemParaLeitura}
+        />
+      )}
+
       {view === "chat" && (
         <ChatIAPanel
           empresas={empresas}
           crm={crm}
+          clientes={clientesCRM}
           pushToast={pushToast}
         />
       )}
