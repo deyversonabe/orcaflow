@@ -3,6 +3,7 @@ import { jsPDF } from "jspdf";
 import { authHeaders, supabase } from "./supabase.js";
 import { store } from "./store.js";
 import { ClientesCRMPanel } from "./ClientesCRMPanel.jsx";
+import { abrirWhatsRelatorio, gerarRelatorioSemanalNara, normalizarWhatsDestino, WHATS_REPORT_NUMBER, WEEKLY_REPORT_PENDING_KEY } from "./weeklyReport.js";
 
 import {
   FileText,
@@ -58,7 +59,8 @@ const KEY_RESET = "orcaflow_reset_senha";
 const KEY_CHAT = "orcaflow_chat_ia";
 const KEY_CLIENTES = "orcaflow_clientes_crm";
 const KEY_WHATS_RELATORIO = "orcaflow_whats_relatorio";
-const BACKUP_KEYS = [KEY_EMP, KEY_CRM, KEY_META, KEY_LOG, KEY_USERS, KEY_RESET, KEY_CHAT, KEY_CLIENTES, KEY_WHATS_RELATORIO];
+const KEY_WEEKLY_REPORT_PENDING = WEEKLY_REPORT_PENDING_KEY;
+const BACKUP_KEYS = [KEY_EMP, KEY_CRM, KEY_META, KEY_LOG, KEY_USERS, KEY_RESET, KEY_CHAT, KEY_CLIENTES, KEY_WHATS_RELATORIO, KEY_WEEKLY_REPORT_PENDING];
 
 const ADMIN_PADRAO = {
   id: "admin-master",
@@ -1392,7 +1394,7 @@ function useDB() {
       const dados = {};
       await Promise.all(
         BACKUP_KEYS.map(async (key) => {
-          dados[key] = (await store.get(key)) || (key === KEY_META ? {} : key === KEY_WHATS_RELATORIO ? "" : []);
+          dados[key] = (await store.get(key)) || (key === KEY_META || key === KEY_WEEKLY_REPORT_PENDING ? {} : key === KEY_WHATS_RELATORIO ? "" : []);
         })
       );
       dados[KEY_EMP] = empresasRef.current;
@@ -1412,6 +1414,7 @@ function useDB() {
           chatIA: dados[KEY_CHAT] || [],
           clientesCRM: dados[KEY_CLIENTES] || [],
           whatsRelatorio: typeof dados[KEY_WHATS_RELATORIO] === "string" ? dados[KEY_WHATS_RELATORIO] : "",
+          relatorioSemanalPendente: dados[KEY_WEEKLY_REPORT_PENDING] || {},
           dados,
         }, null, 2)],
         { type: "application/json" }
@@ -1445,6 +1448,11 @@ function useDB() {
         const resetImport = Array.isArray(parsed.solicitacoesSenha) ? parsed.solicitacoesSenha : dados[KEY_RESET];
         const chatImport = Array.isArray(parsed.chatIA) ? parsed.chatIA : dados[KEY_CHAT];
         const clientesImport = Array.isArray(parsed.clientesCRM) ? parsed.clientesCRM : dados[KEY_CLIENTES];
+        const relatorioPendenteImport = parsed.relatorioSemanalPendente && typeof parsed.relatorioSemanalPendente === "object"
+          ? parsed.relatorioSemanalPendente
+          : dados[KEY_WEEKLY_REPORT_PENDING] && typeof dados[KEY_WEEKLY_REPORT_PENDING] === "object"
+            ? dados[KEY_WEEKLY_REPORT_PENDING]
+            : {};
         const whatsRelatorioImport = typeof parsed.whatsRelatorio === "string"
           ? parsed.whatsRelatorio
           : typeof dados[KEY_WHATS_RELATORIO] === "string"
@@ -1461,6 +1469,7 @@ function useDB() {
           [KEY_CHAT]: Array.isArray(chatImport) ? chatImport : [],
           [KEY_CLIENTES]: Array.isArray(clientesImport) ? clientesImport : [],
           [KEY_WHATS_RELATORIO]: whatsRelatorioImport,
+          [KEY_WEEKLY_REPORT_PENDING]: relatorioPendenteImport,
         };
 
         const results = await Promise.all(BACKUP_KEYS.map((key) => store.set(key, payload[key])));
@@ -1614,6 +1623,44 @@ function Row({ children }) {
       }}
     >
       {children}
+    </div>
+  );
+}
+
+function RelatorioPendenteNara({ relatorio, onEnviar, onCopiar, onDispensar }) {
+  if (!relatorio?.texto) return null;
+  return (
+    <div style={{
+      position: "fixed",
+      right: 18,
+      bottom: 76,
+      zIndex: 80,
+      width: "min(440px, calc(100vw - 36px))",
+      background: "linear-gradient(135deg, rgba(7,17,31,.98), rgba(12,28,48,.98))",
+      border: `1px solid ${BRAND.green2}66`,
+      borderRadius: 16,
+      boxShadow: "0 24px 80px rgba(0,0,0,.45)",
+      padding: 14,
+      color: BRAND.text,
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+        <div>
+          <div style={{ color: BRAND.green, fontSize: 10, letterSpacing: 2, fontWeight: 950 }}>MODO ASSISTIDO</div>
+          <div style={{ fontSize: 15, fontWeight: 950, marginTop: 4 }}>{relatorio.titulo || "Relatorio semanal da Nara"}</div>
+          <div style={{ color: BRAND.muted, fontSize: 11, marginTop: 4 }}>
+            Gerado em {relatorio.geradoEm ? tsFmt(relatorio.geradoEm) : "agora"}. A Nara preparou tudo; o envio depende do seu clique.
+          </div>
+        </div>
+        <button onClick={onDispensar} title="Dispensar" style={{ border: `1px solid ${BRAND.border2}`, background: "transparent", color: BRAND.dim, borderRadius: 9, padding: "5px 8px", cursor: "pointer" }}>×</button>
+      </div>
+      <div style={{ marginTop: 10, padding: 10, borderRadius: 12, background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, color: BRAND.muted, fontSize: 11, lineHeight: 1.5, maxHeight: 118, overflow: "hidden", whiteSpace: "pre-wrap" }}>
+        {String(relatorio.texto).slice(0, 520)}
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+        <button onClick={onEnviar} className="of-neon-btn" style={{ padding: "9px 12px", borderRadius: 11, cursor: "pointer" }}>Abrir WhatsApp</button>
+        <button onClick={onCopiar} style={{ padding: "9px 12px", borderRadius: 11, border: `1px solid ${BRAND.blue2}66`, background: `${BRAND.blue2}12`, color: "#93C5FD", cursor: "pointer", fontWeight: 900 }}>Copiar</button>
+        <button onClick={onDispensar} style={{ padding: "9px 12px", borderRadius: 11, border: `1px solid ${BRAND.border2}`, background: "transparent", color: BRAND.muted, cursor: "pointer", fontWeight: 900 }}>Ja resolvi</button>
+      </div>
     </div>
   );
 }
@@ -3204,7 +3251,7 @@ function avaliarPrioridadeOrcamento(item) {
   return { score, nivel: "Baixa", cor: BRAND.green, motivos, acao: "Acompanhar" };
 }
 
-function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usuarioAtual, setView, abrirOrcamentoSalvo, baixarOrcamento, onAnexar }) {
+function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], meta = {}, pushToast, usuarioAtual, setView, abrirOrcamentoSalvo, baixarOrcamento, onAnexar }) {
   const [busca, setBusca] = useState("");
   const [statusFiltro, setStatusFiltro] = useState("Todos");
   const [empresaFiltro, setEmpresaFiltro] = useState("Todas");
@@ -3224,7 +3271,9 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
     let ativo = true;
     (async () => {
       const salvo = await store.get(KEY_WHATS_RELATORIO);
-      if (ativo && typeof salvo === "string" && salvo.trim()) setWhats(salvo);
+      if (!ativo) return;
+      if (typeof salvo === "string" && salvo.trim()) setWhats(salvo);
+      else setWhats(WHATS_REPORT_NUMBER);
     })();
     return () => {
       ativo = false;
@@ -3667,6 +3716,20 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
     window.open(`https://wa.me/${numero}?text=${encodeURIComponent(msg)}`, "_blank", "noopener,noreferrer");
     pushToast("Relatorio de atencao aberto no WhatsApp.", "ok");
     return true;
+  };
+
+  const abrirRelatorioSemanal = () => {
+    const numero = normalizarWhatsDestino(whats || WHATS_REPORT_NUMBER);
+    setWhats(numero);
+    store.set(KEY_WHATS_RELATORIO, numero);
+    const texto = gerarRelatorioSemanalNara({
+      crm: base,
+      clientes,
+      empresas,
+      usuarioNome: usuarioAtual?.nome || usuarioAtual?.email || "OrcaFlow",
+    });
+    abrirWhatsRelatorio({ numero, texto });
+    pushToast("Relatorio semanal da Nara aberto no WhatsApp.", "ok");
   };
 
   const notificarPendentes = async () => {
@@ -4211,6 +4274,9 @@ function GestaoPage({ crm = [], setCrm, empresas = [], meta = {}, pushToast, usu
           <button onClick={abrirWhats} className="of-neon-btn" style={{ padding: "10px 16px", borderRadius: 12, cursor: "pointer" }}>
             Salvar e enviar resumo
           </button>
+          <button onClick={abrirRelatorioSemanal} style={{ padding: "10px 16px", borderRadius: 12, border: `1px solid ${BRAND.green2}66`, background: `${BRAND.green2}18`, color: BRAND.green, cursor: "pointer", fontWeight: 900 }}>
+            Enviar relatorio semanal Nara
+          </button>
         </div>
         <div style={{ fontSize: 11, color: BRAND.dim, marginTop: 8 }}>
           Para envio automatico sem abrir o WhatsApp, sera necessario integrar a API oficial do WhatsApp Business.
@@ -4623,6 +4689,7 @@ export default function App() {
   const [usuarios, setUsuarios] = useState([]);
   const [usuarioAtual, setUsuarioAtual] = useState(null);
   const [acessoPerfil, setAcessoPerfil] = useState(null);
+  const [relatorioPendente, setRelatorioPendente] = useState(null);
 
   useEffect(() => {
     const onBackupImported = (event) => {
@@ -4649,6 +4716,7 @@ export default function App() {
         setUsuarioAtual(null);
         setAcessoPerfil(null);
         setClientesCRM([]);
+        setRelatorioPendente(null);
         return;
       }
 
@@ -4684,9 +4752,16 @@ export default function App() {
         ativo: true,
       });
       setAutenticado(true);
-      await store.migrate([KEY_EMP, KEY_LOG, KEY_META, KEY_CRM, KEY_CHAT, KEY_CLIENTES, KEY_WHATS_RELATORIO]);
+      await store.migrate([KEY_EMP, KEY_LOG, KEY_META, KEY_CRM, KEY_CHAT, KEY_CLIENTES, KEY_WHATS_RELATORIO, KEY_WEEKLY_REPORT_PENDING]);
       setCrm((await store.get(KEY_CRM)) || []);
       setClientesCRM((await store.get(KEY_CLIENTES)) || []);
+      const pendente = await store.get(KEY_WEEKLY_REPORT_PENDING);
+      if (pendente?.status === "pendente" && pendente?.texto) {
+        setRelatorioPendente(pendente);
+        pushToast("Nara deixou um relatorio semanal pronto para envio assistido.", "aviso");
+      } else {
+        setRelatorioPendente(null);
+      }
     };
 
     supabase.auth.getSession().then(({ data }) => applyUser(data.session?.user || null));
@@ -4732,6 +4807,32 @@ export default function App() {
     const logs = (await store.get(KEY_LOG)) || [];
     setLogData(logs);
     setLogOpen(true);
+  };
+
+  const abrirRelatorioPendente = async () => {
+    if (!relatorioPendente?.texto) return;
+    const numero = normalizarWhatsDestino(relatorioPendente.destinoPadrao || WHATS_REPORT_NUMBER);
+    await store.set(KEY_WHATS_RELATORIO, numero);
+    abrirWhatsRelatorio({ numero, texto: relatorioPendente.texto });
+    pushToast("WhatsApp aberto com o relatorio da Nara. O envio continua manual.", "ok");
+  };
+
+  const copiarRelatorioPendente = async () => {
+    if (!relatorioPendente?.texto) return;
+    try {
+      await navigator.clipboard.writeText(relatorioPendente.texto);
+      pushToast("Relatorio da Nara copiado.", "ok");
+    } catch {
+      pushToast("Nao foi possivel copiar o relatorio.", "erro");
+    }
+  };
+
+  const dispensarRelatorioPendente = async () => {
+    if (!relatorioPendente) return;
+    const atualizado = { ...relatorioPendente, status: "resolvido", resolvidoEm: new Date().toISOString() };
+    await store.set(KEY_WEEKLY_REPORT_PENDING, atualizado);
+    setRelatorioPendente(null);
+    pushToast("Relatorio semanal marcado como resolvido.", "ok");
   };
 
   const toggleSel = (id) =>
@@ -6005,6 +6106,13 @@ export default function App() {
         }}
       />
 
+      <RelatorioPendenteNara
+        relatorio={relatorioPendente}
+        onEnviar={abrirRelatorioPendente}
+        onCopiar={copiarRelatorioPendente}
+        onDispensar={dispensarRelatorioPendente}
+      />
+
       <div style={{ position: "relative", zIndex: 2, background: "rgba(10,20,32,.92)", backdropFilter: "blur(12px)", borderBottom: `1px solid ${BRAND.border}`, padding: "0 16px", height: 84, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <OrcaFlowLogo onClick={resetInicio} />
@@ -6040,6 +6148,7 @@ export default function App() {
           crm={crm}
           setCrm={setCrm}
           empresas={empresas}
+          clientes={clientesCRM}
           meta={meta}
           pushToast={pushToast}
           usuarioAtual={usuarioAtual}

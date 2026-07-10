@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { authHeaders } from "./supabase.js";
 import { store } from "./store.js";
 import { AlertTriangle, CalendarClock, Copy, FileText, Mail, MessageCircle, Send, Target, Upload, Users } from "lucide-react";
+import { abrirWhatsRelatorio, gerarRelatorioSemanalNara, normalizarWhatsDestino, WHATS_REPORT_NUMBER, WHATS_REPORT_STORAGE_KEY } from "./weeklyReport.js";
 
 const KEY_CLIENTES = "orcaflow_clientes_crm";
 
@@ -174,6 +175,7 @@ export function ClientesCRMPanel({
   clientes = [],
   setClientes,
   crm = [],
+  empresas = [],
   pushToast,
   usuarioAtual,
   abrirOrcamentoSalvo,
@@ -203,7 +205,19 @@ export function ClientesCRMPanel({
   const [lendoArquivo, setLendoArquivo] = useState(false);
   const [jadeLoading, setJadeLoading] = useState(false);
   const [pedidoJade, setPedidoJade] = useState("Nara, leia este cliente e me diga o melhor proximo passo para aumentar a chance de fechamento.");
+  const [whatsRelatorio, setWhatsRelatorio] = useState(WHATS_REPORT_NUMBER);
   const refArquivo = useRef(null);
+
+  useEffect(() => {
+    let ativo = true;
+    (async () => {
+      const salvo = await store.get(WHATS_REPORT_STORAGE_KEY);
+      if (ativo && typeof salvo === "string" && salvo.trim()) setWhatsRelatorio(salvo);
+    })();
+    return () => {
+      ativo = false;
+    };
+  }, []);
 
   const enriquecidos = useMemo(() => {
     return base.map((item) => {
@@ -550,6 +564,20 @@ export function ClientesCRMPanel({
     window.open(`mailto:${emailDestino}?subject=${assunto}&body=${body}`, "_blank", "noopener,noreferrer");
   };
 
+  const abrirRelatorioSemanal = () => {
+    const numero = normalizarWhatsDestino(whatsRelatorio || WHATS_REPORT_NUMBER);
+    setWhatsRelatorio(numero);
+    store.set(WHATS_REPORT_STORAGE_KEY, numero);
+    const texto = gerarRelatorioSemanalNara({
+      crm,
+      clientes: base,
+      empresas,
+      usuarioNome: usuarioAtual?.nome || usuarioAtual?.email || "OrcaFlow",
+    });
+    abrirWhatsRelatorio({ numero, texto });
+    pushToast("Relatorio semanal da Nara aberto no WhatsApp.", "ok");
+  };
+
   const INP = inputStyle();
   const LBL = { fontSize: 9, color: C.dim, letterSpacing: 1.4, fontWeight: 900, marginBottom: 5 };
 
@@ -591,6 +619,7 @@ export function ClientesCRMPanel({
           ))}
         </div>
         <button onClick={sincronizarOrcamentos} style={{ width: "100%", marginBottom: 12, padding: "9px 10px", borderRadius: 10, border: `1px solid ${C.blue2}55`, background: `${C.blue2}12`, color: "#93C5FD", fontWeight: 850, cursor: "pointer" }}>Criar clientes dos orcamentos</button>
+        <button onClick={abrirRelatorioSemanal} style={{ width: "100%", marginBottom: 12, padding: "9px 10px", borderRadius: 10, border: `1px solid ${C.green2}66`, background: `${C.green2}16`, color: C.green, fontWeight: 900, cursor: "pointer" }}>Enviar relatorio semanal Nara</button>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {filtrados.map((item) => {
             const selected = item.id === ativo?.id;
