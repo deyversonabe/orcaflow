@@ -42,6 +42,14 @@ function valorNumerico(valor) {
   return Number.isFinite(n) ? n : 0;
 }
 
+function formatTelefone(valor = "") {
+  const d = String(valor || "").replace(/\D/g, "").slice(0, 11);
+  if (d.length <= 2) return d;
+  if (d.length <= 6) return `(${d.slice(0, 2)}) ${d.slice(2)}`;
+  if (d.length <= 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
+  return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
+}
+
 function tsFmt(iso) {
   if (!iso) return "";
   const d = new Date(iso);
@@ -87,7 +95,13 @@ function criarCliente(usuarioAtual, dados = {}) {
     empresa: dados.empresa || "",
     cargo: dados.cargo || "",
     email: dados.email || "",
+    email2: dados.email2 || "",
     telefone: dados.telefone || "",
+    whatsapp: dados.whatsapp || "",
+    telefone2: dados.telefone2 || "",
+    documento: dados.documento || "",
+    endereco: dados.endereco || "",
+    cidadeUf: dados.cidadeUf || "",
     segmento: dados.segmento || "",
     decisor: dados.decisor || "",
     origem: dados.origem || "",
@@ -128,7 +142,7 @@ function nivelCliente(score) {
 }
 
 function alvoCliente(cliente = {}) {
-  return textoBusca([cliente.nome, cliente.empresa, cliente.email, cliente.telefone].filter(Boolean).join(" "));
+  return textoBusca([cliente.nome, cliente.empresa, cliente.email, cliente.email2, cliente.telefone, cliente.whatsapp, cliente.documento].filter(Boolean).join(" "));
 }
 
 function orcamentosDoCliente(cliente = {}, crm = []) {
@@ -220,7 +234,7 @@ export function ClientesCRMPanel({
   const filtrados = useMemo(() => {
     const q = textoBusca(busca);
     return enriquecidos.filter((item) => {
-      const texto = textoBusca([item.nome, item.empresa, item.email, item.telefone, item.status, item.proximoPasso, item.lembreteJade].join(" "));
+      const texto = textoBusca([item.nome, item.empresa, item.email, item.email2, item.telefone, item.whatsapp, item.documento, item.cidadeUf, item.status, item.proximoPasso, item.lembreteJade].join(" "));
       const matchBusca = !q || texto.includes(q);
       const matchFiltro =
         filtro === "todos" ||
@@ -255,6 +269,20 @@ export function ClientesCRMPanel({
     setForm(criarCliente(usuarioAtual));
     setAtivoId("");
     setEditando(true);
+  };
+
+  const editarCliente = () => {
+    if (ativo) setForm(criarCliente(usuarioAtual, ativo));
+    setEditando(true);
+  };
+
+  const cancelarEdicao = () => {
+    if (ativo) {
+      setForm(criarCliente(usuarioAtual, ativo));
+    } else {
+      setForm(criarCliente(usuarioAtual));
+    }
+    setEditando(false);
   };
 
   const salvarCliente = async () => {
@@ -423,7 +451,13 @@ export function ClientesCRMPanel({
             empresa: ativo.empresa,
             cargo: ativo.cargo,
             email: ativo.email,
+            email2: ativo.email2,
             telefone: ativo.telefone,
+            whatsapp: ativo.whatsapp,
+            telefone2: ativo.telefone2,
+            documento: ativo.documento,
+            endereco: ativo.endereco,
+            cidadeUf: ativo.cidadeUf,
             segmento: ativo.segmento,
             decisor: ativo.decisor,
             origem: ativo.origem,
@@ -492,11 +526,12 @@ export function ClientesCRMPanel({
   };
 
   const abrirWhats = (texto = "") => {
-    if (!ativo?.telefone) {
+    const contatoWhats = ativo?.whatsapp || ativo?.telefone;
+    if (!contatoWhats) {
       pushToast("Cadastre o WhatsApp/telefone do cliente primeiro.", "aviso");
       return;
     }
-    const numero = String(ativo.telefone).replace(/\D/g, "");
+    const numero = String(contatoWhats).replace(/\D/g, "");
     if (!numero) {
       pushToast("Telefone do cliente invalido.", "erro");
       return;
@@ -505,13 +540,14 @@ export function ClientesCRMPanel({
   };
 
   const abrirEmail = (texto = "") => {
-    if (!ativo?.email) {
+    const emailDestino = ativo?.email || ativo?.email2;
+    if (!emailDestino) {
       pushToast("Cadastre o e-mail do cliente primeiro.", "aviso");
       return;
     }
     const assunto = encodeURIComponent(`Acompanhamento - ${ativo.empresa || ativo.nome || "OrcaFlow"}`);
     const body = encodeURIComponent(texto || ativo?.jade?.mensagemSugerida || "");
-    window.open(`mailto:${ativo.email}?subject=${assunto}&body=${body}`, "_blank", "noopener,noreferrer");
+    window.open(`mailto:${emailDestino}?subject=${assunto}&body=${body}`, "_blank", "noopener,noreferrer");
   };
 
   const INP = inputStyle();
@@ -564,7 +600,7 @@ export function ClientesCRMPanel({
                   <strong style={{ fontSize: 12.5 }}>{item.nome || item.empresa || "Cliente sem nome"}</strong>
                   <span style={{ color: item.temperatura === "Quente" ? C.warn : C.green, fontSize: 10, fontWeight: 900 }}>{item.temperatura}</span>
                 </div>
-                <div style={{ color: C.dim, fontSize: 10.5, marginTop: 3 }}>{item.empresa || item.email || item.telefone || "Sem dados de contato"}</div>
+                <div style={{ color: C.dim, fontSize: 10.5, marginTop: 3 }}>{item.empresa || item.email || item.email2 || item.whatsapp || item.telefone || "Sem dados de contato"}</div>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginTop: 6, alignItems: "center" }}>
                   <span style={{ color: item._score >= 78 ? C.danger : item._score >= 58 ? C.warn : "#93C5FD", fontSize: 10, fontWeight: 950 }}>Nara: {item._nivel} {item._score}</span>
                   <span style={{ color: isAtrasado(item) ? C.danger : isHoje(item) ? C.warn : C.dim, fontSize: 10 }}>{item.proximoContato || "sem data"}</span>
@@ -613,28 +649,44 @@ export function ClientesCRMPanel({
                   <div style={{ fontSize: 18, fontWeight: 950 }}>{editando ? "Cadastro do cliente" : ativo?.nome || ativo?.empresa}</div>
                 </div>
                 <div style={{ display: "flex", gap: 8 }}>
-                  {!editando && <button onClick={() => setEditando(true)} style={{ padding: "8px 10px", borderRadius: 9, border: `1px solid ${C.border2}`, background: "transparent", color: C.muted, fontWeight: 850, cursor: "pointer" }}>Editar</button>}
+                  {!editando && <button onClick={editarCliente} style={{ padding: "8px 10px", borderRadius: 9, border: `1px solid ${C.border2}`, background: "transparent", color: C.muted, fontWeight: 850, cursor: "pointer" }}>Editar</button>}
                   {ativo && <button onClick={excluirCliente} style={{ padding: "8px 10px", borderRadius: 9, border: `1px solid ${C.danger}55`, background: "transparent", color: C.danger, fontWeight: 850, cursor: "pointer" }}>Excluir</button>}
                 </div>
               </div>
 
               {(editando || !ativo) ? (
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <div style={{ gridColumn: "1 / -1", color: C.green, fontSize: 10, letterSpacing: 1.8, fontWeight: 950, borderBottom: `1px solid ${C.border2}`, paddingBottom: 7 }}>DADOS PESSOAIS E CONTATO</div>
                   {[
                     ["nome", "NOME DO CONTATO", "Ex: Carlos Silva"],
                     ["empresa", "EMPRESA / CLIENTE", "Ex: Prefeitura Municipal"],
                     ["cargo", "CARGO / PAPEL", "Ex: Comprador, engenheiro..."],
                     ["decisor", "DECISOR / INFLUENCIADOR", "Ex: decisor final, influencia tecnica..."],
-                    ["segmento", "SEGMENTO", "Ex: prefeitura, industria, comercio..."],
-                    ["telefone", "TELEFONE / WHATSAPP", "(00) 00000-0000"],
+                    ["whatsapp", "WHATSAPP PRINCIPAL", "(00) 00000-0000"],
+                    ["telefone", "TELEFONE PRINCIPAL", "(00) 00000-0000"],
+                    ["telefone2", "TELEFONE ALTERNATIVO", "(00) 00000-0000"],
                     ["email", "E-MAIL", "cliente@email.com"],
+                    ["email2", "E-MAIL ALTERNATIVO", "outro@email.com"],
+                    ["documento", "CPF / CNPJ / IDENTIFICADOR", "Documento do cliente"],
+                    ["endereco", "ENDERECO", "Rua, numero, bairro"],
+                    ["cidadeUf", "CIDADE / UF", "Cidade/UF"],
+                    ["segmento", "SEGMENTO", "Ex: prefeitura, industria, comercio..."],
                     ["origem", "ORIGEM", "Orcamento, indicacao, visita..."],
                   ].map(([key, label, placeholder]) => (
                     <div key={key}>
                       <div style={LBL}>{label}</div>
-                      <input value={form[key] || ""} onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))} placeholder={placeholder} style={INP} />
+                      <input
+                        value={form[key] || ""}
+                        onChange={(e) => setForm((f) => ({
+                          ...f,
+                          [key]: ["telefone", "whatsapp", "telefone2"].includes(key) ? formatTelefone(e.target.value) : e.target.value,
+                        }))}
+                        placeholder={placeholder}
+                        style={INP}
+                      />
                     </div>
                   ))}
+                  <div style={{ gridColumn: "1 / -1", color: C.green, fontSize: 10, letterSpacing: 1.8, fontWeight: 950, borderBottom: `1px solid ${C.border2}`, paddingBottom: 7, marginTop: 4 }}>ACOMPANHAMENTO COMERCIAL</div>
                   <div>
                     <div style={LBL}>STATUS</div>
                     <select value={form.status} onChange={(e) => setForm((f) => ({ ...f, status: e.target.value }))} style={INP}>
@@ -663,7 +715,10 @@ export function ClientesCRMPanel({
                     <div style={LBL}>OBSERVACOES INTERNAS</div>
                     <textarea value={form.observacoes || ""} onChange={(e) => setForm((f) => ({ ...f, observacoes: e.target.value }))} rows={3} placeholder="Informacoes importantes para a Nara considerar..." style={{ ...INP, resize: "vertical" }} />
                   </div>
-                  <button onClick={salvarCliente} style={{ gridColumn: "1 / -1", padding: 12, borderRadius: 11, border: "none", background: `linear-gradient(135deg, ${C.green2}, ${C.blue2})`, color: "#fff", fontWeight: 950, cursor: "pointer" }}>Salvar cliente</button>
+                  <div style={{ gridColumn: "1 / -1", display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                    {ativo && <button onClick={cancelarEdicao} style={{ padding: "10px 13px", borderRadius: 11, border: `1px solid ${C.border2}`, background: "transparent", color: C.muted, fontWeight: 900, cursor: "pointer" }}>Cancelar</button>}
+                    <button onClick={salvarCliente} style={{ padding: "10px 14px", borderRadius: 11, border: "none", background: `linear-gradient(135deg, ${C.green2}, ${C.blue2})`, color: "#fff", fontWeight: 950, cursor: "pointer" }}>{ativo ? "Salvar alteracoes" : "Salvar cliente"}</button>
+                  </div>
                 </div>
               ) : (
                 <div style={{ display: "grid", gap: 10, color: C.muted, fontSize: 12, lineHeight: 1.65 }}>
@@ -682,7 +737,10 @@ export function ClientesCRMPanel({
                     </div>
                   </div>
                   <div><strong style={{ color: C.text }}>Empresa:</strong> {ativo.empresa || "Nao informado"}</div>
-                  <div><strong style={{ color: C.text }}>Contato:</strong> {[ativo.telefone, ativo.email].filter(Boolean).join(" | ") || "Nao informado"}</div>
+                  <div><strong style={{ color: C.text }}>WhatsApp:</strong> {ativo.whatsapp || "Nao informado"}</div>
+                  <div><strong style={{ color: C.text }}>Contato:</strong> {[ativo.telefone, ativo.telefone2, ativo.email, ativo.email2].filter(Boolean).join(" | ") || "Nao informado"}</div>
+                  <div><strong style={{ color: C.text }}>Documento:</strong> {ativo.documento || "Nao informado"}</div>
+                  <div><strong style={{ color: C.text }}>Localizacao:</strong> {[ativo.endereco, ativo.cidadeUf].filter(Boolean).join(" - ") || "Nao informado"}</div>
                   <div><strong style={{ color: C.text }}>Decisor:</strong> {ativo.decisor || ativo.cargo || "Nao informado"}</div>
                   <div><strong style={{ color: C.text }}>Segmento:</strong> {ativo.segmento || "Nao informado"}</div>
                   <div><strong style={{ color: C.text }}>Origem:</strong> {ativo.origem || "Nao informado"}</div>
