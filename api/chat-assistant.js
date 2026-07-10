@@ -40,7 +40,7 @@ function isGpt5Model(modelo = "") {
 
 function normalizarReasoningEffort(valor = "high") {
   const effort = String(valor || "").trim().toLowerCase();
-  return ["low", "medium", "high", "xhigh"].includes(effort) ? effort : "high";
+  return ["low", "medium", "high", "xhigh"].includes(effort) ? effort : "medium";
 }
 
 function normalizarVerbosity(valor = "medium") {
@@ -105,6 +105,37 @@ function resumoEmpresas(empresas = []) {
   }));
 }
 
+function resumoClientes(clientes = []) {
+  if (!Array.isArray(clientes)) return [];
+  return clientes.slice(0, 25).map((cliente) => {
+    const contatos = Array.isArray(cliente?.historicoRecente)
+      ? cliente.historicoRecente
+      : Array.isArray(cliente?.contatos)
+        ? cliente.contatos
+        : [];
+    return {
+      nome: clean(cliente?.nome, 120),
+      empresa: clean(cliente?.empresa, 160),
+      cargo: clean(cliente?.cargo, 120),
+      decisor: clean(cliente?.decisor, 180),
+      segmento: clean(cliente?.segmento, 140),
+      status: clean(cliente?.status, 90),
+      temperatura: clean(cliente?.temperatura, 60),
+      proximoContato: clean(cliente?.proximoContato, 80),
+      valorPotencial: clean(cliente?.valorPotencial, 80),
+      proximoPasso: clean(cliente?.proximoPasso, 700),
+      lembreteNara: clean(cliente?.lembreteNara || cliente?.lembreteJade, 700),
+      historicoRecente: contatos.slice(0, 4).map((msg) => ({
+        canal: clean(msg?.canal, 40),
+        direcao: clean(msg?.direcao, 60),
+        tipo: clean(msg?.tipo, 80),
+        mensagem: clean(msg?.mensagem || msg?.arquivoResumo, 700),
+        criadoEm: clean(msg?.criadoEm, 80),
+      })),
+    };
+  });
+}
+
 function modoTitulo(modo = "geral") {
   const mapa = {
     geral: "assistente comercial",
@@ -127,14 +158,18 @@ function montarPrompt({ messages, mode, context }) {
     .join("\n\n");
 
   return `
-Voce e o chat interno do OrcaFlow Studio AI, especializado em propostas comerciais, cobrancas, e-mails, respostas para clientes, mensagens de WhatsApp, follow-up e orientacao para gerar orcamentos.
+Voce e Nara, assistente pessoal comercial do OrcaFlow Studio AI.
+Seu papel e apoiar o usuario do sistema como uma amiga de trabalho: humana, estrategica, direta e muito util.
 
 MODO ATUAL:
 ${modoTitulo(mode)}
 
 REGRAS DE RESPOSTA:
 - Responda sempre em portugues do Brasil.
-- Seja profissional, direto e comercialmente util.
+- Seja profissional, humano, direto e comercialmente util.
+- Nao seja generica. Use o contexto real dos orcamentos, empresas, conversas e valores quando existirem.
+- Quando faltar informacao, faca perguntas objetivas em vez de inventar.
+- Pense em estrategia de conversao: proximo passo, objeção provavel, tom adequado e como preservar relacionamento.
 - Quando o usuario pedir e-mail, entregue assunto e corpo.
 - Quando pedir cobranca, use tom firme, educado e preservando relacionamento.
 - Quando pedir resposta para cliente, considere clareza, cordialidade e proximo passo.
@@ -151,6 +186,9 @@ ${JSON.stringify(resumoEmpresas(context?.empresas), null, 2)}
 
 Orcamentos/CRM recentes:
 ${JSON.stringify(resumoCRM(context?.crm), null, 2)}
+
+Clientes acompanhados no CRM:
+${JSON.stringify(resumoClientes(context?.clientesCRM), null, 2)}
 
 CONVERSA:
 ${historico}

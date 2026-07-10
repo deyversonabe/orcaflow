@@ -145,8 +145,6 @@ function normalizarMateriaisTabela(orcamentoEmpresa = {}, valorGlobal) {
       materiaisTabela: [],
       precificacao: {
         valorGlobal: deCentavos(paraCentavos(valorGlobal)),
-        valorOriginalTotal: 0,
-        acrescimoPercentualMedio: 0,
         totalTabela: 0,
         diferenca: deCentavos(paraCentavos(valorGlobal)),
         criterio: "sem_lista_de_materiais",
@@ -156,7 +154,6 @@ function normalizarMateriaisTabela(orcamentoEmpresa = {}, valorGlobal) {
 
   const valorGlobalCentavos = Math.max(0, paraCentavos(valorGlobal));
   const totalOriginalCentavos = itens.reduce((acc, item) => acc + item.valorOriginalCentavos, 0);
-  const totalIACentavos = itens.reduce((acc, item) => acc + item.subtotalIACentavos, 0);
   const totalPeso = itens.reduce((acc, item) => acc + item.pesoPercentual, 0);
 
   let criterio = "sem_valor_global";
@@ -166,7 +163,7 @@ function normalizarMateriaisTabela(orcamentoEmpresa = {}, valorGlobal) {
     let subtotalCentavos = 0;
 
     if (valorGlobalCentavos > 0 && totalOriginalCentavos > 0) {
-      criterio = "rateio_por_valor_original";
+      criterio = "fechamento_proporcional_por_referencia";
       subtotalCentavos =
         index === itens.length - 1
           ? valorGlobalCentavos - acumulado
@@ -187,24 +184,17 @@ function normalizarMateriaisTabela(orcamentoEmpresa = {}, valorGlobal) {
       criterio = "subtotal_informado_pela_ia";
       subtotalCentavos = item.subtotalIACentavos;
     } else if (item.valorOriginalCentavos > 0) {
-      criterio = "valor_original_sem_acrescimo";
+      criterio = "valor_final_por_referencia";
       subtotalCentavos = item.valorOriginalCentavos;
     }
 
     subtotalCentavos = Math.max(0, subtotalCentavos);
     acumulado += subtotalCentavos;
 
-    const acrescimo =
-      item.valorOriginalCentavos > 0
-        ? ((subtotalCentavos - item.valorOriginalCentavos) / item.valorOriginalCentavos) * 100
-        : 0;
-
     return {
       descricao: item.descricao,
       unidade: item.unidade,
       quantidade: item.quantidade,
-      valorOriginal: deCentavos(item.valorOriginalCentavos),
-      acrescimoPercentual: Number(acrescimo.toFixed(2)),
       valorUnitario: Number((deCentavos(subtotalCentavos) / item.quantidade).toFixed(2)),
       subtotal: deCentavos(subtotalCentavos),
       observacao: item.observacao,
@@ -212,20 +202,13 @@ function normalizarMateriaisTabela(orcamentoEmpresa = {}, valorGlobal) {
   });
 
   const totalTabelaCentavos = tabela.reduce((acc, item) => acc + paraCentavos(item.subtotal), 0);
-  const acrescimoMedio =
-    totalOriginalCentavos > 0
-      ? ((totalTabelaCentavos - totalOriginalCentavos) / totalOriginalCentavos) * 100
-      : 0;
 
   return {
     materiaisTabela: tabela,
     precificacao: {
       valorGlobal: deCentavos(valorGlobalCentavos),
-      valorOriginalTotal: deCentavos(totalOriginalCentavos),
-      acrescimoPercentualMedio: Number(acrescimoMedio.toFixed(2)),
       totalTabela: deCentavos(totalTabelaCentavos),
       diferenca: deCentavos(valorGlobalCentavos > 0 ? valorGlobalCentavos - totalTabelaCentavos : 0),
-      totalSugeridoPelaIA: deCentavos(totalIACentavos),
       criterio,
     },
   };
@@ -388,6 +371,14 @@ const PADROES_GENERICOS_PROIBIDOS = [
   /sem lista de itens/i,
   /nao discriminados no resumo/i,
   /nao detalhad[ao] no resumo/i,
+  /ajuste proporcional/i,
+  /valor original/i,
+  /valores originais/i,
+  /acrescimo percentual/i,
+  /percentual de acrescimo/i,
+  /acrescimo/i,
+  /percentual/i,
+  /explicacao de rateio/i,
 ];
 
 const PADROES_COMERCIAIS_PROIBIDOS = [
@@ -586,14 +577,20 @@ Os orcamentos NAO podem parecer copias entre si. Para cada empresa, crie uma ide
 - sem misturar o DNA de uma empresa com outra.
 - use "perfilDocumento" de cada empresa como comando obrigatorio de linguagem, abertura, fechamento e rotulos.
 - se duas empresas forem geradas na mesma rodada, compare uma com a outra e evite repetir a mesma abertura, mesmo fechamento, mesmo titulo e mesma sequencia de secoes.
+- nunca use o mesmo texto de introducao, o mesmo paragrafo final ou a mesma logica de apresentacao para empresas diferentes.
+- quando houver Power/operacional e AD/consultoria na mesma rodada, Power deve soar como execucao e mobilizacao; AD deve soar como analise, diagnostico e documentacao. Elas nao podem compartilhar a mesma estrutura narrativa.
+- se houver lista de itens, mantenha a mesma informacao factual, mas mude a forma textual de contextualizar a tabela conforme o DNA da empresa.
+- o fechamento de cada empresa deve ser exclusivo; nao use frases padrao como "colocamo-nos a disposicao" repetidas em todos os documentos.
 
 MATERIAIS E PRECIFICACAO
-- Gere "materiaisTabela" SOMENTE quando o usuario trouxer uma lista real de materiais, produtos ou itens, de preferencia com quantidade, unidade, valor original/custo ou descricao itemizada.
+- Gere "materiaisTabela" SOMENTE quando o usuario trouxer uma lista real de materiais, produtos ou itens, de preferencia com quantidade, unidade, custo de referencia ou descricao itemizada.
 - Se o usuario mencionar "materiais" de forma generica, sem lista, nao crie tabela, nao crie itens ficticios e deixe "materiaisTabela" vazio.
-- A tabela deve ter descricao, unidade, quantidade, valorOriginal, acrescimoPercentual, valorUnitario e subtotal.
+- A tabela final visivel ao cliente deve conter somente descricao, quantidade, unidade, valorUnitario final e subtotal final.
+- valorOriginal, custo de referencia, margem e acrescimoPercentual podem ser usados apenas como referencia interna de calculo no JSON, mas NUNCA devem aparecer no texto da proposta, nos titulos, nas consideracoes, no fechamento ou na tabela final.
+- Nao escreva "valor original", "acrescimo", "percentual", "margem", "ajuste proporcional" ou explicacao de rateio no documento do cliente.
 - Use o valor global informado da empresa como total final da tabela quando ele existir.
-- Distribua o acrescimo proporcionalmente aos valores originais para que a soma dos subtotais feche dentro do valor global.
-- Se houver materiais sem valor original, use pesoPercentual para indicar a distribuicao sugerida; o servidor fara o fechamento matematico final.
+- Distribua o valor global proporcionalmente aos custos de referencia para que a soma dos subtotais feche dentro do valor global.
+- Se houver materiais sem custo de referencia, use pesoPercentual para indicar a distribuicao sugerida; o servidor fara o fechamento matematico final.
 - Nao invente materiais que nao estejam no resumo.
 - Nunca escreva frases como "materiais citados sem lista", "prestacao de mao de obra mencionada de forma geral", "natureza tecnica nao detalhada" ou qualquer observacao de falta de informacao.
 
