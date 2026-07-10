@@ -162,7 +162,7 @@ function inputStyle() {
     border: `1px solid ${C.border2}`,
     borderRadius: 10,
     padding: "10px 12px",
-    color: C.text,
+   color: C.text,
     fontSize: 12,
     outline: "none",
     width: "100%",
@@ -181,7 +181,7 @@ export function ClientesCRMPanel({
   abrirOrcamentoSalvo,
   baixarOrcamento,
   lerTextoPDF,
-  imagemParaLeitura,
+  imagemParaLeitura, focusClienteId = "", onFocusClienteAplicado,
 }) {
   const isAdmin = usuarioAtual?.tipo === "admin";
   const base = useMemo(
@@ -206,7 +206,7 @@ export function ClientesCRMPanel({
   const [jadeLoading, setJadeLoading] = useState(false);
   const [pedidoJade, setPedidoJade] = useState("Nara, leia este cliente e me diga o melhor proximo passo para aumentar a chance de fechamento.");
   const [whatsRelatorio, setWhatsRelatorio] = useState(WHATS_REPORT_NUMBER);
-  const refArquivo = useRef(null);
+  const refArquivo = useRef(null); useEffect(() => { if (focusClienteId) { setAtivoId(focusClienteId); setEditando(false); if (onFocusClienteAplicado) onFocusClienteAplicado(); } }, [focusClienteId]);
 
   useEffect(() => {
     let ativo = true;
