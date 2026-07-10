@@ -8,7 +8,7 @@ Aplicacao React/Vite para gerar, revisar, salvar e exportar orcamentos comerciai
 - Geracao de multiplos orcamentos no mesmo fluxo.
 - Cada empresa pode ter DNA de linguagem, estrutura documental, assinatura visual, fonte, cores e papel timbrado proprios.
 - A IA agora retorna identidade documental por empresa: titulo, rotulos e ordem de secoes.
-- Quando houver lista de materiais, o sistema gera tabela estruturada com quantidade, unidade, valor original, acrescimo, valor unitario e subtotal.
+- Quando houver lista de materiais, o sistema gera tabela estruturada com quantidade, unidade, valor unitario final e valor final por item.
 - O backend normaliza os valores da tabela para fechar com o valor global informado.
 - Backup completo com empresas, CRM/orcamentos, meta, logs, usuarios internos e solicitacoes.
 - Aba de chat IA comercial para e-mail, cobranca, WhatsApp, resposta a cliente e apoio na montagem de orcamentos.
