@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { jsPDF } from "jspdf";
 import { authHeaders, supabase } from "./supabase.js";
 import { store } from "./store.js";
@@ -3256,11 +3256,11 @@ function avaliarPrioridadeOrcamento(item) {
   return { score, nivel: "Baixa", cor: BRAND.green, motivos, acao: "Acompanhar" };
 }
 
-function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], meta = {}, pushToast, usuarioAtual, setView, abrirOrcamentoSalvo, baixarOrcamento, onAnexar }) {
+function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], meta = {}, pushToast, usuarioAtual, setView, abrirOrcamentoSalvo, baixarOrcamento, onAnexar, buscaInicial = "", onBuscaInicialAplicada }) {
   const [busca, setBusca] = useState("");
   const [statusFiltro, setStatusFiltro] = useState("Todos");
   const [empresaFiltro, setEmpresaFiltro] = useState("Todas");
-  const [filtroRapido, setFiltroRapido] = useState("Todos");
+  const [filtroRapido, setFiltroRapido] = useState("Todos"); useEffect(() => { if (buscaInicial) { setBusca(buscaInicial); setFiltroRapido("Todos"); if (onBuscaInicialAplicada) onBuscaInicialAplicada(); } }, [buscaInicial]);
   const [ordenacao, setOrdenacao] = useState("contatoAsc");
   const [porPagina, setPorPagina] = useState(15);
   const [pagina, setPagina] = useState(1);
@@ -4694,7 +4694,7 @@ export default function App() {
   const [usuarios, setUsuarios] = useState([]);
   const [usuarioAtual, setUsuarioAtual] = useState(null);
   const [acessoPerfil, setAcessoPerfil] = useState(null);
-  const [relatorioPendente, setRelatorioPendente] = useState(null);
+  const [relatorioPendente, setRelatorioPendente] = useState(null); const [buscaGlobal, setBuscaGlobal] = useState(""); const [globalFoco, setGlobalFoco] = useState(null); const resultadosBuscaGlobal = useMemo(() => { const termo = buscaGlobal.trim().toLowerCase(); if (termo.length < 2) return []; const normalizar = (v) => String(v || "").toLowerCase(); const results = []; empresas.forEach((emp) => { const alvo = normalizar((emp.nome || "") + " " + (emp.nomeFantasia || "") + " " + (emp.cnpj || "")); if (alvo.includes(termo)) results.push({ tipo: "empresa", id: emp.id, titulo: emp.nome, subtitulo: emp.cnpj || "Empresa" }); }); clientesCRM.forEach((cli) => { const alvo = normalizar((cli.nome || "") + " " + (cli.empresa || "") + " " + (cli.email || "") + " " + (cli.whatsapp || "")); if (alvo.includes(termo)) results.push({ tipo: "cliente", id: cli.id, titulo: cli.nome || cli.empresa, subtitulo: cli.empresa || "Cliente" }); }); crm.forEach((orc) => { const alvo = normalizar((orc.cliente || "") + " " + (orc.numero || "") + " " + (orc.empresaNome || "")); if (alvo.includes(termo)) results.push({ tipo: "orcamento", id: orc.id, titulo: orc.cliente || "Orcamento", subtitulo: (orc.numero || "") + " - " + (orc.empresaNome || ""), cliente: orc.cliente || "" }); }); return results.slice(0, 8); }, [buscaGlobal, empresas, clientesCRM, crm]); const abrirResultadoBuscaGlobal = (resultado) => { if (resultado.tipo === "empresa") { setView("empresas"); } else if (resultado.tipo === "cliente") { setView("clientes"); setGlobalFoco({ tipo: "cliente", id: resultado.id }); } else if (resultado.tipo === "orcamento") { setView("gestao"); setGlobalFoco({ tipo: "orcamento", cliente: resultado.cliente }); } setBuscaGlobal(""); };
 
   useEffect(() => {
     const onBackupImported = (event) => {
@@ -6131,7 +6131,7 @@ export default function App() {
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{ display: "flex", gap: 3, background: BRAND.bg, borderRadius: 10, padding: 4, border: `1px solid ${BRAND.border2}` }}>
+          <div style={{ display: "flex", <div style={{ position: "relative" }}><input value={buscaGlobal} onChange={(e) => setBuscaGlobal(e.target.value)} placeholder="Buscar cliente, orcamento, empresa..." style={{ width: 220, background: BRAND.panel2, border: "1px solid " + BRAND.border2, borderRadius: 10, padding: "8px 12px", color: BRAND.text, fontSize: 12, outline: "none" }} />{resultadosBuscaGlobal.length > 0 && (<div style={{ position: "absolute", top: "110%", left: 0, width: 300, maxHeight: 320, overflowY: "auto", background: BRAND.panel, border: "1px solid " + BRAND.border, borderRadius: 12, boxShadow: "0 18px 50px rgba(0,0,0,.5)", zIndex: 50 }}>{resultadosBuscaGlobal.map((r) => (<button key={r.tipo + "_" + r.id} onClick={() => abrirResultadoBuscaGlobal(r)} style={{ display: "block", width: "100%", textAlign: "left", padding: "10px 12px", border: "none", borderBottom: "1px solid " + BRAND.border2, background: "transparent", color: BRAND.text, cursor: "pointer" }}><div style={{ fontSize: 12, fontWeight: 850 }}>{r.titulo}</div><div style={{ fontSize: 10, color: BRAND.dim, marginTop: 2 }}>{r.tipo === "empresa" ? "Empresa" : r.tipo === "cliente" ? "Cliente" : "Orcamento"} - {r.subtitulo}</div></button>))}</div>)}</div><div style={{ display: "flex", gap: 3, background: BRAND.bg, borderRadius: 10, padding: 4, border: `1px solid ${BRAND.border2}` }}>
             {[
               ["gestao", "📊 Gestão"],
               ["clientes", "👥 Clientes"],
@@ -6161,7 +6161,7 @@ export default function App() {
           setView={setView}
           abrirOrcamentoSalvo={abrirOrcamentoSalvo}
           baixarOrcamento={baixarOrcamento}
-          onAnexar={() => setAnexarOpen(true)}
+          onAnexar={() => setAnexarOpen(true)} buscaInicial={globalFoco && globalFoco.tipo === "orcamento" ? globalFoco.cliente : ""} onBuscaInicialAplicada={() => setGlobalFoco(null)}
         />
       )}
 
@@ -6176,7 +6176,7 @@ export default function App() {
           abrirOrcamentoSalvo={abrirOrcamentoSalvo}
           baixarOrcamento={baixarOrcamento}
           lerTextoPDF={lerTextoPDF}
-          imagemParaLeitura={imagemParaLeitura}
+          imagemParaLeitura={imagemParaLeitura} focusClienteId={globalFoco && globalFoco.tipo === "cliente" ? globalFoco.id : ""} onFocusClienteAplicado={() => setGlobalFoco(null)}
         />
       )}
 
