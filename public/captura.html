@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Fale com a gente - OrcaFlow</title>
+<meta name="robots" content="noindex" />
+<style>
+:root {
+  --bg: #07111F;
+  --panel: #0B1628;
+  --panel2: #071220;
+  --border: #1E3352;
+  --border2: #28425F;
+  --text: #E5F0FF;
+  --muted: #9FB0C8;
+  --dim: #65758F;
+  --green: #00FF88;
+  --green2: #16A34A;
+  --blue2: #2563EB;
+  --danger: #FB7185;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: radial-gradient(circle at top, #0C1B33, var(--bg));
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.card {
+  width: 100%;
+  max-width: 460px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 28px;
+  box-shadow: 0 20px 60px rgba(0,0,0,.45);
+}
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+.logo strong {
+  font-size: 18px;
+  letter-spacing: .5px;
+}
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--green);
+  box-shadow: 0 0 12px var(--green);
+}
+h1 {
+  font-size: 21px;
+  margin: 0 0 6px;
+}
+p.sub {
+  color: var(--muted);
+  font-size: 13.5px;
+  margin: 0 0 20px;
+  line-height: 1.5;
+}
+label {
+  display: block;
+  font-size: 10.5px;
+  letter-spacing: 1.2px;
+  font-weight: 700;
+  color: var(--dim);
+  margin-bottom: 6px;
+  margin-top: 14px;
+}
+input, textarea {
+  width: 100%;
+  background: var(--panel2);
+  border: 1px solid var(--border2);
+  border-radius: 10px;
+  padding: 11px 12px;
+  color: var(--text);
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+}
+textarea { resize: vertical; min-height: 80px; }
+input:focus, textarea:focus { border-color: var(--green2); }
+.hp { position: absolute; left: -9999px; top: -9999px; opacity: 0; height: 0; width: 0; }
+button {
+  width: 100%;
+  margin-top: 20px;
+  padding: 13px 14px;
+  border-radius: 12px;
+  border: none;
+  background: linear-gradient(135deg, var(--green2), var(--blue2));
+  color: #fff;
+  font-weight: 800;
+  font-size: 14.5px;
+  cursor: pointer;
+}
+button:disabled { opacity: .6; cursor: not-allowed; }
+.msg {
+  margin-top: 14px;
+  padding: 11px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  display: none;
+}
+.msg.ok { display: block; background: rgba(22,163,74,.14); border: 1px solid rgba(22,163,74,.4); color: #86efac; }
+.msg.erro { display: block; background: rgba(251,113,133,.12); border: 1px solid rgba(251,113,133,.4); color: var(--danger); }
+.footer {
+  margin-top: 18px;
+  text-align: center;
+  color: var(--dim);
+  font-size: 11px;
+}
+</style>
+</head>
+<body>
+<div class="card">
+<div class="logo"><span class="dot"></span><strong>OrcaFlow</strong></div>
+<h1>Vamos conversar sobre o seu projeto</h1>
+<p class="sub">Preencha os dados abaixo e nossa equipe entra em contato o mais rapido possivel.</p>
+<form id="form-lead">
+<label>NOME</label>
+<input type="text" id="nome" placeholder="Seu nome" required />
+<label>EMPRESA (OPCIONAL)</label>
+<input type="text" id="empresa" placeholder="Nome da empresa" />
+<label>WHATSAPP</label>
+<input type="tel" id="whatsapp" placeholder="(00) 00000-0000" />
+<label>E-MAIL</label>
+<input type="email" id="email" placeholder="seu@email.com" />
+<label>O QUE VOCE PRECISA?</label>
+<textarea id="mensagem" placeholder="Conte rapidamente o que voce precisa..."></textarea>
+<input class="hp" type="text" id="website" name="website" tabindex="-1" autocomplete="off" />
+<button type="submit" id="btn-enviar">Enviar</button>
+<div class="msg" id="msg"></div>
+</form>
+<div class="footer">Seus dados sao usados apenas para retorno comercial.</div>
+</div>
+<script>
+const form = document.getElementById("form-lead");
+const btn = document.getElementById("btn-enviar");
+const msg = document.getElementById("msg");
+const params = new URLSearchParams(window.location.search);
+const origem = params.get("origem") || "Formulario do site";
+
+form.addEventListener("submit", async function (event) {
+  event.preventDefault();
+  msg.className = "msg";
+  msg.textContent = "";
+
+  const nome = document.getElementById("nome").value.trim();
+  const empresa = document.getElementById("empresa").value.trim();
+  const whatsapp = document.getElementById("whatsapp").value.trim();
+  const email = document.getElementById("email").value.trim();
+  const mensagem = document.getElementById("mensagem").value.trim();
+  const website = document.getElementById("website").value.trim();
+
+  if (!nome) {
+    msg.className = "msg erro";
+    msg.textContent = "Informe seu nome.";
+    return;
+  }
+  if (!whatsapp && !email) {
+    msg.className = "msg erro";
+    msg.textContent = "Informe um WhatsApp ou e-mail para contato.";
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = "Enviando...";
+
+  try {
+    const resposta = await fetch("/api/lead-capture", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nome, empresa, whatsapp, email, mensagem, origem, website }),
+    });
+    const dados = await resposta.json().catch(function () { return {}; });
+    if (!resposta.ok || !dados.ok) {
+      throw new Error(dados.error || "Nao foi possivel enviar agora.");
+    }
+    msg.className = "msg ok";
+    msg.textContent = "Recebemos seus dados! Em breve entraremos em contato.";
+    form.reset();
+    btn.textContent = "Enviado";
+  } catch (erro) {
+    msg.className = "msg erro";
+    msg.textContent = erro.message || "Erro ao enviar. Tente novamente.";
+    btn.disabled = false;
+    btn.textContent = "Enviar";
+  }
+});
+</script>
+</body>
+</html>
