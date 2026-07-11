@@ -262,7 +262,7 @@ export function ClientesCRMPanel({
 
   const ativo = enriquecidos.find((item) => item.id === ativoId) || filtrados[0] || null;
   const relacionados = useMemo(() => (ativo ? orcamentosDoCliente(ativo, crm) : []), [ativo, crm]);
-  const contatosAtivo = Array.isArray(ativo?.contatos) ? ativo.contatos : [];
+  const contatosAtivo = Array.isArray(ativo?.contatos) ? ativo.contatos : []; const timelineUnificada = useMemo(() => { const diretos = contatosAtivo.map((msg) => ({ ...msg, _origemTimeline: "Contato direto" })); const deOrcamentos = (relacionados || []).flatMap((orc) => (Array.isArray(orc.conversas) ? orc.conversas : []).map((msg) => ({ ...msg, _origemTimeline: ("Orcamento " + (orc.numero || "")).trim() }))); return [...diretos, ...deOrcamentos].sort((a, b) => new Date(b?.criadoEm || 0) - new Date(a?.criadoEm || 0)); }, [contatosAtivo, relacionados]);
 
   useEffect(() => {
     if (!ativoId && filtrados[0]?.id) setAtivoId(filtrados[0].id);
@@ -853,12 +853,12 @@ export function ClientesCRMPanel({
               </div>
 
               <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: 16 }}>
-                <div style={{ color: C.green, fontSize: 10, letterSpacing: 2, fontWeight: 950, marginBottom: 10 }}>HISTORICO DO CLIENTE</div>
+                <div style={{ color: C.green, fontSize: 10, letterSpacing: 2, fontWeight: 950, marginBottom: 10 }}>LINHA DO TEMPO UNIFICADA</div>
                 <div style={{ display: "grid", gap: 9 }}>
-                  {contatosAtivo.length === 0 && <div style={{ color: C.dim, fontSize: 12 }}>Nenhum contato registrado ainda.</div>}
-                  {contatosAtivo.slice(0, 30).map((msg) => (
+                  {timelineUnificada.length === 0 && <div style={{ color: C.dim, fontSize: 12 }}>Nenhum contato registrado ainda.</div>}
+                  {timelineUnificada.slice(0, 30).map((msg) => (
                     <div key={msg.id} style={{ background: C.panel2, border: `1px solid ${C.border2}`, borderRadius: 12, padding: 11 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 5 }}><strong style={{ fontSize: 12 }}>{msg.canal} | {msg.tipo}</strong><span style={{ color: C.dim, fontSize: 10 }}>{tsFmt(msg.criadoEm)}</span></div>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 5 }}><strong style={{ fontSize: 12 }}>{msg.canal} | {msg.tipo}</strong><span style={{ color: C.dim, fontSize: 10 }}>{tsFmt(msg.criadoEm)}</span></div>{msg._origemTimeline && <div style={{ marginBottom: 6 }}><span style={{ padding: "2px 7px", borderRadius: 999, background: (C.blue2 + "18"), color: "#93C5FD", fontSize: 9.5, fontWeight: 850 }}>{msg._origemTimeline}</span></div>}
                       <div style={{ color: C.dim, fontSize: 11, marginBottom: 6 }}>{msg.direcao}{msg.orcamentoNumero ? ` | ${msg.orcamentoNumero}` : ""}</div>
                       {msg.mensagem && <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.55, fontSize: 12 }}>{msg.mensagem}</div>}
                       {msg.arquivoNome && <div style={{ marginTop: 8, color: "#93C5FD", fontSize: 11 }}>Anexo: {msg.arquivoNome} - {msg.arquivoResumo}</div>}
