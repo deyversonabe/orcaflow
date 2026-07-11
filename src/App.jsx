@@ -3256,13 +3256,13 @@ function avaliarPrioridadeOrcamento(item) {
   return { score, nivel: "Baixa", cor: BRAND.green, motivos, acao: "Acompanhar" };
 }
 
-function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], meta = {}, pushToast, usuarioAtual, setView, abrirOrcamentoSalvo, baixarOrcamento, onAnexar, buscaInicial = "", onBuscaInicialAplicada }) {
+function KanbanOrcamentos({ lista, updateItem, baixarOrcamento, abrirOrcamentoSalvo }) { const colunas = ["Aberto", "Andamento", "Finalizado"]; const onDropCol = (e, status) => { e.preventDefault(); const id = e.dataTransfer.getData("text/plain"); if (id) updateItem(id, "status", status); }; return (<div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(240px, 1fr))", gap: 14, marginBottom: 16 }}>{colunas.map((col) => { const itens = lista.filter((item) => normalizarStatusOrcamento(item) === col); const cor = ({ Aberto: BRAND.blue, Andamento: BRAND.warn, Finalizado: BRAND.green })[col]; return (<div key={col} onDragOver={(e) => e.preventDefault()} onDrop={(e) => onDropCol(e, col)} style={{ background: "rgba(7,17,31,.55)", border: `1px solid ${BRAND.border}`, borderRadius: 14, padding: 10, minHeight: 220 }}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}><span style={{ fontSize: 12, fontWeight: 900, color: cor }}>{col}</span><span style={{ fontSize: 10, color: BRAND.muted, fontWeight: 800 }}>{itens.length}</span></div><div style={{ display: "grid", gap: 8, maxHeight: 520, overflowY: "auto" }}>{itens.map((item) => { const prioridade = avaliarPrioridadeOrcamento(item); const atrasado = isAtrasadoOrcamento(item); return (<div key={item.id} draggable onDragStart={(e) => e.dataTransfer.setData("text/plain", item.id)} style={{ background: BRAND.panel2, border: `1px solid ${atrasado ? BRAND.danger : BRAND.border2}`, borderRadius: 10, padding: 9, cursor: "grab" }}><div style={{ fontSize: 11.5, fontWeight: 900, color: BRAND.text, overflowWrap: "anywhere" }}>{item.cliente || "Cliente sem nome"}</div><div style={{ fontSize: 9.5, color: BRAND.dim, marginTop: 2 }}>{item.numero || "—"} · {item.empresaNome || "—"}</div><div style={{ fontSize: 11, fontWeight: 850, color: BRAND.green, marginTop: 5 }}>{brl(item.valorGlobal ?? item.valor)}</div><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6 }}><span style={{ fontSize: 9, fontWeight: 900, color: prioridade.cor }}>{prioridade.nivel}</span>{atrasado && <span style={{ fontSize: 9, fontWeight: 900, color: BRAND.danger }}>Atrasado</span>}</div><button type="button" onClick={() => (baixarOrcamento || abrirOrcamentoSalvo)?.(item)} style={{ marginTop: 6, width: "100%", padding: "5px 7px", borderRadius: 7, border: `1px solid ${BRAND.blue2}55`, background: `${BRAND.blue2}14`, color: "#93C5FD", cursor: "pointer", fontSize: 9.5, fontWeight: 850 }}>Abrir</button></div>); })}{itens.length === 0 && (<div style={{ color: BRAND.dim, fontSize: 10.5, textAlign: "center", padding: "14px 4px" }}>Nenhum orçamento aqui.</div>)}</div></div>); })}</div>); } function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], meta = {}, pushToast, usuarioAtual, setView, abrirOrcamentoSalvo, baixarOrcamento, onAnexar, buscaInicial = "", onBuscaInicialAplicada }) {
   const [busca, setBusca] = useState("");
   const [statusFiltro, setStatusFiltro] = useState("Todos");
   const [empresaFiltro, setEmpresaFiltro] = useState("Todas");
   const [filtroRapido, setFiltroRapido] = useState("Todos"); useEffect(() => { if (buscaInicial) { setBusca(buscaInicial); setFiltroRapido("Todos"); if (onBuscaInicialAplicada) onBuscaInicialAplicada(); } }, [buscaInicial]);
   const [ordenacao, setOrdenacao] = useState("contatoAsc");
-  const [porPagina, setPorPagina] = useState(15);
+  const [porPagina, setPorPagina] = useState(15); const [visualizacao, setVisualizacao] = useState("lista");
   const [pagina, setPagina] = useState(1);
   const [gerandoContato, setGerandoContato] = useState(null);
   const [historicoAberto, setHistoricoAberto] = useState(null);
@@ -3920,7 +3920,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], meta = {},
           </div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "minmax(220px,2fr) minmax(140px,1fr) minmax(170px,1fr) minmax(160px,1fr) 110px", gap: 12, marginBottom: 16 }}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}><button type="button" onClick={() => setVisualizacao("lista")} style={{ padding: "8px 14px", borderRadius: 10, border: `1px solid ${visualizacao === "lista" ? BRAND.green2 : BRAND.border2}`, background: visualizacao === "lista" ? `${BRAND.green2}18` : "transparent", color: visualizacao === "lista" ? BRAND.green : BRAND.muted, cursor: "pointer", fontWeight: 850 }}>📋 Lista</button><button type="button" onClick={() => setVisualizacao("kanban")} style={{ padding: "8px 14px", borderRadius: 10, border: `1px solid ${visualizacao === "kanban" ? BRAND.green2 : BRAND.border2}`, background: visualizacao === "kanban" ? `${BRAND.green2}18` : "transparent", color: visualizacao === "kanban" ? BRAND.green : BRAND.muted, cursor: "pointer", fontWeight: 850 }}>🗂 Kanban</button></div><div style={{ display: "grid", gridTemplateColumns: "minmax(220px,2fr) minmax(140px,1fr) minmax(170px,1fr) minmax(160px,1fr) 110px", gap: 12, marginBottom: 16 }}>
           <input
             value={busca}
             onChange={(e) => setBusca(e.target.value)}
@@ -3957,7 +3957,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], meta = {},
           </select>
         </div>
 
-        <div style={{ overflowX: "auto" }}>
+        <div style={{ overflowX: "auto", display: visualizacao === "lista" ? "block" : "none" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 1180 }}>
             <thead>
               <tr style={{ color: BRAND.muted, textAlign: "left" }}>
@@ -4229,8 +4229,8 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], meta = {},
           </table>
         </div>
 
-        {lista.length > 0 && (
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", borderTop: `1px solid ${BRAND.border}`, paddingTop: 14, marginTop: 12 }}>
+        {visualizacao === "kanban" && (<KanbanOrcamentos lista={lista} updateItem={updateItem} baixarOrcamento={baixarOrcamento} abrirOrcamentoSalvo={abrirOrcamentoSalvo} />)}{lista.length > 0 && (
+          <div style={{ display: visualizacao === "lista" ? "flex" : "none", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", borderTop: `1px solid ${BRAND.border}`, paddingTop: 14, marginTop: 12 }}>
             <div style={{ fontSize: 12, color: BRAND.muted }}>
               Mostrando {inicioPagina + 1}-{Math.min(inicioPagina + porPagina, lista.length)} de {lista.length}
             </div>
