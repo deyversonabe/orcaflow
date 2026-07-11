@@ -4,7 +4,7 @@ import { store } from "./store.js";
 import { AlertTriangle, CalendarClock, Copy, FileText, Mail, MessageCircle, Send, Target, Upload, Users } from "lucide-react";
 import { abrirWhatsRelatorio, gerarRelatorioSemanalNara, normalizarWhatsDestino, WHATS_REPORT_NUMBER, WHATS_REPORT_STORAGE_KEY } from "./weeklyReport.js";
 
-const KEY_CLIENTES = "orcaflow_clientes_crm";
+const KEY_CLIENTES = "orcaflow_clientes_crm"; const KEY_SEGMENTOS = "orcaflow_segmentos_clientes";
 
 const C = {
   bg: "#07111F",
@@ -189,7 +189,7 @@ export function ClientesCRMPanel({
     [clientes, isAdmin, usuarioAtual?.id]
   );
   const [busca, setBusca] = useState("");
-  const [filtro, setFiltro] = useState("todos");
+  const [filtro, setFiltro] = useState("todos"); const [segmentoFiltro, setSegmentoFiltro] = useState("todos"); const [segmentosSalvos, setSegmentosSalvos] = useState([]);
   const [ativoId, setAtivoId] = useState(base[0]?.id || "");
   const [editando, setEditando] = useState(false);
   const [form, setForm] = useState(criarCliente(usuarioAtual));
@@ -217,7 +217,7 @@ export function ClientesCRMPanel({
     return () => {
       ativo = false;
     };
-  }, []);
+  }, []); useEffect(() => { (async () => { const salvo = await store.get(KEY_SEGMENTOS); if (Array.isArray(salvo)) setSegmentosSalvos(salvo); })(); }, []);
 
   const enriquecidos = useMemo(() => {
     return base.map((item) => {
@@ -243,7 +243,7 @@ export function ClientesCRMPanel({
       return soma + (valorCliente || valorOrcamentos);
     }, 0);
     return { abertos, quentes, atrasados, semContato, valor };
-  }, [enriquecidos]);
+  }, [enriquecidos]); const segmentosDisponiveis = useMemo(() => { const set = new Set(); base.forEach((item) => { const seg = clean(item.segmento, 60); if (seg) set.add(seg); }); return Array.from(set).sort(); }, [base]);
 
   const filtrados = useMemo(() => {
     const q = textoBusca(busca);
@@ -256,9 +256,9 @@ export function ClientesCRMPanel({
         (filtro === "atrasados" && isAtrasado(item)) ||
         (filtro === "hoje" && isHoje(item)) ||
         (filtro === "sem-contato" && !item.proximoContato);
-      return matchBusca && matchFiltro;
+      const matchSegmento = segmentoFiltro === "todos" || textoBusca(item.segmento) === textoBusca(segmentoFiltro); return matchBusca && matchFiltro && matchSegmento;
     });
-  }, [enriquecidos, busca, filtro]);
+  }, [enriquecidos, busca, filtro, segmentoFiltro]);
 
   const ativo = enriquecidos.find((item) => item.id === ativoId) || filtrados[0] || null;
   const relacionados = useMemo(() => (ativo ? orcamentosDoCliente(ativo, crm) : []), [ativo, crm]);
@@ -279,7 +279,7 @@ export function ClientesCRMPanel({
     return ok;
   };
 
-  const novoCliente = () => {
+  const salvarSegmentoAtual = async () => { const nome = (window.prompt("Nome do segmento (ex: Clientes quentes de Curitiba)") || "").trim(); if (!nome) return; const novo = { id: "seg_" + Date.now(), nome, filtro, segmentoFiltro }; const novos = [novo, ...segmentosSalvos].slice(0, 12); setSegmentosSalvos(novos); await store.set(KEY_SEGMENTOS, novos); pushToast("Segmento salvo.", "ok"); }; const excluirSegmentoSalvo = async (id) => { const novos = segmentosSalvos.filter((item) => item.id !== id); setSegmentosSalvos(novos); await store.set(KEY_SEGMENTOS, novos); }; const novoCliente = () => {
     setForm(criarCliente(usuarioAtual));
     setAtivoId("");
     setEditando(true);
@@ -618,7 +618,7 @@ export function ClientesCRMPanel({
             <button key={id} onClick={() => setFiltro(id)} style={{ padding: "6px 9px", borderRadius: 999, border: `1px solid ${filtro === id ? C.green2 : C.border2}`, background: filtro === id ? `${C.green2}18` : "transparent", color: filtro === id ? C.green : C.muted, cursor: "pointer", fontSize: 10.5, fontWeight: 850 }}>{label}</button>
           ))}
         </div>
-        <button onClick={sincronizarOrcamentos} style={{ width: "100%", marginBottom: 12, padding: "9px 10px", borderRadius: 10, border: `1px solid ${C.blue2}55`, background: `${C.blue2}12`, color: "#93C5FD", fontWeight: 850, cursor: "pointer" }}>Criar clientes dos orcamentos</button>
+        <div style={{ marginBottom: 10 }}><div style={LBL}>SEGMENTO DINAMICO</div><select value={segmentoFiltro} onChange={(e) => setSegmentoFiltro(e.target.value)} style={INP}><option value="todos">Todos os segmentos</option>{segmentosDisponiveis.map((seg) => <option key={seg} value={seg}>{seg}</option>)}</select></div><div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>{segmentosSalvos.map((seg) => (<button key={seg.id} style={{ padding: "6px 9px", borderRadius: 999, border: "1px solid " + C.border2, background: "transparent", color: C.muted, cursor: "pointer", fontSize: 10, fontWeight: 850 }} onClick={() => { setFiltro(seg.filtro); setSegmentoFiltro(seg.segmentoFiltro); }}>{seg.nome}<span onClick={(e) => { e.stopPropagation(); excluirSegmentoSalvo(seg.id); }} style={{ marginLeft: 6, color: C.danger }}> x</span></button>))}<button onClick={salvarSegmentoAtual} style={{ padding: "6px 9px", borderRadius: 999, border: "1px dashed " + C.border2, background: "transparent", color: C.dim, cursor: "pointer", fontSize: 10, fontWeight: 850 }}>+ Salvar segmento atual</button></div><button onClick={sincronizarOrcamentos} style={{ width: "100%", marginBottom: 12, padding: "9px 10px", borderRadius: 10, border: `1px solid ${C.blue2}55`, background: `${C.blue2}12`, color: "#93C5FD", fontWeight: 850, cursor: "pointer" }}>Criar clientes dos orcamentos</button>
         <button onClick={abrirRelatorioSemanal} style={{ width: "100%", marginBottom: 12, padding: "9px 10px", borderRadius: 10, border: `1px solid ${C.green2}66`, background: `${C.green2}16`, color: C.green, fontWeight: 900, cursor: "pointer" }}>Enviar relatorio semanal Nara</button>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {filtrados.map((item) => {
