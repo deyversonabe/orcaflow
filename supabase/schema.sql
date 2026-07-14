@@ -48,6 +48,11 @@ create table if not exists public.app_users (
   updated_at timestamptz not null default now()
 );
 
+alter table public.app_users add column if not exists display_name text;
+alter table public.app_users add column if not exists signature_name text;
+alter table public.app_users add column if not exists phone text;
+alter table public.app_users add column if not exists cargo text;
+
 alter table public.app_users enable row level security;
 
 create or replace function public.is_app_admin(uid uuid)
@@ -65,6 +70,31 @@ as $$
       and status = 'approved'
   );
 $$;
+
+drop policy if exists "user_state_select_admin_all" on public.user_state;
+create policy "user_state_select_admin_all"
+on public.user_state for select
+to authenticated
+using (public.is_app_admin(auth.uid()));
+
+drop policy if exists "user_state_insert_admin_all" on public.user_state;
+create policy "user_state_insert_admin_all"
+on public.user_state for insert
+to authenticated
+with check (public.is_app_admin(auth.uid()));
+
+drop policy if exists "user_state_update_admin_all" on public.user_state;
+create policy "user_state_update_admin_all"
+on public.user_state for update
+to authenticated
+using (public.is_app_admin(auth.uid()))
+with check (public.is_app_admin(auth.uid()));
+
+drop policy if exists "user_state_delete_admin_all" on public.user_state;
+create policy "user_state_delete_admin_all"
+on public.user_state for delete
+to authenticated
+using (public.is_app_admin(auth.uid()));
 
 create or replace function public.ensure_app_user()
 returns public.app_users
@@ -93,6 +123,8 @@ begin
     update public.app_users
        set email = coalesce(current_email, existing.email),
            name = coalesce(existing.name, current_email),
+           display_name = coalesce(existing.display_name, existing.name, current_email),
+           signature_name = coalesce(existing.signature_name, existing.display_name, existing.name, current_email),
            updated_at = now()
      where user_id = auth.uid()
      returning * into existing;
@@ -109,6 +141,8 @@ begin
     user_id,
     email,
     name,
+    display_name,
+    signature_name,
     role,
     status,
     requested_at,
@@ -119,6 +153,8 @@ begin
     auth.uid(),
     current_email,
     coalesce(current_email, 'Usuario'),
+    coalesce(current_email, 'Usuario'),
+    coalesce(current_email, 'Usuario'),
     case when admins_count = 0 then 'admin' else 'usuario' end,
     case when admins_count = 0 then 'approved' else 'pending' end,
     now(),
@@ -128,6 +164,42 @@ begin
   returning * into existing;
 
   return existing;
+end;
+$$;
+
+create or replace function public.update_my_app_profile(
+  p_display_name text default null,
+  p_signature_name text default null,
+  p_phone text default null,
+  p_cargo text default null
+)
+returns public.app_users
+language plpgsql
+security definer
+set search_path = public, auth
+as $$
+declare
+  updated public.app_users;
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+
+  update public.app_users
+     set display_name = nullif(trim(coalesce(p_display_name, display_name, name, email)), ''),
+         signature_name = nullif(trim(coalesce(p_signature_name, signature_name, p_display_name, display_name, name, email)), ''),
+         phone = nullif(trim(coalesce(p_phone, phone, '')), ''),
+         cargo = nullif(trim(coalesce(p_cargo, cargo, '')), ''),
+         name = nullif(trim(coalesce(p_display_name, display_name, name, email)), ''),
+         updated_at = now()
+   where user_id = auth.uid()
+   returning * into updated;
+
+  if updated.user_id is null then
+    updated := public.ensure_app_user();
+  end if;
+
+  return updated;
 end;
 $$;
 
@@ -154,6 +226,7 @@ grant select on public.app_users to authenticated;
 grant update on public.app_users to authenticated;
 grant delete on public.app_users to authenticated;
 grant execute on function public.ensure_app_user() to authenticated;
+grant execute on function public.update_my_app_profile(text, text, text, text) to authenticated;
 grant execute on function public.is_app_admin(uuid) to authenticated;
 
 create index if not exists app_users_status_idx
