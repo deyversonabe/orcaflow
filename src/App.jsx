@@ -73,6 +73,8 @@ const KEY_EMP = "orcaflow_empresas";
 const KEY_LOG = "orcaflow_log";
 const KEY_META = "orcaflow_meta";
 const KEY_CRM = "orcaflow_crm_orcamentos";
+const KEY_CRM_TRASH = "orcaflow_crm_lixeira";
+const KEY_AUDITORIA = "orcaflow_auditoria_acoes";
 const KEY_USERS = "orcaflow_users";
 const KEY_RESET = "orcaflow_reset_senha";
 const KEY_CHAT = "orcaflow_chat_ia";
@@ -84,16 +86,16 @@ const KEY_AGENDA = KEY_AGENDA_CLIENTES;
 const KEY_NARA_AUTO = KEY_NARA_AUTOMATION;
 const KEY_NARA_RADAR = KEY_DAILY_RADAR_PENDING;
 const KEY_BACKUP_AUTO = KEY_AUTO_BACKUP_LOG;
-const BACKUP_KEYS = [KEY_EMP, KEY_CRM, KEY_META, KEY_LOG, KEY_USERS, KEY_RESET, KEY_CHAT, KEY_CLIENTES, KEY_AGENDA, KEY_WHATS_RELATORIO, KEY_WEEKLY_REPORT_PENDING, KEY_WHATSAPP_MONITOR, KEY_NARA_AUTO, KEY_NARA_RADAR, KEY_BACKUP_AUTO];
-const USER_TRANSFER_KEYS = [KEY_EMP, KEY_CRM, KEY_CLIENTES, KEY_AGENDA, KEY_CHAT, KEY_WHATSAPP_MONITOR];
+const BACKUP_KEYS = [KEY_EMP, KEY_CRM, KEY_CRM_TRASH, KEY_AUDITORIA, KEY_META, KEY_LOG, KEY_USERS, KEY_RESET, KEY_CHAT, KEY_CLIENTES, KEY_AGENDA, KEY_WHATS_RELATORIO, KEY_WEEKLY_REPORT_PENDING, KEY_WHATSAPP_MONITOR, KEY_NARA_AUTO, KEY_NARA_RADAR, KEY_BACKUP_AUTO];
+const USER_TRANSFER_KEYS = [KEY_EMP, KEY_CRM, KEY_CRM_TRASH, KEY_AUDITORIA, KEY_CLIENTES, KEY_AGENDA, KEY_CHAT, KEY_WHATSAPP_MONITOR];
 const USER_TRANSFER_OPTIONS = [
   { id: "empresas", label: "Empresas cadastradas", keys: [KEY_EMP] },
-  { id: "orcamentos", label: "Orcamentos/gestao", keys: [KEY_CRM] },
+  { id: "orcamentos", label: "Orcamentos/gestao", keys: [KEY_CRM, KEY_CRM_TRASH, KEY_AUDITORIA] },
   { id: "clientes", label: "Clientes CRM", keys: [KEY_CLIENTES] },
   { id: "agenda", label: "Agenda de contatos", keys: [KEY_AGENDA] },
   { id: "chat", label: "Historico da Nara", keys: [KEY_CHAT] },
   { id: "whatsapp", label: "Caixa WhatsApp", keys: [KEY_WHATSAPP_MONITOR] },
-  { id: "comercial", label: "Tudo comercial", keys: [KEY_EMP, KEY_CRM, KEY_CLIENTES, KEY_AGENDA] },
+  { id: "comercial", label: "Tudo comercial", keys: [KEY_EMP, KEY_CRM, KEY_CRM_TRASH, KEY_CLIENTES, KEY_AGENDA] },
 ];
 
 const ADMIN_PADRAO = {
@@ -3350,6 +3352,11 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], meta = {},
   const [whats, setWhats] = useState("");
   const [auditoriaNara, setAuditoriaNara] = useState(null);
   const [backupSugerido, setBackupSugerido] = useState(false);
+  const [orcamentosSelecionados, setOrcamentosSelecionados] = useState([]);
+  const [lixeiraOrcamentos, setLixeiraOrcamentos] = useState([]);
+  const [lixeiraAberta, setLixeiraAberta] = useState(false);
+  const [auditoriaAcoes, setAuditoriaAcoes] = useState([]);
+  const [auditoriaAcoesAberta, setAuditoriaAcoesAberta] = useState(false);
 
   const isAdmin = usuarioAtual?.tipo === "admin";
   const base = isAdmin ? crm : crm.filter((o) => o.userId === usuarioAtual?.id);
@@ -3378,6 +3385,19 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], meta = {},
     };
   }, []);
 
+  useEffect(() => {
+    let ativo = true;
+    (async () => {
+      const dados = await store.getMany([KEY_CRM_TRASH, KEY_AUDITORIA]);
+      if (!ativo) return;
+      setLixeiraOrcamentos(Array.isArray(dados[KEY_CRM_TRASH]) ? dados[KEY_CRM_TRASH] : []);
+      setAuditoriaAcoes(Array.isArray(dados[KEY_AUDITORIA]) ? dados[KEY_AUDITORIA] : []);
+    })();
+    return () => {
+      ativo = false;
+    };
+  }, [usuarioAtual?.id]);
+
   const draftConversa = (id) => conversaDrafts[id] || {
     canal: "WhatsApp",
     direcao: "saida",
@@ -3402,6 +3422,14 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], meta = {},
   useEffect(() => {
     setPagina(1);
   }, [busca, statusFiltro, empresaFiltro, filtroRapido, ordenacao, porPagina]);
+
+  useEffect(() => {
+    setOrcamentosSelecionados((atuais) => {
+      const idsPermitidos = new Set(base.map((item) => item.id));
+      const filtrados = atuais.filter((id) => idsPermitidos.has(id));
+      return filtrados.length === atuais.length ? atuais : filtrados;
+    });
+  }, [crm.length, usuarioAtual?.id, usuarioAtual?.tipo]);
 
   const statusColor = {
     Aberto: BRAND.blue,
@@ -3430,6 +3458,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], meta = {},
       o.arquivoNome,
       o.empresaNomeDetectada,
       o.dataDocumento,
+      ...conversasDoOrcamento(o).slice(0, 8).flatMap((msg) => [msg.canal, msg.tipo, msg.mensagem, msg.conteudo, msg.usuarioNome]),
     ]
       .filter(Boolean)
       .join(" ")
@@ -3496,10 +3525,148 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], meta = {},
     .filter(({ prioridade }) => prioridade.score >= 30)
     .sort((a, b) => b.prioridade.score - a.prioridade.score)
     .slice(0, 6);
+  const lixeiraVisivel = (Array.isArray(lixeiraOrcamentos) ? lixeiraOrcamentos : [])
+    .filter((item) => isAdmin || item.userId === usuarioAtual?.id || item.removidoPorId === usuarioAtual?.id)
+    .slice(0, 80);
+  const auditoriaVisivel = (Array.isArray(auditoriaAcoes) ? auditoriaAcoes : [])
+    .filter((item) => isAdmin || item.usuarioId === usuarioAtual?.id)
+    .slice(0, 40);
+  const pipelineComercial = [
+    { id: "total", label: "Total", qtd: total, valor: valorTotal, cor: BRAND.blue },
+    { id: "aberto", label: "Aberto", qtd: abertos, valor: base.filter((o) => statusFunilOrcamento(o) === "Aberto").reduce((s, o) => s + parseValorBR(o.valorGlobal ?? o.valor), 0), cor: BRAND.blue },
+    { id: "andamento", label: "Andamento", qtd: andamento, valor: base.filter((o) => statusFunilOrcamento(o) === "Andamento").reduce((s, o) => s + parseValorBR(o.valorGlobal ?? o.valor), 0), cor: BRAND.warn },
+    { id: "atrasado", label: "Atrasado", qtd: atrasados, valor: base.filter((o) => statusFunilOrcamento(o) === "Atrasado").reduce((s, o) => s + parseValorBR(o.valorGlobal ?? o.valor), 0), cor: BRAND.danger },
+    { id: "finalizado", label: "Finalizado", qtd: finalizados, valor: base.filter((o) => statusFunilOrcamento(o) === "Finalizado").reduce((s, o) => s + parseValorBR(o.valorGlobal ?? o.valor), 0), cor: BRAND.green },
+  ];
 
   const salvarCRM = (novaLista) => {
     setCrm(novaLista);
     store.set(KEY_CRM, novaLista);
+  };
+
+  const salvarLixeira = (novaLista) => {
+    setLixeiraOrcamentos(novaLista);
+    store.set(KEY_CRM_TRASH, novaLista);
+  };
+
+  const registrarAuditoriaAcao = (acao, itens = [], extra = {}) => {
+    const lista = Array.isArray(itens) ? itens : [itens].filter(Boolean);
+    const registro = {
+      id: `aud_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      acao,
+      quantidade: lista.length,
+      itens: lista.slice(0, 20).map((item) => ({
+        id: item.id || "",
+        numero: item.numero || "",
+        cliente: item.cliente || "",
+        empresaNome: item.empresaNome || item.empresa || "",
+        valorGlobal: item.valorGlobal ?? item.valor ?? "",
+      })),
+      usuarioId: usuarioAtual?.id || "admin",
+      usuarioNome: nomeUsuarioSistema(usuarioAtual),
+      criadoEm: new Date().toISOString(),
+      ...extra,
+    };
+    const novaAuditoria = [registro, ...auditoriaAcoes].slice(0, 500);
+    setAuditoriaAcoes(novaAuditoria);
+    store.set(KEY_AUDITORIA, novaAuditoria);
+  };
+
+  const idsSelecionados = new Set(orcamentosSelecionados);
+  const idsPagina = paginaItens.map((item) => item.id).filter(Boolean);
+  const todosPaginaSelecionados = idsPagina.length > 0 && idsPagina.every((id) => idsSelecionados.has(id));
+
+  const alternarSelecaoOrcamento = (id) => {
+    if (!id) return;
+    setOrcamentosSelecionados((atuais) => (
+      atuais.includes(id) ? atuais.filter((itemId) => itemId !== id) : [...atuais, id]
+    ));
+  };
+
+  const alternarSelecaoPagina = () => {
+    if (!idsPagina.length) return;
+    setOrcamentosSelecionados((atuais) => {
+      const set = new Set(atuais);
+      if (todosPaginaSelecionados) {
+        idsPagina.forEach((id) => set.delete(id));
+      } else {
+        idsPagina.forEach((id) => set.add(id));
+      }
+      return [...set];
+    });
+  };
+
+  const limparSelecaoOrcamentos = () => {
+    setOrcamentosSelecionados([]);
+  };
+
+  const excluirOrcamentos = (ids = []) => {
+    const permitidos = new Set(base.map((item) => item.id));
+    const idsParaExcluir = [...new Set(ids)].filter((id) => permitidos.has(id));
+
+    if (!idsParaExcluir.length) {
+      pushToast("Selecione pelo menos um orcamento para apagar.", "aviso");
+      return;
+    }
+
+    const itens = base.filter((item) => idsParaExcluir.includes(item.id));
+    const descricao = itens.length === 1
+      ? `${itens[0].numero || "orcamento"} - ${itens[0].cliente || "cliente sem nome"}`
+      : `${itens.length} orcamentos selecionados`;
+
+    const ok = window.confirm(
+      `Enviar para a lixeira: ${descricao}?\n\nO orcamento sai da Gestao, indicadores e filtros, mas podera ser restaurado pela lixeira.`
+    );
+    if (!ok) return;
+
+    const idsSet = new Set(idsParaExcluir);
+    const agora = new Date().toISOString();
+    const itensLixeira = itens.map((item) => ({
+      ...item,
+      removidoDaGestaoEm: agora,
+      removidoPorId: usuarioAtual?.id || "admin",
+      removidoPorNome: nomeUsuarioSistema(usuarioAtual),
+      origemLixeira: "gestao",
+    }));
+    salvarCRM(crm.filter((item) => !idsSet.has(item.id)));
+    salvarLixeira([...itensLixeira, ...lixeiraOrcamentos.filter((item) => !idsSet.has(item.id))].slice(0, 500));
+    registrarAuditoriaAcao("MOVER_LIXEIRA", itens);
+    setOrcamentosSelecionados((atuais) => atuais.filter((id) => !idsSet.has(id)));
+    if (historicoAberto && idsSet.has(historicoAberto)) setHistoricoAberto(null);
+    pushToast(`${idsParaExcluir.length} orcamento(s) movido(s) para a lixeira.`, "ok");
+  };
+
+  const restaurarOrcamentos = (ids = []) => {
+    const idsSet = new Set(ids);
+    const restaurar = lixeiraOrcamentos.filter((item) => idsSet.has(item.id));
+    if (!restaurar.length) {
+      pushToast("Nenhum orcamento selecionado na lixeira.", "aviso");
+      return;
+    }
+    const existentes = new Set(crm.map((item) => item.id));
+    const restaurados = restaurar.map(({ removidoDaGestaoEm, removidoPorId, removidoPorNome, origemLixeira, ...item }) => ({
+      ...item,
+      restauradoEm: new Date().toISOString(),
+      atualizadoEm: new Date().toISOString(),
+    }));
+    salvarCRM([...restaurados.filter((item) => !existentes.has(item.id)), ...crm]);
+    salvarLixeira(lixeiraOrcamentos.filter((item) => !idsSet.has(item.id)));
+    registrarAuditoriaAcao("RESTAURAR_LIXEIRA", restaurar);
+    pushToast(`${restaurar.length} orcamento(s) restaurado(s) para a gestao.`, "ok");
+  };
+
+  const excluirDefinitivoLixeira = (ids = []) => {
+    const idsSet = new Set(ids);
+    const remover = lixeiraOrcamentos.filter((item) => idsSet.has(item.id));
+    if (!remover.length) {
+      pushToast("Nenhum orcamento selecionado na lixeira.", "aviso");
+      return;
+    }
+    const ok = window.confirm(`Excluir definitivamente ${remover.length} orcamento(s) da lixeira?\n\nEsta acao nao pode ser desfeita.`);
+    if (!ok) return;
+    salvarLixeira(lixeiraOrcamentos.filter((item) => !idsSet.has(item.id)));
+    registrarAuditoriaAcao("EXCLUIR_DEFINITIVO", remover);
+    pushToast(`${remover.length} orcamento(s) excluido(s) definitivamente.`, "aviso");
   };
 
   const updateItem = (id, campo, valor) => {
@@ -4157,6 +4324,117 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], meta = {},
           </div>
         </div>
 
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(130px, 1fr))", gap: 10, marginBottom: 12 }}>
+          {pipelineComercial.map((etapa) => (
+            <button
+              key={etapa.id}
+              type="button"
+              onClick={() => {
+                if (etapa.id === "total") { setFiltroRapido("Todos"); setStatusFiltro("Todos"); }
+                if (etapa.id === "aberto") { setFiltroRapido("Em aberto"); setStatusFiltro("Todos"); }
+                if (etapa.id === "andamento") { setFiltroRapido("Todos"); setStatusFiltro("Andamento"); }
+                if (etapa.id === "atrasado") { setFiltroRapido("Atrasados"); setStatusFiltro("Todos"); }
+                if (etapa.id === "finalizado") { setFiltroRapido("Todos"); setStatusFiltro("Finalizado"); }
+              }}
+              style={{ textAlign: "left", padding: 12, borderRadius: 14, border: `1px solid ${etapa.cor}44`, background: `${etapa.cor}10`, color: BRAND.text, cursor: "pointer" }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+                <strong style={{ color: etapa.cor, fontSize: 12 }}>{etapa.label}</strong>
+                <span style={{ fontSize: 18, fontWeight: 950, color: etapa.cor }}>{etapa.qtd}</span>
+              </div>
+              <div style={{ color: BRAND.muted, fontSize: 11, marginTop: 7 }}>{brl(etapa.valor)}</div>
+            </button>
+          ))}
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12, padding: "10px 12px", borderRadius: 12, border: `1px solid ${orcamentosSelecionados.length ? BRAND.danger : BRAND.border2}`, background: orcamentosSelecionados.length ? `${BRAND.danger}10` : "rgba(7,17,31,.42)" }}>
+          <div style={{ fontSize: 12, color: orcamentosSelecionados.length ? BRAND.danger : BRAND.muted, fontWeight: 850 }}>
+            {orcamentosSelecionados.length
+              ? `${orcamentosSelecionados.length} orcamento(s) selecionado(s) para acao`
+              : "Marque os orcamentos na primeira coluna para apagar em bloco."}
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button type="button" onClick={alternarSelecaoPagina} disabled={!idsPagina.length} style={{ ...btnMiniGestao, opacity: idsPagina.length ? 1 : 0.45 }}>
+              {todosPaginaSelecionados ? "Desmarcar pagina" : "Selecionar pagina"}
+            </button>
+            <button type="button" onClick={limparSelecaoOrcamentos} disabled={!orcamentosSelecionados.length} style={{ ...btnMiniGestao, opacity: orcamentosSelecionados.length ? 1 : 0.45 }}>
+              Limpar selecao
+            </button>
+            <button type="button" onClick={() => excluirOrcamentos(orcamentosSelecionados)} disabled={!orcamentosSelecionados.length} style={{ ...btnMiniGestao, color: BRAND.danger, borderColor: `${BRAND.danger}66`, background: `${BRAND.danger}12`, opacity: orcamentosSelecionados.length ? 1 : 0.45 }}>
+              <Trash2 size={12} /> Mover p/ lixeira
+            </button>
+            <button type="button" onClick={() => setLixeiraAberta((v) => !v)} style={{ ...btnMiniGestao, color: lixeiraVisivel.length ? BRAND.warn : BRAND.muted, borderColor: lixeiraVisivel.length ? `${BRAND.warn}66` : BRAND.border2, background: lixeiraVisivel.length ? `${BRAND.warn}12` : "transparent" }}>
+              Lixeira ({lixeiraVisivel.length})
+            </button>
+            <button type="button" onClick={() => setAuditoriaAcoesAberta((v) => !v)} style={{ ...btnMiniGestao, color: "#93C5FD", borderColor: `${BRAND.blue2}66`, background: `${BRAND.blue2}12` }}>
+              Auditoria ({auditoriaVisivel.length})
+            </button>
+          </div>
+        </div>
+
+        {lixeiraAberta && (
+          <div style={{ marginBottom: 12, padding: 12, borderRadius: 14, border: `1px solid ${BRAND.warn}55`, background: `${BRAND.warn}0f` }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 950, color: BRAND.warn }}>Lixeira de orcamentos</div>
+                <div style={{ fontSize: 11, color: BRAND.muted }}>Restaure orcamentos apagados por engano ou remova definitivamente.</div>
+              </div>
+              {!!lixeiraVisivel.length && (
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button type="button" onClick={() => restaurarOrcamentos(lixeiraVisivel.map((item) => item.id))} style={{ ...btnMiniGestao, color: BRAND.green, borderColor: `${BRAND.green2}66`, background: `${BRAND.green2}12` }}>
+                    Restaurar todos
+                  </button>
+                  <button type="button" onClick={() => excluirDefinitivoLixeira(lixeiraVisivel.map((item) => item.id))} style={{ ...btnMiniGestao, color: BRAND.danger, borderColor: `${BRAND.danger}66`, background: `${BRAND.danger}10` }}>
+                    Esvaziar
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {lixeiraVisivel.length ? (
+              <div style={{ display: "grid", gap: 8 }}>
+                {lixeiraVisivel.slice(0, 10).map((item) => (
+                  <div key={item.id} style={{ display: "grid", gridTemplateColumns: "minmax(220px,1.5fr) minmax(110px,.7fr) auto", gap: 8, alignItems: "center", padding: 10, borderRadius: 12, border: `1px solid ${BRAND.border2}`, background: BRAND.panel2 }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 12, fontWeight: 950, color: BRAND.text, overflowWrap: "anywhere" }}>{item.cliente || "Cliente sem nome"}</div>
+                      <div style={{ fontSize: 10, color: BRAND.dim, marginTop: 3 }}>{item.numero || "orcamento"} - {item.empresaNome || item.empresa || "empresa"} - removido em {tsFmt(item.removidoDaGestaoEm)}</div>
+                    </div>
+                    <div style={{ fontSize: 12, color: BRAND.muted, fontWeight: 850 }}>{brl(item.valorGlobal ?? item.valor)}</div>
+                    <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                      <button type="button" onClick={() => restaurarOrcamentos([item.id])} style={{ ...btnMiniGestao, color: BRAND.green, borderColor: `${BRAND.green2}66`, background: `${BRAND.green2}12` }}>Restaurar</button>
+                      <button type="button" onClick={() => excluirDefinitivoLixeira([item.id])} style={{ ...btnMiniGestao, color: BRAND.danger, borderColor: `${BRAND.danger}66` }}>Excluir</button>
+                    </div>
+                  </div>
+                ))}
+                {lixeiraVisivel.length > 10 && <div style={{ color: BRAND.dim, fontSize: 11 }}>Mostrando os 10 itens mais recentes da lixeira.</div>}
+              </div>
+            ) : (
+              <div style={{ color: BRAND.dim, fontSize: 12 }}>A lixeira esta vazia.</div>
+            )}
+          </div>
+        )}
+
+        {auditoriaAcoesAberta && (
+          <div style={{ marginBottom: 12, padding: 12, borderRadius: 14, border: `1px solid ${BRAND.blue2}55`, background: `${BRAND.blue2}0f` }}>
+            <div style={{ fontSize: 13, fontWeight: 950, color: "#93C5FD", marginBottom: 8 }}>Auditoria de acoes comerciais</div>
+            {auditoriaVisivel.length ? (
+              <div style={{ display: "grid", gap: 7 }}>
+                {auditoriaVisivel.slice(0, 12).map((log) => (
+                  <div key={log.id} style={{ display: "grid", gridTemplateColumns: "130px 1fr 150px", gap: 8, alignItems: "center", padding: 9, borderRadius: 10, border: `1px solid ${BRAND.border2}`, background: BRAND.panel2 }}>
+                    <strong style={{ color: log.acao === "MOVER_LIXEIRA" ? BRAND.warn : log.acao === "EXCLUIR_DEFINITIVO" ? BRAND.danger : BRAND.green, fontSize: 10 }}>{log.acao}</strong>
+                    <div style={{ color: BRAND.muted, fontSize: 11, overflowWrap: "anywhere" }}>
+                      {log.quantidade || 0} item(ns) - {log.itens?.[0]?.numero || "orcamento"} {log.itens?.[0]?.cliente ? `- ${log.itens[0].cliente}` : ""}
+                    </div>
+                    <div style={{ color: BRAND.dim, fontSize: 10, textAlign: "right" }}>{tsFmt(log.criadoEm)}</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ color: BRAND.dim, fontSize: 12 }}>Nenhuma acao registrada ainda.</div>
+            )}
+          </div>
+        )}
+
         <div style={{ display: "grid", gridTemplateColumns: "minmax(220px,2fr) minmax(140px,1fr) minmax(170px,1fr) minmax(160px,1fr) 110px", gap: 12, marginBottom: 16 }}>
           <input
             value={busca}
@@ -4195,9 +4473,18 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], meta = {},
         </div>
 
         <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 1180 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 1280 }}>
             <thead>
               <tr style={{ color: BRAND.muted, textAlign: "left" }}>
+                <th style={{ ...th, width: 44, textAlign: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={todosPaginaSelecionados}
+                    onChange={alternarSelecaoPagina}
+                    title="Selecionar orcamentos desta pagina"
+                    style={{ width: 16, height: 16, accentColor: BRAND.green2, cursor: "pointer" }}
+                  />
+                </th>
                 <th style={th}>Cliente</th>
                 <th style={th}>Empresa</th>
                 <th style={th}>Valor</th>
@@ -4205,6 +4492,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], meta = {},
                 <th style={th}>Status</th>
                 <th style={th}>Próximo contato</th>
                 <th style={th}>Lembrete IA</th>
+                <th style={th}>Acoes</th>
               </tr>
             </thead>
             <tbody>
@@ -4220,6 +4508,15 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], meta = {},
                   return (
                     <React.Fragment key={item.id}>
                       <tr style={{ borderTop: `1px solid ${BRAND.border}` }}>
+                        <td style={{ ...td, textAlign: "center", verticalAlign: "top" }}>
+                          <input
+                            type="checkbox"
+                            checked={idsSelecionados.has(item.id)}
+                            onChange={() => alternarSelecaoOrcamento(item.id)}
+                            title="Selecionar este orcamento"
+                            style={{ width: 16, height: 16, accentColor: BRAND.green2, cursor: "pointer" }}
+                          />
+                        </td>
                         <td style={td}>
                           {item.descricaoArquivo && (
                             <div style={{ fontSize: 10.5, color: "#B6C7DD", marginTop: 5, lineHeight: 1.45, maxWidth: 330 }}>
@@ -4363,11 +4660,21 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], meta = {},
                             </button>
                           </div>
                         </td>
+                        <td style={{ ...td, minWidth: 82, verticalAlign: "top" }}>
+                          <button
+                            type="button"
+                            onClick={() => excluirOrcamentos([item.id])}
+                            title="Mover somente este orcamento para a lixeira"
+                            style={{ ...btnMiniGestao, color: BRAND.danger, borderColor: `${BRAND.danger}66`, background: `${BRAND.danger}10`, width: "100%" }}
+                          >
+                            <Trash2 size={12} /> Lixeira
+                          </button>
+                        </td>
                       </tr>
 
                       {historicoAberto === item.id && (
                         <tr>
-                          <td colSpan="7" style={{ padding: "0 8px 14px", borderTop: `1px solid ${BRAND.border}` }}>
+                          <td colSpan="9" style={{ padding: "0 8px 14px", borderTop: `1px solid ${BRAND.border}` }}>
                             <div style={{ border: `1px solid ${BRAND.border}`, background: "rgba(7,17,31,.64)", borderRadius: 14, padding: 12 }}>
                               <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", marginBottom: 10 }}>
                                 <div>
@@ -4457,7 +4764,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], meta = {},
                 })
               ) : (
                 <tr>
-                  <td colSpan="7" style={{ padding: 28, textAlign: "center", color: BRAND.dim }}>
+                  <td colSpan="9" style={{ padding: 28, textAlign: "center", color: BRAND.dim }}>
                     Nenhum orçamento encontrado na gestão.
                   </td>
                 </tr>

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { authHeaders } from "./supabase.js";
 import { store } from "./store.js";
-import { Copy, Mail, MessageCircle, Send, Upload, Users } from "lucide-react";
+import { Copy, Mail, MessageCircle, Send, Tags, Upload, Users, Wand2 } from "lucide-react";
 import { abrirWhatsRelatorio, gerarRelatorioSemanalNara, normalizarWhatsDestino, WHATS_REPORT_NUMBER, WHATS_REPORT_STORAGE_KEY } from "./weeklyReport.js";
 
 const KEY_CLIENTES = "orcaflow_clientes_crm";
@@ -27,6 +27,15 @@ function clean(valor = "", limite = 4000) {
   return String(valor || "").replace(/\s+/g, " ").trim().slice(0, limite);
 }
 
+function uniqueList(lista = []) {
+  return [...new Set((Array.isArray(lista) ? lista : []).map((item) => clean(item, 60)).filter(Boolean))];
+}
+
+function normalizarEtiquetas(valor = []) {
+  if (Array.isArray(valor)) return uniqueList(valor);
+  return uniqueList(String(valor || "").split(/[,;\n]/));
+}
+
 function textoBusca(valor = "") {
   return String(valor || "")
     .normalize("NFD")
@@ -46,6 +55,69 @@ function formatTelefone(valor = "") {
   if (d.length <= 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
   return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
 }
+
+function normalizarNumeroWhats(valor = "") {
+  let d = String(valor || "").replace(/\D/g, "");
+  if (!d) return "";
+  if (d.startsWith("55") && d.length >= 12) return d;
+  if (d.length === 10 || d.length === 11) return `55${d}`;
+  return d;
+}
+
+const ETIQUETAS_PADRAO = [
+  ["orcamento-aberto", "Orcamento aberto", C.blue2],
+  ["alto-valor", "Alto valor", C.warn],
+  ["atrasado", "Atrasado", C.danger],
+  ["cliente-quente", "Cliente quente", C.warn],
+  ["sem-whatsapp", "Sem WhatsApp", C.danger],
+  ["sem-historico", "Sem historico", C.blue2],
+  ["precisa-retorno", "Precisa retorno", C.green2],
+  ["pediu-desconto", "Pediu desconto", C.warn],
+  ["aguardando-documento", "Aguardando doc.", C.blue2],
+  ["reuniao", "Reuniao", C.green2],
+  ["bom-sinal", "Bom sinal", C.green2],
+];
+
+const PLAYBOOKS_ASSISTIDOS = [
+  {
+    id: "confirmar-recebimento",
+    label: "Confirmar recebimento",
+    tipo: "Follow-up",
+    assunto: "Confirmar recebimento da proposta",
+  },
+  {
+    id: "cobrar-retorno",
+    label: "Cobrar retorno",
+    tipo: "Cobranca",
+    assunto: "Retorno sobre proposta em aberto",
+  },
+  {
+    id: "pedir-dados",
+    label: "Pedir dados faltantes",
+    tipo: "Duvida",
+    assunto: "Dados para avancar na proposta",
+  },
+  {
+    id: "reativar",
+    label: "Reativar cliente",
+    tipo: "Follow-up",
+    assunto: "Retomada de conversa",
+  },
+  {
+    id: "pos-reuniao",
+    label: "Pos-reuniao",
+    tipo: "Retorno",
+    assunto: "Resumo do alinhamento",
+  },
+];
+
+const CAMPANHAS_ASSISTIDAS = [
+  ["retomar-atrasados", "Retomar atrasados"],
+  ["aquecer-quentes", "Aquecer clientes quentes"],
+  ["confirmar-recebimento", "Confirmar propostas"],
+  ["pedir-documentos", "Pedir documentos/dados"],
+  ["reativar-sem-contato", "Reativar sem contato"],
+];
 
 function tsFmt(iso) {
   if (!iso) return "";
@@ -84,6 +156,108 @@ function statusFunil(item = {}) {
   return isAtrasado(item) ? "Atrasado" : normalizarStatus(item);
 }
 
+function valorOrcamento(item = {}) {
+  return Number(String(item.valorGlobal ?? item.valor ?? item.valorTotal ?? item.valorPotencial ?? 0).replace(/\./g, "").replace(",", ".").replace(/[^\d.-]/g, "")) || 0;
+}
+
+function labelEtiqueta(id = "") {
+  return ETIQUETAS_PADRAO.find(([key]) => key === id)?.[1] || id;
+}
+
+function corEtiqueta(id = "") {
+  return ETIQUETAS_PADRAO.find(([key]) => key === id)?.[2] || C.border2;
+}
+
+function etiquetasPorTexto(texto = "") {
+  const t = textoBusca(texto);
+  const tags = [];
+  if (/desconto|menor preco|menor valor|negociar|abatimento/.test(t)) tags.push("pediu-desconto");
+  if (/documento|cnpj|cpf|art|projeto|arquivo|planilha|enviar dados|faltou/.test(t)) tags.push("aguardando-documento");
+  if (/reuniao|visita|call|ligacao|videoconferencia/.test(t)) tags.push("reuniao");
+  if (/aprov|fechar|vamos fazer|autoriz|ok para iniciar|pode emitir/.test(t)) tags.push("bom-sinal");
+  if (/retorno|follow|cobrar|sem resposta|aguardando/.test(t)) tags.push("precisa-retorno");
+  return uniqueList(tags);
+}
+
+function sugerirEtiquetasCliente(cliente = {}, orcamentos = []) {
+  const tags = [];
+  const abertos = (Array.isArray(orcamentos) ? orcamentos : []).filter((orc) => normalizarStatus(orc) !== "Finalizado");
+  const valorTotal = abertos.reduce((soma, orc) => soma + valorOrcamento(orc), 0) || valorOrcamento(cliente);
+  const contatos = Array.isArray(cliente.contatos) ? cliente.contatos : [];
+  const textoHistorico = contatos.slice(0, 12).map((msg) => [msg.tipo, msg.assunto, msg.mensagem, msg.arquivoResumo].filter(Boolean).join(" ")).join(" ");
+
+  if (abertos.length) tags.push("orcamento-aberto");
+  if (valorTotal >= 50000) tags.push("alto-valor");
+  if (isAtrasado(cliente) || abertos.some(isAtrasado)) tags.push("atrasado");
+  if (cliente.temperatura === "Quente") tags.push("cliente-quente");
+  if (!cliente.whatsapp && !cliente.telefone) tags.push("sem-whatsapp");
+  if (!contatos.length) tags.push("sem-historico");
+  if (!cliente.proximoContato || isAtrasado(cliente)) tags.push("precisa-retorno");
+  return uniqueList([...tags, ...etiquetasPorTexto(textoHistorico)]);
+}
+
+function combinarEtiquetas(...listas) {
+  return uniqueList(listas.flatMap((lista) => normalizarEtiquetas(lista)));
+}
+
+function sugerirPlaybookCliente(cliente = {}, orcamentos = []) {
+  const tags = combinarEtiquetas(cliente.etiquetas, sugerirEtiquetasCliente(cliente, orcamentos));
+  if (tags.includes("aguardando-documento")) return "pedir-dados";
+  if (tags.includes("atrasado") || tags.includes("precisa-retorno")) return "cobrar-retorno";
+  if (tags.includes("sem-historico")) return "confirmar-recebimento";
+  if (tags.includes("reuniao")) return "pos-reuniao";
+  if (!cliente.proximoContato) return "reativar";
+  return "confirmar-recebimento";
+}
+
+function primeiroNome(valor = "") {
+  const nome = clean(valor, 80);
+  return nome.split(/\s+/).filter(Boolean)[0] || nome || "tudo bem";
+}
+
+function resumoOrcamentoCurto(orcamento = {}) {
+  if (!orcamento) return "a proposta que conversamos";
+  const numero = orcamento.numero ? `orcamento ${orcamento.numero}` : "proposta";
+  const valor = orcamento.valor ? ` no valor de ${brl(orcamento.valor)}` : "";
+  const empresa = orcamento.empresaNome ? ` (${orcamento.empresaNome})` : "";
+  return `${numero}${empresa}${valor}`;
+}
+
+function montarMensagemAssistida({ cliente = {}, orcamento = null, playbookId = "confirmar-recebimento", usuarioNome = "" } = {}) {
+  const nome = primeiroNome(cliente.nome || cliente.empresa);
+  const responsavel = clean(usuarioNome, 80);
+  const assinatura = responsavel ? `\n\n${responsavel}` : "";
+  const proposta = resumoOrcamentoCurto(orcamento);
+
+  if (playbookId === "cobrar-retorno") {
+    return `Ola, ${nome}. Tudo bem?\n\nEstou passando para acompanhar ${proposta}. Voce conseguiu avaliar ou existe algum ponto que eu possa esclarecer para ajudar na decisao?${assinatura}`;
+  }
+  if (playbookId === "pedir-dados") {
+    return `Ola, ${nome}. Tudo bem?\n\nPara eu conseguir avancar corretamente com ${proposta}, preciso confirmar alguns dados que ainda ficaram pendentes. Pode me retornar com as informacoes que faltam ou me indicar quem consegue confirmar isso?${assinatura}`;
+  }
+  if (playbookId === "reativar") {
+    return `Ola, ${nome}. Tudo bem?\n\nRetomando nosso contato para entender se essa demanda ainda esta em aberto e se faz sentido eu atualizar o acompanhamento por aqui. Caso tenha mudado alguma coisa, me envie o contexto atual que eu ajusto a tratativa.${assinatura}`;
+  }
+  if (playbookId === "pos-reuniao") {
+    return `Ola, ${nome}. Obrigado pelo alinhamento.\n\nVou manter o acompanhamento de ${proposta} com base no que foi conversado. Se houver algum ajuste ou informacao complementar, pode me encaminhar por aqui para eu registrar corretamente.${assinatura}`;
+  }
+  return `Ola, ${nome}. Tudo bem?\n\nEstou confirmando se voce recebeu ${proposta} e se ficou alguma duvida para avaliacao. Se preferir, posso te ajudar com um resumo objetivo dos principais pontos.${assinatura}`;
+}
+
+function selecionarClientesCampanha(clientes = [], filtro = "retomar-atrasados", etiqueta = "") {
+  const lista = Array.isArray(clientes) ? clientes : [];
+  return lista.filter((cliente) => {
+    const tags = combinarEtiquetas(cliente._tags, cliente.etiquetas);
+    if (etiqueta && !tags.includes(etiqueta)) return false;
+    if (filtro === "retomar-atrasados") return tags.includes("atrasado") || isAtrasado(cliente);
+    if (filtro === "aquecer-quentes") return cliente.temperatura === "Quente" || tags.includes("cliente-quente") || tags.includes("bom-sinal");
+    if (filtro === "confirmar-recebimento") return tags.includes("orcamento-aberto") || tags.includes("sem-historico");
+    if (filtro === "pedir-documentos") return tags.includes("aguardando-documento");
+    if (filtro === "reativar-sem-contato") return !cliente.proximoContato || tags.includes("sem-historico");
+    return true;
+  });
+}
+
 function criarCliente(usuarioAtual, dados = {}) {
   const agora = new Date().toISOString();
   return {
@@ -102,6 +276,10 @@ function criarCliente(usuarioAtual, dados = {}) {
     segmento: dados.segmento || "",
     decisor: dados.decisor || "",
     origem: dados.origem || "",
+    canalPreferido: dados.canalPreferido || "WhatsApp",
+    etiquetas: normalizarEtiquetas(dados.etiquetas),
+    intencao: dados.intencao || "",
+    objecao: dados.objecao || "",
     perfil: dados.perfil || "",
     status: dados.status || "Em acompanhamento",
     temperatura: dados.temperatura || "Morno",
@@ -134,6 +312,10 @@ const CAMPOS_AUDITORIA_CLIENTE = [
   ["cidadeUf", "Cidade/UF"],
   ["segmento", "Segmento"],
   ["origem", "Origem"],
+  ["canalPreferido", "Canal preferido"],
+  ["etiquetas", "Etiquetas"],
+  ["intencao", "Intencao"],
+  ["objecao", "Objecao"],
   ["status", "Status"],
   ["temperatura", "Temperatura"],
   ["proximoContato", "Proximo contato"],
@@ -475,6 +657,7 @@ export function ClientesCRMPanel({
   );
   const [busca, setBusca] = useState("");
   const [filtro, setFiltro] = useState("todos");
+  const [filtroEtiqueta, setFiltroEtiqueta] = useState("");
   const [ativoId, setAtivoId] = useState(base[0]?.id || "");
   const [editando, setEditando] = useState(false);
   const [form, setForm] = useState(criarCliente(usuarioAtual));
@@ -496,6 +679,9 @@ export function ClientesCRMPanel({
   const [jadeLoading, setJadeLoading] = useState(false);
   const [pedidoJade, setPedidoJade] = useState("Nara, leia este cliente e me diga o melhor proximo passo para aumentar a chance de fechamento.");
   const [whatsRelatorio, setWhatsRelatorio] = useState(WHATS_REPORT_NUMBER);
+  const [campanhaFiltro, setCampanhaFiltro] = useState("retomar-atrasados");
+  const [campanhaPlaybook, setCampanhaPlaybook] = useState("cobrar-retorno");
+  const [campanhaResultados, setCampanhaResultados] = useState([]);
   const refArquivo = useRef(null);
   const refArquivoOrcamento = useRef(null);
   const refImportarContatos = useRef(null);
@@ -516,11 +702,15 @@ export function ClientesCRMPanel({
       const vinculados = orcamentosDoCliente(item, crm);
       const vinculadosExplicitos = Array.isArray(item.orcamentosVinculados) ? item.orcamentosVinculados : [];
       const score = scoreCliente(item, vinculadosExplicitos.length ? vinculadosExplicitos : vinculados);
+      const baseOrcamentos = vinculadosExplicitos.length ? vinculadosExplicitos : vinculados;
+      const tags = combinarEtiquetas(item.etiquetas, sugerirEtiquetasCliente(item, baseOrcamentos));
       return {
         ...item,
         _orcamentos: vinculados,
         _score: score,
         _nivel: nivelCliente(score),
+        _tags: tags,
+        _playbook: sugerirPlaybookCliente(item, baseOrcamentos),
       };
     }).sort((a, b) => b._score - a._score);
   }, [base, crm]);
@@ -536,17 +726,24 @@ export function ClientesCRMPanel({
   const filtrados = useMemo(() => {
     const q = textoBusca(busca);
     return enriquecidos.filter((item) => {
-      const texto = textoBusca([item.nome, item.empresa, item.email, item.email2, item.telefone, item.whatsapp, item.documento, item.cidadeUf, item.status, item.proximoPasso, item.lembreteJade].join(" "));
+      const texto = textoBusca([item.nome, item.empresa, item.email, item.email2, item.telefone, item.whatsapp, item.documento, item.cidadeUf, item.status, item.proximoPasso, item.lembreteJade, item.canalPreferido, ...(item._tags || [])].join(" "));
       const matchBusca = !q || texto.includes(q);
       const matchFiltro =
         filtro === "todos" ||
         (filtro === "quentes" && item.temperatura === "Quente") ||
         (filtro === "atrasados" && isAtrasado(item)) ||
         (filtro === "hoje" && isHoje(item)) ||
-        (filtro === "sem-contato" && !item.proximoContato);
-      return matchBusca && matchFiltro;
+        (filtro === "sem-contato" && !item.proximoContato) ||
+        (filtro === "sem-whatsapp" && !item.whatsapp && !item.telefone);
+      const matchEtiqueta = !filtroEtiqueta || (item._tags || []).includes(filtroEtiqueta);
+      return matchBusca && matchFiltro && matchEtiqueta;
     });
-  }, [enriquecidos, busca, filtro]);
+  }, [enriquecidos, busca, filtro, filtroEtiqueta]);
+
+  const etiquetasDisponiveis = useMemo(() => {
+    const usadas = new Set(enriquecidos.flatMap((item) => item._tags || []));
+    return ETIQUETAS_PADRAO.filter(([id]) => usadas.has(id));
+  }, [enriquecidos]);
 
   const ativo = enriquecidos.find((item) => item.id === ativoId) || filtrados[0] || null;
   const relacionados = useMemo(() => (ativo ? orcamentosDoCliente(ativo, crm) : []), [ativo, crm]);
@@ -567,6 +764,11 @@ export function ClientesCRMPanel({
       })
       .slice(0, 30);
   }, [crm, buscaOrcamento, orcamentosVinculadosAtivo]);
+
+  const clientesCampanha = useMemo(
+    () => selecionarClientesCampanha(filtrados, campanhaFiltro, filtroEtiqueta).slice(0, 25),
+    [filtrados, campanhaFiltro, filtroEtiqueta]
+  );
 
   useEffect(() => {
     if (!ativoId && filtrados[0]?.id) setAtivoId(filtrados[0].id);
@@ -713,11 +915,113 @@ export function ClientesCRMPanel({
 
   const atualizarCliente = async (patch) => {
     if (!ativo) return null;
-    const { _orcamentos, _score, _nivel, ...persistivel } = ativo;
+    const { _orcamentos, _score, _nivel, _tags, _playbook, ...persistivel } = ativo;
     const atualizado = { ...persistivel, ...patch, atualizadoEm: new Date().toISOString() };
     await salvarLista(clientes.map((item) => (item.id === ativo.id ? atualizado : item)));
     setForm(criarCliente(usuarioAtual, atualizado));
     return atualizado;
+  };
+
+  const aplicarEtiquetasInteligentes = async (somenteAtivo = true) => {
+    if (somenteAtivo && !ativo) return;
+    const ids = somenteAtivo && ativo ? new Set([ativo.id]) : new Set(filtrados.map((item) => item.id));
+    let alterados = 0;
+    const nova = clientes.map((cliente) => {
+      if (!ids.has(cliente.id)) return cliente;
+      const orcs = orcamentosDoCliente(cliente, crm);
+      const etiquetas = combinarEtiquetas(cliente.etiquetas, sugerirEtiquetasCliente(cliente, orcs));
+      if (etiquetas.join("|") === normalizarEtiquetas(cliente.etiquetas).join("|")) return cliente;
+      alterados += 1;
+      return { ...cliente, etiquetas, atualizadoEm: new Date().toISOString() };
+    });
+    if (!alterados) {
+      pushToast("As etiquetas ja estavam atualizadas.", "aviso");
+      return;
+    }
+    await salvarLista(nova);
+    pushToast(`${alterados} cliente(s) atualizado(s) com etiquetas inteligentes.`, "ok");
+  };
+
+  const prepararPlaybook = (playbookId = ativo?._playbook || "confirmar-recebimento") => {
+    if (!ativo) return;
+    const playbook = PLAYBOOKS_ASSISTIDOS.find((item) => item.id === playbookId) || PLAYBOOKS_ASSISTIDOS[0];
+    const orc = orcamentoAtivo || orcamentosVinculadosAtivo[0] || relacionados[0] || null;
+    const mensagem = montarMensagemAssistida({
+      cliente: ativo,
+      orcamento: orc,
+      playbookId,
+      usuarioNome: usuarioAtual?.nomeTratamento || usuarioAtual?.nome || usuarioAtual?.email || "",
+    });
+    setContato((atual) => ({
+      ...atual,
+      canal: ativo.canalPreferido || "WhatsApp",
+      direcao: "Empresa enviou",
+      tipo: playbook.tipo,
+      assunto: playbook.assunto,
+      mensagem,
+      orcamentoClienteId: orcamentoAtivo?.id || orcamentosVinculadosAtivo[0]?.id || atual.orcamentoClienteId || "",
+      orcamentoId: orcamentoAtivo?.orcamentoId || orcamentosVinculadosAtivo[0]?.orcamentoId || atual.orcamentoId || "",
+    }));
+    pushToast("Playbook preparado no registro de contato. Revise antes de enviar.", "ok");
+  };
+
+  const registrarAcaoAssistida = async (clienteId, texto = "", acao = "Mensagem assistida") => {
+    const cliente = clientes.find((item) => item.id === clienteId);
+    if (!cliente) return;
+    const registro = criarRegistroSistemaCliente(usuarioAtual, {
+      canal: "Nara",
+      direcao: "Registro interno",
+      tipo: acao,
+      assunto: "Manychat assistido gratuito",
+      mensagem: `Acao assistida preparada. Texto:\n${clean(texto, 1800)}`,
+      origem: "crm_manychat_assistido",
+    });
+    const atualizado = {
+      ...cliente,
+      contatos: [registro, ...(Array.isArray(cliente.contatos) ? cliente.contatos : [])].slice(0, 160),
+      atualizadoEm: new Date().toISOString(),
+    };
+    await salvarLista(clientes.map((item) => (item.id === clienteId ? atualizado : item)));
+  };
+
+  const gerarCampanhaAssistida = () => {
+    if (!clientesCampanha.length) {
+      pushToast("Nenhum cliente encontrado para esta campanha.", "aviso");
+      return;
+    }
+    const resultados = clientesCampanha.slice(0, 15).map((cliente) => {
+      const orc = (Array.isArray(cliente.orcamentosVinculados) ? cliente.orcamentosVinculados[0] : null) || cliente._orcamentos?.[0] || null;
+      return {
+        clienteId: cliente.id,
+        nome: cliente.nome || cliente.empresa || "Cliente",
+        whatsapp: cliente.whatsapp || cliente.telefone || "",
+        tags: cliente._tags || [],
+        texto: montarMensagemAssistida({
+          cliente,
+          orcamento: orc,
+          playbookId: campanhaPlaybook,
+          usuarioNome: usuarioAtual?.nomeTratamento || usuarioAtual?.nome || usuarioAtual?.email || "",
+        }),
+      };
+    });
+    setCampanhaResultados(resultados);
+    pushToast(`${resultados.length} mensagem(ns) preparada(s). Envio continua manual.`, "ok");
+  };
+
+  const abrirWhatsCliente = async (cliente, texto = "") => {
+    const numero = normalizarNumeroWhats(cliente?.whatsapp || cliente?.telefone || "");
+    if (!numero) {
+      pushToast("Este cliente nao tem WhatsApp/telefone cadastrado.", "aviso");
+      return;
+    }
+    await registrarAcaoAssistida(cliente.id, texto, "WhatsApp assistido aberto");
+    window.open(`https://wa.me/${numero}?text=${encodeURIComponent(texto)}`, "_blank", "noopener,noreferrer");
+    pushToast("WhatsApp externo aberto. Revise e envie manualmente.", "ok");
+  };
+
+  const copiarCampanha = async (clienteId, texto = "") => {
+    await copiarTexto(texto);
+    await registrarAcaoAssistida(clienteId, texto, "Mensagem assistida copiada");
   };
 
   const vincularOrcamentoSistema = async () => {
@@ -1012,6 +1316,7 @@ export function ClientesCRMPanel({
       contatos: [registro, ...contatosAtivo].slice(0, 140),
       orcamentosVinculados: orcamentosAtualizados,
       proximoPasso: ativo.proximoPasso || "Nara pode analisar este historico e sugerir o proximo passo.",
+      etiquetas: combinarEtiquetas(ativo.etiquetas, etiquetasPorTexto([registro.tipo, registro.assunto, registro.mensagem, registro.arquivoResumo].filter(Boolean).join(" "))),
     });
     if (orcamentoCliente?.orcamentoId) {
       await registrarHistoricoOrcamentoGlobal(orcamentoCliente.orcamentoId, registro);
@@ -1049,6 +1354,10 @@ export function ClientesCRMPanel({
             segmento: ativo.segmento,
             decisor: ativo.decisor,
             origem: ativo.origem,
+            canalPreferido: ativo.canalPreferido,
+            etiquetas: ativo._tags || ativo.etiquetas || [],
+            intencao: ativo.intencao,
+            objecao: ativo.objecao,
             perfil: ativo.perfil,
             status: ativo.status,
             temperatura: ativo.temperatura,
@@ -1138,6 +1447,7 @@ export function ClientesCRMPanel({
         lembreteJade: analise.lembreteSugerido || ativo.lembreteJade,
         proximoContato: dataSugerida,
         temperatura: analise.prioridade === "critica" || analise.prioridade === "alta" ? "Quente" : ativo.temperatura,
+        etiquetas: combinarEtiquetas(ativo.etiquetas, ativo._tags, etiquetasPorTexto(registroNara.mensagem)),
         contatos: [registroNara, ...contatosAtivo].slice(0, 160),
         orcamentosVinculados: orcamentosAtualizados,
       });
@@ -1168,12 +1478,12 @@ export function ClientesCRMPanel({
       pushToast("Cadastre o WhatsApp/telefone do cliente primeiro.", "aviso");
       return;
     }
-    const numero = String(contatoWhats).replace(/\D/g, "");
+    const numero = normalizarNumeroWhats(contatoWhats);
     if (!numero) {
       pushToast("Telefone do cliente invalido.", "erro");
       return;
     }
-    window.open(`https://wa.me/55${numero}?text=${encodeURIComponent(texto || ativo?.jade?.mensagemSugerida || "")}`, "_blank", "noopener,noreferrer");
+    window.open(`https://wa.me/${numero}?text=${encodeURIComponent(texto || ativo?.jade?.mensagemSugerida || "")}`, "_blank", "noopener,noreferrer");
   };
 
   const abrirEmail = (texto = "") => {
@@ -1237,10 +1547,15 @@ export function ClientesCRMPanel({
             ["atrasados", "Atrasados"],
             ["hoje", "Hoje"],
             ["sem-contato", "Sem contato"],
+            ["sem-whatsapp", "Sem WhatsApp"],
           ].map(([id, label]) => (
             <button key={id} onClick={() => setFiltro(id)} style={{ padding: "6px 9px", borderRadius: 999, border: `1px solid ${filtro === id ? C.green2 : C.border2}`, background: filtro === id ? `${C.green2}18` : "transparent", color: filtro === id ? C.green : C.muted, cursor: "pointer", fontSize: 10.5, fontWeight: 850 }}>{label}</button>
           ))}
         </div>
+        <select value={filtroEtiqueta} onChange={(e) => setFiltroEtiqueta(e.target.value)} style={{ ...INP, marginBottom: 10 }}>
+          <option value="">Todas as etiquetas inteligentes</option>
+          {etiquetasDisponiveis.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+        </select>
         <details style={{ marginBottom: 12 }}>
           <summary style={{ color: C.muted, cursor: "pointer", fontSize: 11, fontWeight: 900 }}>Ferramentas</summary>
           <div style={{ display: "grid", gap: 7, marginTop: 8 }}>
@@ -1250,6 +1565,20 @@ export function ClientesCRMPanel({
             <div style={{ color: C.dim, fontSize: 10, lineHeight: 1.35 }}>No celular, use o navegador com permissao de contatos. Se nao aparecer a agenda, exporte contatos como .vcf ou .csv e importe aqui.</div>
             <button onClick={sincronizarOrcamentos} style={{ width: "100%", padding: "8px 10px", borderRadius: 10, border: `1px solid ${C.blue2}55`, background: `${C.blue2}12`, color: "#93C5FD", fontWeight: 850, cursor: "pointer" }}>Sincronizar clientes dos orcamentos</button>
             <button onClick={abrirRelatorioSemanal} style={{ width: "100%", padding: "8px 10px", borderRadius: 10, border: `1px solid ${C.green2}66`, background: `${C.green2}16`, color: C.green, fontWeight: 900, cursor: "pointer" }}>Relatorio Nara</button>
+            <button onClick={() => aplicarEtiquetasInteligentes(false)} style={{ width: "100%", padding: "8px 10px", borderRadius: 10, border: `1px solid ${C.warn}55`, background: `${C.warn}12`, color: C.warn, fontWeight: 850, cursor: "pointer" }}>Aplicar etiquetas nos filtrados</button>
+          </div>
+        </details>
+        <details style={{ marginBottom: 12 }}>
+          <summary style={{ color: C.green, cursor: "pointer", fontSize: 11, fontWeight: 950 }}>Campanhas assistidas</summary>
+          <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+            <select value={campanhaFiltro} onChange={(e) => setCampanhaFiltro(e.target.value)} style={INP}>
+              {CAMPANHAS_ASSISTIDAS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+            </select>
+            <select value={campanhaPlaybook} onChange={(e) => setCampanhaPlaybook(e.target.value)} style={INP}>
+              {PLAYBOOKS_ASSISTIDOS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+            </select>
+            <div style={{ color: C.dim, fontSize: 10, lineHeight: 1.35 }}>{clientesCampanha.length} cliente(s) no segmento atual. O sistema prepara mensagens; o envio continua manual.</div>
+            <button onClick={gerarCampanhaAssistida} style={{ padding: "8px 10px", borderRadius: 10, border: `1px solid ${C.green2}66`, background: `${C.green2}16`, color: C.green, fontWeight: 900, cursor: "pointer" }}><Wand2 size={13} /> Gerar lista assistida</button>
           </div>
         </details>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -1267,6 +1596,11 @@ export function ClientesCRMPanel({
                   <span style={{ color: isAtrasado(item) ? C.danger : isHoje(item) ? C.warn : C.dim, fontSize: 10 }}>{item.proximoContato || "sem data"}</span>
                 </div>
                 <div style={{ color: "#93C5FD", fontSize: 10, marginTop: 5 }}>{item.proximoPasso || item.lembreteJade || "Sem proximo passo definido"}</div>
+                {!!item._tags?.length && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 7 }}>
+                    {item._tags.slice(0, 4).map((tag) => <span key={tag} style={{ border: `1px solid ${corEtiqueta(tag)}55`, color: labelEtiqueta(tag) === tag ? C.muted : corEtiqueta(tag), borderRadius: 999, padding: "2px 6px", fontSize: 9, fontWeight: 850 }}>{labelEtiqueta(tag)}</span>)}
+                  </div>
+                )}
               </button>
             );
           })}
@@ -1310,6 +1644,8 @@ export function ClientesCRMPanel({
                     ["cidadeUf", "CIDADE / UF", "Cidade/UF"],
                     ["segmento", "SEGMENTO", "Ex: prefeitura, industria, comercio..."],
                     ["origem", "ORIGEM", "Orcamento, indicacao, visita..."],
+                    ["intencao", "INTENCAO / INTERESSE", "Ex: manutencao, compra, obra, visita..."],
+                    ["objecao", "OBJECAO PRINCIPAL", "Ex: preco, prazo interno, documento pendente..."],
                   ].map(([key, label, placeholder]) => (
                     <div key={key}>
                       <div style={LBL}>{label}</div>
@@ -1325,6 +1661,16 @@ export function ClientesCRMPanel({
                     </div>
                   ))}
                   <div style={{ gridColumn: "1 / -1", color: C.green, fontSize: 10, letterSpacing: 1.8, fontWeight: 950, borderBottom: `1px solid ${C.border2}`, paddingBottom: 7, marginTop: 4 }}>ACOMPANHAMENTO COMERCIAL</div>
+                  <div>
+                    <div style={LBL}>CANAL PREFERIDO</div>
+                    <select value={form.canalPreferido || "WhatsApp"} onChange={(e) => setForm((f) => ({ ...f, canalPreferido: e.target.value }))} style={INP}>
+                      {["WhatsApp", "E-mail", "Ligacao", "Reuniao", "Visita"].map((op) => <option key={op}>{op}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <div style={LBL}>ETIQUETAS MANUAIS</div>
+                    <input value={normalizarEtiquetas(form.etiquetas).join(", ")} onChange={(e) => setForm((f) => ({ ...f, etiquetas: normalizarEtiquetas(e.target.value) }))} placeholder="Ex: alto valor, setor publico, decisor" style={INP} />
+                  </div>
                   <div>
                     <div style={LBL}>STATUS</div>
                     <select value={form.status} onChange={(e) => setForm((f) => ({ ...f, status: e.target.value }))} style={INP}>
@@ -1374,6 +1720,17 @@ export function ClientesCRMPanel({
                       <div style={{ color: C.green, fontWeight: 950 }}>{contatosAtivo.length} registro(s)</div>
                     </div>
                   </div>
+                  <div style={{ border: `1px solid ${C.border2}`, borderRadius: 12, padding: 10, background: C.panel2 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", marginBottom: 8 }}>
+                      <strong style={{ color: C.text, fontSize: 12 }}><Tags size={13} /> Etiquetas inteligentes</strong>
+                      <button onClick={() => aplicarEtiquetasInteligentes(true)} style={{ padding: "5px 8px", borderRadius: 8, border: `1px solid ${C.warn}55`, background: `${C.warn}12`, color: C.warn, cursor: "pointer", fontSize: 10, fontWeight: 850 }}>Aplicar</button>
+                    </div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                      {(ativo._tags || []).length ? (ativo._tags || []).map((tag) => (
+                        <span key={tag} style={{ border: `1px solid ${corEtiqueta(tag)}66`, color: corEtiqueta(tag), borderRadius: 999, padding: "4px 8px", fontSize: 10, fontWeight: 900 }}>{labelEtiqueta(tag)}</span>
+                      )) : <span style={{ color: C.dim, fontSize: 11 }}>Sem etiquetas sugeridas.</span>}
+                    </div>
+                  </div>
                   <div><strong style={{ color: C.text }}>Empresa:</strong> {ativo.empresa || "Nao informado"}</div>
                   <div><strong style={{ color: C.text }}>WhatsApp:</strong> {ativo.whatsapp || "Nao informado"}</div>
                   <div><strong style={{ color: C.text }}>Contato:</strong> {[ativo.telefone, ativo.telefone2, ativo.email, ativo.email2].filter(Boolean).join(" | ") || "Nao informado"}</div>
@@ -1382,6 +1739,9 @@ export function ClientesCRMPanel({
                   <div><strong style={{ color: C.text }}>Decisor:</strong> {ativo.decisor || ativo.cargo || "Nao informado"}</div>
                   <div><strong style={{ color: C.text }}>Segmento:</strong> {ativo.segmento || "Nao informado"}</div>
                   <div><strong style={{ color: C.text }}>Origem:</strong> {ativo.origem || "Nao informado"}</div>
+                  <div><strong style={{ color: C.text }}>Canal preferido:</strong> {ativo.canalPreferido || "WhatsApp"}</div>
+                  <div><strong style={{ color: C.text }}>Intencao:</strong> {ativo.intencao || "Nao informado"}</div>
+                  <div><strong style={{ color: C.text }}>Objecao:</strong> {ativo.objecao || "Nao informado"}</div>
                   <div><strong style={{ color: C.text }}>Orcamentos no perfil:</strong> {orcamentosVinculadosAtivo.length ? `${orcamentosVinculadosAtivo.length} vinculado(s), cada um com historico proprio.` : relacionados.length ? `${relacionados.length} possivel(is) por nome. Vincule abaixo para historico separado.` : "Nenhum orcamento vinculado"}</div>
                   <div><strong style={{ color: C.text }}>Perfil:</strong> {ativo.perfil || "Sem perfil detalhado"}</div>
                   <div><strong style={{ color: C.text }}>Proximo passo:</strong> {ativo.proximoPasso || "Nara ainda nao analisou"}</div>
@@ -1422,6 +1782,46 @@ export function ClientesCRMPanel({
                   </div>
                 ) : (
                   <div style={{ color: C.dim, fontSize: 12, lineHeight: 1.6 }}>Salve contatos, anexos ou vincule orcamentos. Depois peça para a Nara pensar no proximo passo.</div>
+                )}
+              </div>
+
+              <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: 16 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", marginBottom: 10 }}>
+                  <div>
+                    <div style={{ color: C.green, fontSize: 10, letterSpacing: 2, fontWeight: 950 }}>MODO ASSISTIDO GRATUITO</div>
+                    <div style={{ color: C.dim, fontSize: 12 }}>Playbooks estilo Manychat, mas com envio manual e historico fiel.</div>
+                  </div>
+                  {ativo?._playbook && <span style={{ border: `1px solid ${C.green2}55`, color: C.green, borderRadius: 999, padding: "5px 8px", fontSize: 10, fontWeight: 900 }}>Sugestao: {PLAYBOOKS_ASSISTIDOS.find((p) => p.id === ativo._playbook)?.label || ativo._playbook}</span>}
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: campanhaResultados.length ? 12 : 0 }}>
+                  {PLAYBOOKS_ASSISTIDOS.map((playbook) => (
+                    <button key={playbook.id} onClick={() => prepararPlaybook(playbook.id)} disabled={!ativo} style={{ padding: "8px 10px", borderRadius: 10, border: `1px solid ${ativo?._playbook === playbook.id ? C.green2 : C.border2}`, background: ativo?._playbook === playbook.id ? `${C.green2}16` : C.panel2, color: ativo?._playbook === playbook.id ? C.green : C.muted, cursor: ativo ? "pointer" : "not-allowed", fontWeight: 850, fontSize: 11 }}>
+                      {playbook.label}
+                    </button>
+                  ))}
+                </div>
+                {campanhaResultados.length > 0 && (
+                  <div style={{ borderTop: `1px solid ${C.border2}`, paddingTop: 10 }}>
+                    <div style={{ color: C.dim, fontSize: 11, marginBottom: 8 }}>Campanha assistida gerada: copie ou abra o WhatsApp externo cliente por cliente.</div>
+                    <div style={{ display: "grid", gap: 8, maxHeight: 260, overflowY: "auto" }}>
+                      {campanhaResultados.map((item) => {
+                        const cliente = clientes.find((cli) => cli.id === item.clienteId) || {};
+                        return (
+                          <div key={item.clienteId} style={{ border: `1px solid ${C.border2}`, background: C.panel2, borderRadius: 12, padding: 10 }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
+                              <strong style={{ fontSize: 12 }}>{item.nome}</strong>
+                              <span style={{ color: item.whatsapp ? C.green : C.danger, fontSize: 10, fontWeight: 900 }}>{item.whatsapp ? "WhatsApp ok" : "Sem numero"}</span>
+                            </div>
+                            <div style={{ whiteSpace: "pre-wrap", color: C.muted, fontSize: 11, lineHeight: 1.5, marginBottom: 8 }}>{item.texto}</div>
+                            <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+                              <button onClick={() => copiarCampanha(item.clienteId, item.texto)} style={{ padding: "6px 9px", borderRadius: 8, border: `1px solid ${C.border2}`, background: "transparent", color: C.muted, cursor: "pointer", fontWeight: 850 }}><Copy size={12} /> Copiar</button>
+                              <button onClick={() => abrirWhatsCliente(cliente, item.texto)} style={{ padding: "6px 9px", borderRadius: 8, border: `1px solid ${C.green2}55`, background: `${C.green2}12`, color: C.green, cursor: "pointer", fontWeight: 850 }}><MessageCircle size={12} /> WhatsApp</button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
                 )}
               </div>
 
