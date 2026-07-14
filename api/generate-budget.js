@@ -502,7 +502,7 @@ export default async function handler(req, res) {
       });
     }
 
-    const { cliente, texto, obs, empresas, selecao } = req.body || {};
+    const { cliente, texto, obs, empresas, selecao, automacaoNara } = req.body || {};
 
     if (
       typeof cliente !== "string" ||
@@ -553,6 +553,20 @@ export default async function handler(req, res) {
         };
       })
       .filter(Boolean);
+
+    const automacaoNaraSegura = {
+      avisos: Array.isArray(automacaoNara?.avisos) ? automacaoNara.avisos.slice(0, 12).map((v) => limparTexto(v, 260)) : [],
+      acoes: Array.isArray(automacaoNara?.acoes) ? automacaoNara.acoes.slice(0, 12).map((v) => limparTexto(v, 300)) : [],
+      parecidos: Array.isArray(automacaoNara?.parecidos)
+        ? automacaoNara.parecidos.slice(0, 5).map((item) => ({
+            numero: limparTexto(item?.numero, 40),
+            cliente: limparTexto(item?.cliente, 120),
+            empresaNome: limparTexto(item?.empresaNome, 120),
+            score: Number(item?.score || 0),
+          }))
+        : [],
+      temListaProvavel: Boolean(automacaoNara?.temListaProvavel),
+    };
 
     if (!empresasSelecionadas.length) {
       return res.status(400).json({
@@ -613,6 +627,15 @@ ${texto}
 
 OBSERVACOES OPCIONAIS:
 ${obs || "Nao informado."}
+
+COMANDOS AUTOMATICOS DA NARA ANTES DA GERACAO:
+${JSON.stringify(automacaoNaraSegura, null, 2)}
+
+Use estes comandos como regra obrigatoria:
+- Se "parecidos" possuir itens, mude abertura, ordem de secoes, rotulos, ritmo textual e fechamento para evitar semelhança com orcamentos anteriores.
+- Se "acoes" citar lista de itens, gere tabela somente se houver lista real no resumo. Se nao houver lista real, nao crie tabela.
+- Se "acoes" ou "avisos" citarem prazo, validade, garantia, pagamento ou condicoes, remova completamente do documento final.
+- Nao transforme avisos internos da Nara em texto visivel ao cliente.
 
 EMPRESAS SELECIONADAS:
 ${JSON.stringify(empresasSelecionadas, null, 2)}

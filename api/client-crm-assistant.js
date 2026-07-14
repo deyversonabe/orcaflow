@@ -107,21 +107,34 @@ function resumirContatos(contatos = []) {
 function resumirOrcamentos(orcamentos = []) {
   if (!Array.isArray(orcamentos)) return [];
   return orcamentos.slice(0, 20).map((item) => ({
+    id: clean(item?.id, 80),
+    origem: clean(item?.origem, 40),
     numero: clean(item?.numero, 80),
+    titulo: clean(item?.titulo || item?.cliente || item?.arquivoNome, 180),
     cliente: clean(item?.cliente, 180),
     empresaNome: clean(item?.empresaNome, 180),
     valorGlobal: clean(item?.valorGlobal || item?.valor, 80),
     status: clean(item?.status, 80),
     proximoContato: clean(item?.proximoContato, 80),
+    resumo: clean(item?.resumo || item?.arquivoResumo || item?.arquivoTexto, 1200),
     lembreteIA: clean(item?.lembreteIA, 700),
     resumoConversas: clean(item?.resumoConversas, 900),
     descricao: clean(
       item?.orcamentoCompleto?.campos?.escopo ||
         item?.orcamentoCompleto?.campos?.objetivo ||
         item?.descricao ||
-        "",
+      "",
       1400
     ),
+    historico: Array.isArray(item?.historico)
+      ? item.historico.slice(0, 18).map((msg) => ({
+        canal: clean(msg?.canal, 40),
+        tipo: clean(msg?.tipo, 80),
+        assunto: clean(msg?.assunto, 140),
+        mensagem: clean(msg?.mensagem, 1200),
+        criadoEm: clean(msg?.criadoEm, 80),
+      }))
+      : [],
   }));
 }
 
@@ -133,8 +146,10 @@ PERSONALIDADE:
 - Fale com o usuario do sistema pelo nome: ${clean(usuarioNome, 80) || "responsavel"}.
 - Seja uma amiga de trabalho: objetiva, humana, estrategica e prestativa.
 - Nao seja generica. Pense no contexto real do cliente, nos orcamentos e no historico.
+- Quando existirem varios orcamentos, trate cada orcamento pelo seu proprio historico. Nao misture tratativas de um orcamento com outro.
 - Quando faltar informacao, faca perguntas especificas e uteis para melhorar a chance de fechamento.
 - Nao invente dados, prazo, desconto, condicao comercial, garantia ou promessa.
+- Se um arquivo ou orcamento nao tiver texto pesquisavel, diga que precisa de informacao complementar em vez de presumir conteudo.
 
 TAREFA:
 Analisar o perfil do cliente, historico de contatos, anexos e orcamentos relacionados para recomendar o proximo passo comercial mais inteligente.
@@ -148,7 +163,7 @@ ${JSON.stringify(resumirContatos(contatos), null, 2)}
 IMAGEM/PRINT RECENTE ANEXADO:
 ${temImagem ? "sim, use leitura visual/OCR para interpretar o print ou foto recente" : "nao"}
 
-ORCAMENTOS RELACIONADOS:
+ORCAMENTOS VINCULADOS OU RELACIONADOS:
 ${JSON.stringify(resumirOrcamentos(orcamentos), null, 2)}
 
 PEDIDO DO USUARIO:
