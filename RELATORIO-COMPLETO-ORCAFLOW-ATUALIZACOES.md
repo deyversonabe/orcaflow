@@ -1,6 +1,6 @@
 # OrcaFlow Studio AI - Relatorio completo de estrutura e atualizacoes
 
-Versao atual do projeto: 3.2.4  
+Versao atual do projeto: 3.2.8  
 Data do registro: 14/07/2026  
 Projeto: OrcaFlow Studio AI  
 Dominio em uso: orcaflow.ia.br  
@@ -19,8 +19,15 @@ O sistema permite:
 - gerar orcamentos com IA respeitando o DNA de linguagem de cada empresa;
 - exportar orcamentos em PDF;
 - salvar e acompanhar orcamentos em uma area de gestao;
+- apagar orcamentos errados individualmente ou em bloco;
+- restaurar orcamentos apagados pela lixeira;
+- auditar acoes importantes de gestao comercial;
+- visualizar pipeline comercial por etapa, quantidade e valor;
 - importar orcamentos antigos em massa;
 - criar e acompanhar clientes em CRM;
+- segmentar clientes com etiquetas inteligentes e filtros comerciais;
+- preparar campanhas assistidas sem envio automatico pago;
+- usar playbooks manuais de follow-up, cobranca, reativacao e pedido de dados;
 - registrar historico real de contatos por cliente e por orcamento;
 - usar a assistente Nara para mensagens, follow-up, analise comercial e relatorios;
 - controlar usuarios, acessos e isolamento de dados por usuario;
@@ -362,7 +369,7 @@ Regras importantes:
 - contato real deve ser registrado pelo usuario ou importado de fonte real;
 - anexos sem leitura clara devem ser tratados como referencia, nao como verdade inventada.
 
-## 10. Agenda de clientes
+## 10. Agenda telefonica de contatos
 
 Arquivo principal:
 
@@ -372,13 +379,20 @@ src/AgendaClientesPanel.jsx
 
 Funcoes:
 
-- criar agenda de contatos;
-- vincular contato a cliente;
-- vincular contato a orcamento;
-- definir objetivo e prioridade;
-- concluir contato;
-- registrar resultado no historico do cliente/orcamento;
-- pedir abordagem para a Nara.
+- cadastrar e editar contatos telefonicos;
+- vincular contato ao cliente do CRM;
+- criar cliente automaticamente quando o contato ainda nao existe no CRM;
+- registrar nome, empresa, cargo, decisor, WhatsApp, telefone, e-mail, endereco, cidade/UF, segmento e observacoes;
+- buscar contatos por nome, empresa, telefone, e-mail ou observacoes;
+- filtrar contatos com WhatsApp, com e-mail, vinculados ao CRM ou sem telefone;
+- importar contatos existentes do CRM;
+- importar arquivos `.vcf` e `.csv`;
+- abrir WhatsApp externo com mensagem pronta;
+- ligar pelo telefone do dispositivo quando disponivel;
+- abrir e-mail;
+- copiar dados do contato;
+- consultar a Nara para abordagem comercial personalizada;
+- exibir orcamentos relacionados e historico real do cliente sem criar informacoes falsas.
 
 ## 11. WhatsApp e modo assistido
 
@@ -463,12 +477,16 @@ Zips principais:
 ```text
 outputs/orcaflow-studio-ai-3.2.3-performance.zip
 outputs/orcaflow-studio-ai-3.2.4-usuarios-compartilhamento.zip
+outputs/orcaflow-studio-ai-3.2.5-agenda-telefonica.zip
+outputs/orcaflow-studio-ai-3.2.6-exclusao-orcamentos.zip
+outputs/orcaflow-studio-ai-3.2.7-upgrades-gestao.zip
+outputs/orcaflow-studio-ai-3.2.8-manychat-assistido-gratis.zip
 ```
 
 Versao recomendada para subir:
 
 ```text
-outputs/orcaflow-studio-ai-3.2.4-usuarios-compartilhamento.zip
+outputs/orcaflow-studio-ai-3.2.8-manychat-assistido-gratis.zip
 ```
 
 ## 15. Validacoes realizadas
@@ -495,7 +513,7 @@ Arquivos sensiveis no zip: nao encontrados
 1. Usar o zip:
 
 ```text
-outputs/orcaflow-studio-ai-3.2.4-usuarios-compartilhamento.zip
+outputs/orcaflow-studio-ai-3.2.7-upgrades-gestao.zip
 ```
 
 2. Enviar os arquivos para o GitHub.
@@ -516,8 +534,14 @@ outputs/orcaflow-studio-ai-3.2.4-usuarios-compartilhamento.zip
 - admin copiar empresa cadastrada para outro usuario;
 - gerar orcamento;
 - salvar no CRM;
+- apagar orcamento individual e apagar orcamentos selecionados em bloco;
+- restaurar orcamento pela lixeira;
+- conferir auditoria de acoes;
 - baixar PDF;
-- usar Nara no CRM e WhatsApp assistido.
+- usar Nara no CRM, agenda telefonica e WhatsApp assistido.
+- usar filtros por etiqueta inteligente;
+- gerar campanha assistida e abrir WhatsApp externo manualmente;
+- preparar playbooks sem envio automatico.
 
 ## 17. Pontos que ainda podem evoluir
 
@@ -530,6 +554,7 @@ Melhorias futuras recomendadas:
 - criar busca global para admin;
 - criar tela de auditoria de uso da IA;
 - criar integracao oficial completa com Meta Cloud API para caixa WhatsApp real;
+- enviar campanhas automaticas pelo WhatsApp oficial somente apos avaliar custo e regras da Meta;
 - criar painel de qualidade de orcamentos gerados;
 - criar controle de versao dos DNAs das empresas.
 
@@ -544,4 +569,4 @@ O sistema esta estruturado para operar como uma plataforma multiusuario:
 - orcamentos respeitam o DNA de cada empresa;
 - banco fica em nuvem pelo Supabase.
 
-Antes de considerar tudo em producao, a etapa mais importante e rodar o `schema.sql` atualizado no Supabase e redeployar a versao 3.2.4 no Vercel.
+Antes de considerar tudo em producao, a etapa mais importante e rodar o `schema.sql` atualizado no Supabase e redeployar a versao 3.2.8 no Vercel.
