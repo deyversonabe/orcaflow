@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { authHeaders } from "./supabase.js";
 import { store } from "./store.js";
-import { AlertTriangle, CalendarClock, Copy, FileText, Mail, MessageCircle, Send, Target, Upload, Users } from "lucide-react";
+import { Copy, Mail, MessageCircle, Send, Upload, Users } from "lucide-react";
 import { abrirWhatsRelatorio, gerarRelatorioSemanalNara, normalizarWhatsDestino, WHATS_REPORT_NUMBER, WHATS_REPORT_STORAGE_KEY } from "./weeklyReport.js";
 
 const KEY_CLIENTES = "orcaflow_clientes_crm";
+const KEY_ORCAMENTOS = "orcaflow_crm_orcamentos";
 
 const C = {
   bg: "#07111F",
@@ -36,11 +37,6 @@ function textoBusca(valor = "") {
 function brl(valor) {
   const n = Number(String(valor ?? 0).replace(/\./g, "").replace(",", ".").replace(/[^\d.-]/g, ""));
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(Number.isFinite(n) ? n : 0);
-}
-
-function valorNumerico(valor) {
-  const n = Number(String(valor ?? 0).replace(/\./g, "").replace(",", ".").replace(/[^\d.-]/g, ""));
-  return Number.isFinite(n) ? n : 0;
 }
 
 function formatTelefone(valor = "") {
@@ -116,10 +112,251 @@ function criarCliente(usuarioAtual, dados = {}) {
     lembreteJade: dados.lembreteJade || "",
     jade: dados.jade || null,
     contatos: Array.isArray(dados.contatos) ? dados.contatos : [],
+    orcamentosVinculados: Array.isArray(dados.orcamentosVinculados) ? dados.orcamentosVinculados : [],
     userId: dados.userId || usuarioAtual?.id || "admin",
     criadoEm: dados.criadoEm || agora,
     atualizadoEm: agora,
   };
+}
+
+const CAMPOS_AUDITORIA_CLIENTE = [
+  ["nome", "Nome"],
+  ["empresa", "Empresa"],
+  ["cargo", "Cargo"],
+  ["decisor", "Decisor"],
+  ["whatsapp", "WhatsApp"],
+  ["telefone", "Telefone"],
+  ["telefone2", "Telefone alternativo"],
+  ["email", "E-mail"],
+  ["email2", "E-mail alternativo"],
+  ["documento", "Documento"],
+  ["endereco", "Endereco"],
+  ["cidadeUf", "Cidade/UF"],
+  ["segmento", "Segmento"],
+  ["origem", "Origem"],
+  ["status", "Status"],
+  ["temperatura", "Temperatura"],
+  ["proximoContato", "Proximo contato"],
+  ["valorPotencial", "Valor potencial"],
+  ["perfil", "Perfil"],
+  ["observacoes", "Observacoes"],
+  ["proximoPasso", "Proximo passo"],
+];
+
+function valorAuditoria(valor = "") {
+  return clean(valor, 140) || "(vazio)";
+}
+
+function descreverAlteracoesCliente(anterior = {}, atual = {}) {
+  return CAMPOS_AUDITORIA_CLIENTE
+    .map(([key, label]) => {
+      const antes = valorAuditoria(anterior[key]);
+      const depois = valorAuditoria(atual[key]);
+      return antes === depois ? "" : `${label}: "${antes}" -> "${depois}"`;
+    })
+    .filter(Boolean)
+    .slice(0, 24);
+}
+
+function criarRegistroSistemaCliente(usuarioAtual, dados = {}) {
+  return {
+    id: dados.id || `ct_sys_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    canal: dados.canal || "Sistema",
+    direcao: dados.direcao || "Registro interno",
+    tipo: dados.tipo || "Atualizacao",
+    assunto: dados.assunto || "",
+    mensagem: clean(dados.mensagem || "", 5000),
+    orcamentoClienteId: dados.orcamentoClienteId || "",
+    orcamentoId: dados.orcamentoId || "",
+    orcamentoNumero: dados.orcamentoNumero || "",
+    orcamentoTitulo: dados.orcamentoTitulo || "",
+    criadoEm: dados.criadoEm || new Date().toISOString(),
+    userId: dados.userId || usuarioAtual?.id || "admin",
+    origem: dados.origem || "crm_cliente",
+  };
+}
+
+function direcaoOrcamento(direcao = "") {
+  const d = textoBusca(direcao);
+  if (/cliente|entrada|receb/.test(d)) return "entrada";
+  if (/intern|sistema|registro/.test(d)) return "interna";
+  return "saida";
+}
+
+function registroClienteParaConversaOrcamento(registro = {}, usuarioAtual) {
+  const mensagem = clean([registro.mensagem, registro.arquivoResumo ? `Anexo: ${registro.arquivoResumo}` : ""].filter(Boolean).join("\n"), 6000);
+  return {
+    id: `conv_${registro.id}`,
+    followupId: registro.id,
+    canal: registro.canal || "CRM",
+    direcao: direcaoOrcamento(registro.direcao),
+    tipo: registro.tipo || "CRM",
+    mensagem,
+    criadoEm: registro.criadoEm || new Date().toISOString(),
+    origem: registro.origem || "crm_cliente",
+    usuarioNome: usuarioAtual?.nome || usuarioAtual?.email || "",
+    clienteId: registro.clienteId || "",
+  };
+}
+
+function registroClienteParaFollowupOrcamento(registro = {}) {
+  return {
+    id: registro.id,
+    tipo: registro.tipo || "CRM",
+    canal: registro.canal || "CRM",
+    conteudo: clean(registro.mensagem || registro.arquivoResumo || registro.assunto || "Registro comercial vinculado ao orcamento.", 6000),
+    criadoEm: registro.criadoEm || new Date().toISOString(),
+    origem: registro.origem || "crm_cliente",
+  };
+}
+
+function telefoneKey(valor = "") {
+  let d = String(valor || "").replace(/\D/g, "");
+  if (d.length > 11 && d.startsWith("55")) d = d.slice(2);
+  if (d.length > 11) d = d.slice(-11);
+  return d;
+}
+
+function formatTelefoneImportado(valor = "") {
+  return formatTelefone(telefoneKey(valor));
+}
+
+function valorVCard(linha = "") {
+  const idx = linha.indexOf(":");
+  let valor = idx >= 0 ? linha.slice(idx + 1) : linha;
+  valor = valor.replace(/\\n/gi, " ").replace(/\\,/g, ",").replace(/\\;/g, ";").replace(/\s+/g, " ").trim();
+  if (/ENCODING=QUOTED-PRINTABLE/i.test(linha)) {
+    try {
+      valor = decodeURIComponent(valor.replace(/=([A-Fa-f0-9]{2})/g, "%$1"));
+    } catch {
+      valor = valor.replace(/=([A-Fa-f0-9]{2})/g, "");
+    }
+  }
+  return clean(valor, 600);
+}
+
+function parseVCardContacts(texto = "") {
+  const normal = String(texto || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\n[ \t]/g, "");
+  const blocos = normal.match(/BEGIN:VCARD[\s\S]*?END:VCARD/gi) || [];
+  return blocos.map((bloco) => {
+    const linhas = bloco.split("\n").map((l) => l.trim()).filter(Boolean);
+    const tels = [];
+    const emails = [];
+    let nome = "";
+    let empresa = "";
+    let cargo = "";
+    let endereco = "";
+    for (const linha of linhas) {
+      const tag = linha.split(/[;:]/)[0]?.toUpperCase();
+      if (tag === "FN") nome = valorVCard(linha);
+      if (!nome && tag === "N") nome = valorVCard(linha).split(";").filter(Boolean).join(" ");
+      if (tag === "TEL") tels.push(valorVCard(linha));
+      if (tag === "EMAIL") emails.push(valorVCard(linha));
+      if (tag === "ORG") empresa = valorVCard(linha);
+      if (tag === "TITLE") cargo = valorVCard(linha);
+      if (tag === "ADR") endereco = valorVCard(linha).split(";").filter(Boolean).join(", ");
+    }
+    return { nome, empresa, cargo, telefone: tels[0] || "", telefone2: tels[1] || "", email: emails[0] || "", email2: emails[1] || "", endereco };
+  }).filter((item) => item.nome || item.telefone || item.email);
+}
+
+function detectarSeparadorCsv(linha = "") {
+  const candidatos = [";", ",", "\t"];
+  return candidatos.sort((a, b) => linha.split(b).length - linha.split(a).length)[0];
+}
+
+function separarCsvLinha(linha = "", sep = ";") {
+  const partes = [];
+  let atual = "";
+  let aspas = false;
+  for (let i = 0; i < linha.length; i += 1) {
+    const ch = linha[i];
+    if (ch === '"' && linha[i + 1] === '"') {
+      atual += '"';
+      i += 1;
+    } else if (ch === '"') {
+      aspas = !aspas;
+    } else if (ch === sep && !aspas) {
+      partes.push(clean(atual, 1000));
+      atual = "";
+    } else {
+      atual += ch;
+    }
+  }
+  partes.push(clean(atual, 1000));
+  return partes;
+}
+
+function parseCsvContacts(texto = "") {
+  const linhas = String(texto || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n").filter((l) => l.trim());
+  if (!linhas.length) return [];
+  const sep = detectarSeparadorCsv(linhas[0]);
+  const primeira = separarCsvLinha(linhas[0], sep);
+  const pareceCabecalho = primeira.some((c) => /nome|name|email|e-mail|telefone|phone|whats|celular|empresa|company|org/i.test(c));
+  const headers = pareceCabecalho ? primeira.map(textoBusca) : [];
+  const dados = pareceCabecalho ? linhas.slice(1) : linhas;
+
+  const pegar = (cols, nomes) => {
+    const idx = headers.findIndex((h) => nomes.some((n) => h.includes(n)));
+    return idx >= 0 ? cols[idx] || "" : "";
+  };
+
+  return dados.map((linha) => {
+    const cols = separarCsvLinha(linha, sep);
+    if (headers.length) {
+      return {
+        nome: pegar(cols, ["nome", "name", "contato", "cliente"]),
+        empresa: pegar(cols, ["empresa", "company", "org", "organizacao"]),
+        cargo: pegar(cols, ["cargo", "funcao", "title"]),
+        telefone: pegar(cols, ["whatsapp", "telefone", "phone", "celular", "mobile", "tel"]),
+        telefone2: pegar(cols, ["telefone 2", "phone 2", "celular 2"]),
+        email: pegar(cols, ["email", "e-mail", "mail"]),
+        endereco: pegar(cols, ["endereco", "address", "rua"]),
+      };
+    }
+    const email = cols.find((c) => /\S+@\S+\.\S+/.test(c)) || "";
+    const telefone = cols.find((c) => telefoneKey(c).length >= 8) || "";
+    const nome = cols.find((c) => c && c !== email && c !== telefone) || "";
+    return { nome, email, telefone };
+  }).filter((item) => item.nome || item.telefone || item.email);
+}
+
+function enderecoContactPicker(valor) {
+  const endereco = Array.isArray(valor) ? valor[0] : valor;
+  if (!endereco) return "";
+  if (typeof endereco === "string") return clean(endereco, 240);
+  return clean([endereco.addressLine, endereco.city, endereco.region, endereco.country].flat().filter(Boolean).join(", "), 240);
+}
+
+function normalizarContatoImportado(usuarioAtual, raw = {}, origem = "Importado") {
+  const nomes = Array.isArray(raw.name) ? raw.name : [raw.name || raw.nome || raw.fullName || raw.displayName || ""];
+  const tels = Array.isArray(raw.tel) ? raw.tel : [raw.telefone || raw.phone || raw.whatsapp || "", raw.telefone2 || ""].filter(Boolean);
+  const emails = Array.isArray(raw.email) ? raw.email : [raw.email || "", raw.email2 || ""].filter(Boolean);
+  const nome = clean(nomes[0] || raw.nome || raw.empresa || "", 180);
+  return criarCliente(usuarioAtual, {
+    nome,
+    empresa: clean(raw.empresa || raw.org || raw.company || "", 180),
+    cargo: clean(raw.cargo || raw.title || "", 120),
+    email: clean(emails[0] || "", 180),
+    email2: clean(emails[1] || "", 180),
+    telefone: formatTelefoneImportado(tels[0] || ""),
+    whatsapp: formatTelefoneImportado(tels[0] || ""),
+    telefone2: formatTelefoneImportado(tels[1] || ""),
+    endereco: clean(raw.endereco || enderecoContactPicker(raw.address), 240),
+    origem,
+    status: "Em acompanhamento",
+    temperatura: "Morno",
+    observacoes: "Cadastro importado automaticamente. Conferir os dados antes do primeiro contato.",
+  });
+}
+
+function chavesContato(cliente = {}) {
+  const chaves = [];
+  [cliente.email, cliente.email2].filter(Boolean).forEach((email) => chaves.push(`email:${clean(email).toLowerCase()}`));
+  [cliente.whatsapp, cliente.telefone, cliente.telefone2].map(telefoneKey).filter((tel) => tel.length >= 8).forEach((tel) => chaves.push(`tel:${tel}`));
+  const nome = textoBusca(cliente.nome || cliente.empresa || "");
+  if (nome) chaves.push(`nome:${nome}`);
+  return [...new Set(chaves)];
 }
 
 function scoreCliente(cliente = {}, orcamentos = []) {
@@ -156,6 +393,55 @@ function orcamentosDoCliente(cliente = {}, crm = []) {
   });
 }
 
+function criarOrcamentoVinculado(usuarioAtual, dados = {}) {
+  const agora = new Date().toISOString();
+  return {
+    id: dados.id || `ocli_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    origem: dados.origem || "sistema",
+    orcamentoId: dados.orcamentoId || "",
+    numero: dados.numero || "",
+    titulo: clean(dados.titulo || dados.cliente || dados.arquivoNome || "Orcamento sem titulo", 180),
+    empresaNome: dados.empresaNome || "",
+    valor: dados.valor || dados.valorGlobal || "",
+    status: dados.status || "",
+    resumo: clean(dados.resumo || dados.lembreteIA || dados.resumoConversas || "", 2200),
+    arquivoNome: dados.arquivoNome || "",
+    arquivoTipo: dados.arquivoTipo || "",
+    arquivoTamanho: dados.arquivoTamanho || 0,
+    arquivoTexto: clean(dados.arquivoTexto || "", 12000),
+    arquivoResumo: clean(dados.arquivoResumo || "", 2200),
+    arquivoDataUrl: dados.arquivoDataUrl || "",
+    historico: Array.isArray(dados.historico) ? dados.historico : [],
+    userId: dados.userId || usuarioAtual?.id || "admin",
+    criadoEm: dados.criadoEm || agora,
+    anexadoEm: dados.anexadoEm || agora,
+    atualizadoEm: agora,
+  };
+}
+
+function orcamentoDoSistemaParaCliente(orc = {}, usuarioAtual) {
+  return criarOrcamentoVinculado(usuarioAtual, {
+    origem: "sistema",
+    orcamentoId: orc.id || "",
+    numero: orc.numero || "",
+    titulo: orc.cliente || orc.numero || "Orcamento do sistema",
+    empresaNome: orc.empresaNome || "",
+    valor: orc.valorGlobal || orc.valor || "",
+    status: orc.status || "",
+    resumo: orc.lembreteIA || orc.resumoConversas || orc.descricao || "",
+    criadoEm: orc.criadoEm || new Date().toISOString(),
+  });
+}
+
+function lerArquivoComoDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("Falha ao ler arquivo."));
+    reader.readAsDataURL(file);
+  });
+}
+
 function inputStyle() {
   return {
     background: C.panel2,
@@ -175,11 +461,10 @@ export function ClientesCRMPanel({
   clientes = [],
   setClientes,
   crm = [],
+  setCrm,
   empresas = [],
   pushToast,
   usuarioAtual,
-  abrirOrcamentoSalvo,
-  baixarOrcamento,
   lerTextoPDF,
   imagemParaLeitura,
 }) {
@@ -200,13 +485,20 @@ export function ClientesCRMPanel({
     assunto: "",
     mensagem: "",
     orcamentoId: "",
+    orcamentoClienteId: "",
   });
+  const [buscaOrcamento, setBuscaOrcamento] = useState("");
+  const [orcamentoSistemaId, setOrcamentoSistemaId] = useState("");
+  const [orcamentoAtivoId, setOrcamentoAtivoId] = useState("");
   const [anexo, setAnexo] = useState(null);
   const [lendoArquivo, setLendoArquivo] = useState(false);
+  const [lendoOrcamentoArquivo, setLendoOrcamentoArquivo] = useState(false);
   const [jadeLoading, setJadeLoading] = useState(false);
   const [pedidoJade, setPedidoJade] = useState("Nara, leia este cliente e me diga o melhor proximo passo para aumentar a chance de fechamento.");
   const [whatsRelatorio, setWhatsRelatorio] = useState(WHATS_REPORT_NUMBER);
   const refArquivo = useRef(null);
+  const refArquivoOrcamento = useRef(null);
+  const refImportarContatos = useRef(null);
 
   useEffect(() => {
     let ativo = true;
@@ -222,7 +514,8 @@ export function ClientesCRMPanel({
   const enriquecidos = useMemo(() => {
     return base.map((item) => {
       const vinculados = orcamentosDoCliente(item, crm);
-      const score = scoreCliente(item, vinculados);
+      const vinculadosExplicitos = Array.isArray(item.orcamentosVinculados) ? item.orcamentosVinculados : [];
+      const score = scoreCliente(item, vinculadosExplicitos.length ? vinculadosExplicitos : vinculados);
       return {
         ...item,
         _orcamentos: vinculados,
@@ -237,12 +530,7 @@ export function ClientesCRMPanel({
     const quentes = enriquecidos.filter((item) => item.temperatura === "Quente").length;
     const atrasados = enriquecidos.filter(isAtrasado).length;
     const semContato = enriquecidos.filter((item) => !item.proximoContato).length;
-    const valor = enriquecidos.reduce((soma, item) => {
-      const valorCliente = valorNumerico(item.valorPotencial);
-      const valorOrcamentos = item._orcamentos?.reduce((acc, orc) => acc + valorNumerico(orc.valorGlobal || orc.valor), 0) || 0;
-      return soma + (valorCliente || valorOrcamentos);
-    }, 0);
-    return { abertos, quentes, atrasados, semContato, valor };
+    return { abertos, quentes, atrasados, semContato };
   }, [enriquecidos]);
 
   const filtrados = useMemo(() => {
@@ -263,6 +551,22 @@ export function ClientesCRMPanel({
   const ativo = enriquecidos.find((item) => item.id === ativoId) || filtrados[0] || null;
   const relacionados = useMemo(() => (ativo ? orcamentosDoCliente(ativo, crm) : []), [ativo, crm]);
   const contatosAtivo = Array.isArray(ativo?.contatos) ? ativo.contatos : [];
+  const orcamentosVinculadosAtivo = useMemo(
+    () => (Array.isArray(ativo?.orcamentosVinculados) ? ativo.orcamentosVinculados : []),
+    [ativo?.orcamentosVinculados]
+  );
+  const orcamentoAtivo = orcamentosVinculadosAtivo.find((item) => item.id === orcamentoAtivoId) || orcamentosVinculadosAtivo[0] || null;
+  const opcoesOrcamentoSistema = useMemo(() => {
+    const q = textoBusca(buscaOrcamento);
+    const jaVinculados = new Set(orcamentosVinculadosAtivo.map((item) => item.orcamentoId).filter(Boolean));
+    return (Array.isArray(crm) ? crm : [])
+      .filter((orc) => {
+        if (orc?.id && jaVinculados.has(orc.id)) return false;
+        const texto = textoBusca([orc?.numero, orc?.cliente, orc?.empresaNome, orc?.status, orc?.lembreteIA].filter(Boolean).join(" "));
+        return !q || texto.includes(q);
+      })
+      .slice(0, 30);
+  }, [crm, buscaOrcamento, orcamentosVinculadosAtivo]);
 
   useEffect(() => {
     if (!ativoId && filtrados[0]?.id) setAtivoId(filtrados[0].id);
@@ -272,11 +576,76 @@ export function ClientesCRMPanel({
     if (ativo && !editando) setForm(criarCliente(usuarioAtual, ativo));
   }, [ativo?.id, editando, usuarioAtual]);
 
+  useEffect(() => {
+    setOrcamentoAtivoId("");
+    setOrcamentoSistemaId("");
+    setContato((atual) => ({ ...atual, orcamentoClienteId: "", orcamentoId: "" }));
+  }, [ativo?.id]);
+
   const salvarLista = async (nova) => {
     setClientes(nova);
     const ok = await store.set(KEY_CLIENTES, nova);
     if (!ok) pushToast("Nao foi possivel salvar clientes na nuvem.", "erro");
     return ok;
+  };
+
+  const salvarOrcamentosGlobais = async (nova) => {
+    if (typeof setCrm === "function") setCrm(nova);
+    const ok = await store.set(KEY_ORCAMENTOS, nova);
+    if (!ok) pushToast("Nao foi possivel atualizar o historico do orcamento na nuvem.", "erro");
+    return ok;
+  };
+
+  const adicionarRegistrosHistoricoOrcamentos = async (pares = []) => {
+    const validos = pares.filter((par) => par?.orcamentoId && par?.registro);
+    if (!validos.length) return false;
+    let mudou = false;
+    const porOrcamento = validos.reduce((mapa, par) => {
+      const lista = mapa.get(par.orcamentoId) || [];
+      lista.push(par.registro);
+      mapa.set(par.orcamentoId, lista);
+      return mapa;
+    }, new Map());
+
+    const nova = (Array.isArray(crm) ? crm : []).map((orc) => {
+      const registros = porOrcamento.get(orc.id);
+      if (!registros?.length) return orc;
+      let conversas = Array.isArray(orc.conversas) ? [...orc.conversas] : [];
+      let followups = Array.isArray(orc.followups) ? [...orc.followups] : [];
+      let itemMudou = false;
+
+      for (const registro of registros) {
+        const existeConversa = conversas.some((msg) => msg.followupId === registro.id || msg.id === `conv_${registro.id}`);
+        const existeFollowup = followups.some((msg) => msg.id === registro.id);
+        if (!existeConversa) {
+          conversas = [registroClienteParaConversaOrcamento(registro, usuarioAtual), ...conversas].slice(0, 120);
+          itemMudou = true;
+        }
+        if (!existeFollowup) {
+          followups = [registroClienteParaFollowupOrcamento(registro), ...followups].slice(0, 60);
+          itemMudou = true;
+        }
+      }
+
+      if (!itemMudou) return orc;
+      mudou = true;
+      const ultimo = registros[0];
+      return {
+        ...orc,
+        conversas,
+        followups,
+        ultimoContatoEm: ultimo.criadoEm || new Date().toISOString(),
+        lembreteIA: ultimo.mensagem ? clean(ultimo.mensagem, 260) : orc.lembreteIA,
+        atualizadoEm: new Date().toISOString(),
+      };
+    });
+
+    if (mudou) await salvarOrcamentosGlobais(nova);
+    return mudou;
+  };
+
+  const registrarHistoricoOrcamentoGlobal = async (orcamentoId, registro) => {
+    return adicionarRegistrosHistoricoOrcamentos([{ orcamentoId, registro }]);
   };
 
   const novoCliente = () => {
@@ -305,8 +674,27 @@ export function ClientesCRMPanel({
       pushToast("Informe ao menos o nome do contato ou empresa.", "erro");
       return;
     }
-    const pronto = criarCliente(usuarioAtual, { ...form, nome });
-    const existe = clientes.some((item) => item.id === pronto.id);
+    let pronto = criarCliente(usuarioAtual, { ...form, nome });
+    const anterior = clientes.find((item) => item.id === pronto.id);
+    const existe = Boolean(anterior);
+    if (existe) {
+      const alteracoes = descreverAlteracoesCliente(anterior, pronto);
+      if (alteracoes.length) {
+        const registro = criarRegistroSistemaCliente(usuarioAtual, {
+          tipo: "Perfil atualizado",
+          assunto: "Cadastro do cliente",
+          mensagem: `Campos atualizados no perfil: ${alteracoes.join("; ")}`,
+        });
+        pronto = { ...pronto, contatos: [registro, ...(Array.isArray(pronto.contatos) ? pronto.contatos : [])].slice(0, 160) };
+      }
+    } else {
+      const registro = criarRegistroSistemaCliente(usuarioAtual, {
+        tipo: "Cliente criado",
+        assunto: "Novo cadastro CRM",
+        mensagem: `Cliente criado no CRM: ${nome}. Origem: ${clean(pronto.origem || "Cadastro manual", 120)}.`,
+      });
+      pronto = { ...pronto, contatos: [registro, ...(Array.isArray(pronto.contatos) ? pronto.contatos : [])].slice(0, 160) };
+    }
     const nova = existe ? clientes.map((item) => (item.id === pronto.id ? pronto : item)) : [pronto, ...clientes];
     await salvarLista(nova);
     setAtivoId(pronto.id);
@@ -332,13 +720,130 @@ export function ClientesCRMPanel({
     return atualizado;
   };
 
+  const vincularOrcamentoSistema = async () => {
+    if (!ativo) {
+      pushToast("Selecione ou crie um cliente primeiro.", "erro");
+      return;
+    }
+    const orc = crm.find((item) => item.id === orcamentoSistemaId);
+    if (!orc) {
+      pushToast("Pesquise e selecione um orcamento do sistema.", "aviso");
+      return;
+    }
+    if (orcamentosVinculadosAtivo.some((item) => item.orcamentoId === orc.id)) {
+      pushToast("Este orcamento ja esta vinculado ao cliente.", "aviso");
+      return;
+    }
+    const registro = criarRegistroSistemaCliente(usuarioAtual, {
+      tipo: "Orcamento vinculado",
+      assunto: orc.numero || "Orcamento do sistema",
+      mensagem: `Orcamento ${orc.numero || orc.id || ""} vinculado ao perfil do cliente ${ativo.nome || ativo.empresa || ""}. Valor: ${brl(orc.valorGlobal || orc.valor)}.`,
+      orcamentoId: orc.id,
+      orcamentoNumero: orc.numero || "",
+    });
+    const vinculo = {
+      ...orcamentoDoSistemaParaCliente(orc, usuarioAtual),
+      historico: [registro],
+      atualizadoEm: new Date().toISOString(),
+    };
+    await atualizarCliente({
+      contatos: [registro, ...contatosAtivo].slice(0, 160),
+      orcamentosVinculados: [vinculo, ...orcamentosVinculadosAtivo].slice(0, 80),
+    });
+    await registrarHistoricoOrcamentoGlobal(orc.id, registro);
+    setOrcamentoAtivoId(vinculo.id);
+    setContato((atual) => ({ ...atual, orcamentoClienteId: vinculo.id, orcamentoId: vinculo.orcamentoId }));
+    setOrcamentoSistemaId("");
+    pushToast("Orcamento do sistema vinculado ao perfil do cliente.", "ok");
+  };
+
+  const anexarOrcamentoArquivo = async (file) => {
+    if (!file || !ativo) return;
+    const limiteMB = 8;
+    if (file.size > limiteMB * 1024 * 1024) {
+      pushToast(`Arquivo muito grande. Limite para orcamento externo: ${limiteMB} MB.`, "erro");
+      return;
+    }
+    setLendoOrcamentoArquivo(true);
+    try {
+      const nome = file.name || "orcamento-anexo";
+      const tipo = file.type || "";
+      let textoArquivo = "";
+      let dataUrl = "";
+      const podeGuardarArquivo = file.size <= 2.2 * 1024 * 1024;
+
+      if (/\.pdf$/i.test(nome) || tipo === "application/pdf") {
+        textoArquivo = lerTextoPDF ? clean(await lerTextoPDF(file, { maxPages: 8, maxChars: 12000 }), 12000) : "";
+      } else if (/^image\//i.test(tipo) || /\.(png|jpe?g|webp)$/i.test(nome)) {
+        textoArquivo = "Imagem de orcamento anexada. A Nara deve usar apenas o que estiver descrito no historico ou extraido manualmente.";
+      } else if (/^text\//i.test(tipo) || /\.(txt|csv|md)$/i.test(nome)) {
+        textoArquivo = clean(await file.text(), 12000);
+      }
+
+      if (podeGuardarArquivo) {
+        dataUrl = await lerArquivoComoDataUrl(file);
+      }
+
+      const vinculo = criarOrcamentoVinculado(usuarioAtual, {
+        origem: "arquivo",
+        titulo: nome.replace(/\.[^.]+$/, ""),
+        arquivoNome: nome,
+        arquivoTipo: tipo,
+        arquivoTamanho: file.size,
+        arquivoTexto: textoArquivo,
+        arquivoResumo: textoArquivo ? clean(textoArquivo, 1600) : "Arquivo anexado sem texto pesquisavel. Nenhuma informacao foi inventada.",
+        arquivoDataUrl: dataUrl,
+        resumo: textoArquivo ? clean(textoArquivo, 1600) : "",
+      });
+
+      await atualizarCliente({
+        orcamentosVinculados: [vinculo, ...orcamentosVinculadosAtivo].slice(0, 80),
+      });
+      setOrcamentoAtivoId(vinculo.id);
+      setContato((atual) => ({ ...atual, orcamentoClienteId: vinculo.id, orcamentoId: "" }));
+      pushToast(podeGuardarArquivo ? "Orcamento externo anexado ao cliente." : "Orcamento indexado pelo nome/texto. Arquivo grande nao foi embutido no banco.", "ok");
+    } catch (error) {
+      console.error("Erro ao anexar orcamento ao cliente:", error);
+      pushToast(error.message || "Nao foi possivel anexar o orcamento.", "erro");
+    } finally {
+      setLendoOrcamentoArquivo(false);
+    }
+  };
+
+  const removerOrcamentoVinculado = async (orcamentoClienteId) => {
+    if (!ativo) return;
+    const alvo = orcamentosVinculadosAtivo.find((item) => item.id === orcamentoClienteId);
+    if (!alvo) return;
+    if (!window.confirm(`Remover o vinculo "${alvo.numero || alvo.titulo || alvo.arquivoNome}" deste cliente?`)) return;
+    await atualizarCliente({
+      orcamentosVinculados: orcamentosVinculadosAtivo.filter((item) => item.id !== orcamentoClienteId),
+    });
+    setOrcamentoAtivoId("");
+    setContato((atual) => atual.orcamentoClienteId === orcamentoClienteId ? { ...atual, orcamentoClienteId: "", orcamentoId: "" } : atual);
+    pushToast("Vinculo de orcamento removido do cliente.", "aviso");
+  };
+
   const sincronizarOrcamentos = async () => {
     const existentes = new Set(clientes.map((item) => textoBusca(item.nome || item.empresa)));
     const novos = [];
+    const registrosOrcamentos = [];
     for (const item of crm) {
       const nome = clean(item?.cliente, 180);
       if (!nome || existentes.has(textoBusca(nome))) continue;
       existentes.add(textoBusca(nome));
+      const registro = criarRegistroSistemaCliente(usuarioAtual, {
+        tipo: "Cliente criado do orcamento",
+        assunto: item.numero || "Sincronizacao CRM",
+        mensagem: `Cliente criado automaticamente a partir do orcamento ${item.numero || item.id || ""}. Valor: ${brl(item.valorGlobal || item.valor)}.`,
+        orcamentoId: item.id || "",
+        orcamentoNumero: item.numero || "",
+      });
+      const vinculo = {
+        ...orcamentoDoSistemaParaCliente(item, usuarioAtual),
+        historico: [registro],
+        atualizadoEm: new Date().toISOString(),
+      };
+      if (item.id) registrosOrcamentos.push({ orcamentoId: item.id, registro });
       novos.push(criarCliente(usuarioAtual, {
         nome,
         empresa: nome,
@@ -349,18 +854,8 @@ export function ClientesCRMPanel({
         valorPotencial: item.valorGlobal || item.valor || "",
         observacoes: item.lembreteIA || item.resumoConversas || "",
         proximoPasso: item.proximoContato ? `Retomar contato em ${item.proximoContato}` : "Avaliar retorno comercial do orcamento.",
-        contatos: [{
-          id: `ct_${Date.now()}_${item.id}`,
-          canal: "Sistema",
-          direcao: "Registro interno",
-          tipo: "Orcamento vinculado",
-          assunto: item.numero || "Orcamento",
-          mensagem: `Orcamento ${item.numero || ""} vinculado ao cliente. Valor: ${brl(item.valorGlobal || item.valor)}.`,
-          orcamentoId: item.id,
-          orcamentoNumero: item.numero || "",
-          criadoEm: item.criadoEm || new Date().toISOString(),
-          userId: usuarioAtual?.id || "admin",
-        }],
+        contatos: [registro],
+        orcamentosVinculados: [vinculo],
       }));
     }
     if (!novos.length) {
@@ -368,8 +863,75 @@ export function ClientesCRMPanel({
       return;
     }
     await salvarLista([...novos, ...clientes]);
+    await adicionarRegistrosHistoricoOrcamentos(registrosOrcamentos);
     setAtivoId(novos[0].id);
     pushToast(`${novos.length} cliente(s) criado(s) a partir dos orcamentos.`, "ok");
+  };
+
+  const salvarContatosImportados = async (lista = [], origem = "Importacao de contatos") => {
+    const existentes = new Set(clientes.flatMap(chavesContato));
+    const novos = [];
+    let ignorados = 0;
+
+    for (const item of lista) {
+      const pronto = normalizarContatoImportado(usuarioAtual, item, origem);
+      const temDadoUtil = pronto.nome || pronto.email || pronto.whatsapp || pronto.telefone;
+      if (!temDadoUtil) continue;
+      const chaves = chavesContato(pronto);
+      if (chaves.some((chave) => existentes.has(chave))) {
+        ignorados += 1;
+        continue;
+      }
+      chaves.forEach((chave) => existentes.add(chave));
+      novos.push(pronto);
+    }
+
+    if (!novos.length) {
+      pushToast(ignorados ? "Nenhum contato novo encontrado. Os contatos importados ja existem no CRM." : "Nenhum contato valido foi encontrado.", "aviso");
+      return;
+    }
+
+    await salvarLista([...novos, ...clientes]);
+    setAtivoId(novos[0].id);
+    pushToast(`${novos.length} contato(s) importado(s). ${ignorados ? `${ignorados} duplicado(s) ignorado(s).` : ""}`.trim(), "ok");
+  };
+
+  const importarContatosDoAparelho = async () => {
+    const picker = typeof navigator !== "undefined" ? navigator.contacts : null;
+    if (!picker?.select) {
+      pushToast("Este navegador nao permite ler contatos direto. Importe um arquivo .vcf ou .csv exportado do celular.", "aviso");
+      refImportarContatos.current?.click();
+      return;
+    }
+
+    try {
+      const contatos = await picker.select(["name", "email", "tel", "address"], { multiple: true });
+      await salvarContatosImportados(contatos, "Importado do aparelho celular");
+    } catch (error) {
+      if (error?.name === "AbortError") return;
+      console.error("Erro ao importar contatos do aparelho:", error);
+      pushToast("O celular bloqueou o acesso aos contatos. Use a opcao de importar .vcf/.csv.", "aviso");
+      refImportarContatos.current?.click();
+    }
+  };
+
+  const importarArquivoContatos = async (file) => {
+    if (!file) return;
+    const limiteMB = 15;
+    if (file.size > limiteMB * 1024 * 1024) {
+      pushToast(`Arquivo de contatos muito grande. Limite: ${limiteMB} MB.`, "erro");
+      return;
+    }
+
+    try {
+      const texto = await file.text();
+      const nome = file.name || "contatos";
+      const lista = /\.vcf|text\/vcard/i.test(`${nome} ${file.type || ""}`) ? parseVCardContacts(texto) : parseCsvContacts(texto);
+      await salvarContatosImportados(lista, `Arquivo ${nome}`);
+    } catch (error) {
+      console.error("Erro ao importar arquivo de contatos:", error);
+      pushToast(error.message || "Nao foi possivel importar o arquivo de contatos.", "erro");
+    }
   };
 
   const prepararArquivo = async (file) => {
@@ -391,7 +953,7 @@ export function ClientesCRMPanel({
         if (preview.length > 650000) preview = "";
         textoArquivo = "Imagem/print anexado para leitura da Nara.";
       } else if (/\.pdf$/i.test(nome) || tipo === "application/pdf") {
-        textoArquivo = lerTextoPDF ? clean(await lerTextoPDF(file), 9000) : "";
+        textoArquivo = lerTextoPDF ? clean(await lerTextoPDF(file, { maxPages: 6, maxChars: 9000 }), 9000) : "";
       } else if (/^text\//i.test(tipo) || /\.(txt|csv|md)$/i.test(nome)) {
         textoArquivo = clean(await file.text(), 9000);
       }
@@ -423,7 +985,8 @@ export function ClientesCRMPanel({
       return;
     }
 
-    const orc = crm.find((item) => item.id === contato.orcamentoId);
+    const orcamentoCliente = orcamentosVinculadosAtivo.find((item) => item.id === contato.orcamentoClienteId);
+    const orc = orcamentoCliente?.orcamentoId ? crm.find((item) => item.id === orcamentoCliente.orcamentoId) : null;
     const registro = {
       id: `ct_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       canal: contato.canal,
@@ -431,20 +994,31 @@ export function ClientesCRMPanel({
       tipo: contato.tipo,
       assunto: contato.assunto,
       mensagem: clean(contato.mensagem, 5000),
-      orcamentoId: contato.orcamentoId || "",
-      orcamentoNumero: orc?.numero || "",
+      orcamentoClienteId: contato.orcamentoClienteId || "",
+      orcamentoId: orcamentoCliente?.orcamentoId || "",
+      orcamentoNumero: orcamentoCliente?.numero || orc?.numero || "",
+      orcamentoTitulo: orcamentoCliente?.titulo || "",
       ...anexo,
       criadoEm: new Date().toISOString(),
       userId: usuarioAtual?.id || "admin",
     };
+    const orcamentosAtualizados = orcamentosVinculadosAtivo.map((item) => (
+      item.id === contato.orcamentoClienteId
+        ? { ...item, historico: [registro, ...(Array.isArray(item.historico) ? item.historico : [])].slice(0, 140), atualizadoEm: new Date().toISOString() }
+        : item
+    ));
 
     await atualizarCliente({
       contatos: [registro, ...contatosAtivo].slice(0, 140),
+      orcamentosVinculados: orcamentosAtualizados,
       proximoPasso: ativo.proximoPasso || "Nara pode analisar este historico e sugerir o proximo passo.",
     });
-    setContato({ canal: "WhatsApp", direcao: "Cliente respondeu", tipo: "Follow-up", assunto: "", mensagem: "", orcamentoId: "" });
+    if (orcamentoCliente?.orcamentoId) {
+      await registrarHistoricoOrcamentoGlobal(orcamentoCliente.orcamentoId, registro);
+    }
+    setContato({ canal: "WhatsApp", direcao: "Cliente respondeu", tipo: "Follow-up", assunto: "", mensagem: "", orcamentoId: "", orcamentoClienteId: "" });
     setAnexo(null);
-    pushToast("Contato salvo no historico do cliente.", "ok");
+    pushToast(orcamentoCliente ? "Contato salvo no historico do cliente e deste orcamento." : "Contato salvo no historico geral do cliente.", "ok");
   };
 
   const chamarJade = async (pedido = pedidoJade) => {
@@ -459,7 +1033,7 @@ export function ClientesCRMPanel({
           ...(await authHeaders()),
         },
         body: JSON.stringify({
-          usuarioNome: usuarioAtual?.nome || usuarioAtual?.email || "responsavel",
+          usuarioNome: usuarioAtual?.nomeTratamento || usuarioAtual?.nome || usuarioAtual?.email || "responsavel",
           cliente: {
             nome: ativo.nome,
             empresa: ativo.empresa,
@@ -488,15 +1062,35 @@ export function ClientesCRMPanel({
             tipo: msg.tipo,
             assunto: msg.assunto,
             mensagem: clean(msg.mensagem, 1800),
+            orcamentoClienteId: msg.orcamentoClienteId,
             orcamentoId: msg.orcamentoId,
             orcamentoNumero: msg.orcamentoNumero,
+            orcamentoTitulo: msg.orcamentoTitulo,
             arquivoNome: msg.arquivoNome,
             arquivoTipo: msg.arquivoTipo,
             arquivoTamanho: msg.arquivoTamanho,
             arquivoResumo: clean(msg.arquivoResumo || msg.arquivoTexto, 1600),
             criadoEm: msg.criadoEm,
           })),
-          orcamentos: relacionados,
+          orcamentos: orcamentosVinculadosAtivo.length
+            ? orcamentosVinculadosAtivo.map((orc) => ({
+              id: orc.id,
+              origem: orc.origem,
+              numero: orc.numero,
+              titulo: orc.titulo,
+              empresaNome: orc.empresaNome,
+              valor: orc.valor,
+              status: orc.status,
+              resumo: clean(orc.resumo || orc.arquivoResumo || orc.arquivoTexto, 1800),
+              historico: (Array.isArray(orc.historico) ? orc.historico : []).slice(0, 20).map((msg) => ({
+                canal: msg.canal,
+                tipo: msg.tipo,
+                assunto: msg.assunto,
+                mensagem: clean(msg.mensagem, 1400),
+                criadoEm: msg.criadoEm,
+              })),
+            }))
+            : relacionados,
           pedido,
           imagem: imagemRecente,
         }),
@@ -514,13 +1108,42 @@ export function ClientesCRMPanel({
       const dataSugerida = /^\d{4}-\d{2}-\d{2}$/.test(String(analise.proximoContatoSugerido || ""))
         ? analise.proximoContatoSugerido
         : ativo.proximoContato;
+      const registroNara = criarRegistroSistemaCliente(usuarioAtual, {
+        canal: "Nara",
+        direcao: "Registro interno",
+        tipo: "Analise Nara",
+        assunto: "Estrategia comercial",
+        mensagem: [
+          `Pedido: ${clean(pedido, 700)}`,
+          analise.resumo ? `Resumo: ${clean(analise.resumo, 1200)}` : "",
+          analise.proximoPasso ? `Proximo passo: ${clean(analise.proximoPasso, 1200)}` : "",
+          analise.lembreteSugerido ? `Lembrete sugerido: ${clean(analise.lembreteSugerido, 900)}` : "",
+          analise.mensagemSugerida ? `Mensagem sugerida: ${clean(analise.mensagemSugerida, 1400)}` : "",
+        ].filter(Boolean).join("\n"),
+        orcamentoClienteId: orcamentoAtivo?.id || "",
+        orcamentoId: orcamentoAtivo?.orcamentoId || "",
+        orcamentoNumero: orcamentoAtivo?.numero || "",
+        orcamentoTitulo: orcamentoAtivo?.titulo || "",
+      });
+      const orcamentosAtualizados = orcamentoAtivo
+        ? orcamentosVinculadosAtivo.map((orc) => (
+          orc.id === orcamentoAtivo.id
+            ? { ...orc, historico: [registroNara, ...(Array.isArray(orc.historico) ? orc.historico : [])].slice(0, 140), atualizadoEm: new Date().toISOString() }
+            : orc
+        ))
+        : orcamentosVinculadosAtivo;
       await atualizarCliente({
         jade: { ...analise, atualizadoEm: new Date().toISOString(), pedido },
         proximoPasso: analise.proximoPasso || ativo.proximoPasso,
         lembreteJade: analise.lembreteSugerido || ativo.lembreteJade,
         proximoContato: dataSugerida,
         temperatura: analise.prioridade === "critica" || analise.prioridade === "alta" ? "Quente" : ativo.temperatura,
+        contatos: [registroNara, ...contatosAtivo].slice(0, 160),
+        orcamentosVinculados: orcamentosAtualizados,
       });
+      if (orcamentoAtivo?.orcamentoId) {
+        await registrarHistoricoOrcamentoGlobal(orcamentoAtivo.orcamentoId, registroNara);
+      }
       pushToast("Nara analisou o cliente e sugeriu o proximo passo.", "ok");
     } catch (error) {
       console.error("Erro na Nara CRM:", error);
@@ -597,7 +1220,7 @@ export function ClientesCRMPanel({
             ["Ativos", kpis.abertos, C.blue2],
             ["Quentes", kpis.quentes, C.warn],
             ["Atrasados", kpis.atrasados, C.danger],
-            ["Potencial", brl(kpis.valor), C.green],
+            ["Sem contato", kpis.semContato, C.green],
           ].map(([label, valor, cor]) => (
             <div key={label} style={{ border: `1px solid ${cor}33`, background: `${cor}12`, borderRadius: 12, padding: 10 }}>
               <div style={{ color: cor, fontWeight: 950, fontSize: 15 }}>{valor}</div>
@@ -618,8 +1241,17 @@ export function ClientesCRMPanel({
             <button key={id} onClick={() => setFiltro(id)} style={{ padding: "6px 9px", borderRadius: 999, border: `1px solid ${filtro === id ? C.green2 : C.border2}`, background: filtro === id ? `${C.green2}18` : "transparent", color: filtro === id ? C.green : C.muted, cursor: "pointer", fontSize: 10.5, fontWeight: 850 }}>{label}</button>
           ))}
         </div>
-        <button onClick={sincronizarOrcamentos} style={{ width: "100%", marginBottom: 12, padding: "9px 10px", borderRadius: 10, border: `1px solid ${C.blue2}55`, background: `${C.blue2}12`, color: "#93C5FD", fontWeight: 850, cursor: "pointer" }}>Criar clientes dos orcamentos</button>
-        <button onClick={abrirRelatorioSemanal} style={{ width: "100%", marginBottom: 12, padding: "9px 10px", borderRadius: 10, border: `1px solid ${C.green2}66`, background: `${C.green2}16`, color: C.green, fontWeight: 900, cursor: "pointer" }}>Enviar relatorio semanal Nara</button>
+        <details style={{ marginBottom: 12 }}>
+          <summary style={{ color: C.muted, cursor: "pointer", fontSize: 11, fontWeight: 900 }}>Ferramentas</summary>
+          <div style={{ display: "grid", gap: 7, marginTop: 8 }}>
+            <input ref={refImportarContatos} type="file" accept=".vcf,.csv,.txt,text/vcard,text/csv,text/plain" style={{ display: "none" }} onChange={(e) => { const file = e.target.files?.[0]; e.target.value = ""; importarArquivoContatos(file); }} />
+            <button onClick={importarContatosDoAparelho} style={{ width: "100%", padding: "8px 10px", borderRadius: 10, border: `1px solid ${C.green2}66`, background: `${C.green2}16`, color: C.green, fontWeight: 900, cursor: "pointer" }}>Importar contatos do celular</button>
+            <button onClick={() => refImportarContatos.current?.click()} style={{ width: "100%", padding: "8px 10px", borderRadius: 10, border: `1px solid ${C.border2}`, background: C.panel2, color: C.muted, fontWeight: 850, cursor: "pointer" }}>Importar arquivo .vcf/.csv</button>
+            <div style={{ color: C.dim, fontSize: 10, lineHeight: 1.35 }}>No celular, use o navegador com permissao de contatos. Se nao aparecer a agenda, exporte contatos como .vcf ou .csv e importe aqui.</div>
+            <button onClick={sincronizarOrcamentos} style={{ width: "100%", padding: "8px 10px", borderRadius: 10, border: `1px solid ${C.blue2}55`, background: `${C.blue2}12`, color: "#93C5FD", fontWeight: 850, cursor: "pointer" }}>Sincronizar clientes dos orcamentos</button>
+            <button onClick={abrirRelatorioSemanal} style={{ width: "100%", padding: "8px 10px", borderRadius: 10, border: `1px solid ${C.green2}66`, background: `${C.green2}16`, color: C.green, fontWeight: 900, cursor: "pointer" }}>Relatorio Nara</button>
+          </div>
+        </details>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {filtrados.map((item) => {
             const selected = item.id === ativo?.id;
@@ -642,29 +1274,6 @@ export function ClientesCRMPanel({
       </aside>
 
       <main style={{ overflowY: "auto", padding: 18 }}>
-        {enriquecidos.length > 0 && (
-          <div style={{ background: "linear-gradient(135deg, rgba(22,163,74,.16), rgba(37,99,235,.12))", border: `1px solid ${C.green2}33`, borderRadius: 16, padding: 14, marginBottom: 14 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
-              <div>
-                <div style={{ color: C.green, fontSize: 10, letterSpacing: 2, fontWeight: 950 }}>RADAR DA NARA</div>
-                <div style={{ color: C.muted, fontSize: 12 }}>Clientes priorizados por atraso, temperatura, historico e potencial.</div>
-              </div>
-              <Target size={20} color={C.green} />
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10 }}>
-              {enriquecidos.slice(0, 3).map((item) => (
-                <button key={item.id} onClick={() => { setAtivoId(item.id); setEditando(false); }} style={{ textAlign: "left", border: `1px solid ${item._score >= 78 ? C.danger : item._score >= 58 ? C.warn : C.border2}`, background: C.panel2, borderRadius: 13, padding: 11, color: C.text, cursor: "pointer" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 6 }}>
-                    {item._score >= 78 ? <AlertTriangle size={15} color={C.danger} /> : <CalendarClock size={15} color={item._score >= 58 ? C.warn : C.green} />}
-                    <strong style={{ fontSize: 12 }}>{item.nome || item.empresa}</strong>
-                  </div>
-                  <div style={{ color: item._score >= 78 ? C.danger : item._score >= 58 ? C.warn : C.green, fontWeight: 950, fontSize: 12 }}>Prioridade {item._nivel} - {item._score}</div>
-                  <div style={{ color: C.dim, fontSize: 10.5, marginTop: 4 }}>{item.proximoPasso || item.lembreteJade || "Definir proximo passo"}</div>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
         {!ativo && !editando ? (
           <div style={{ height: "100%", minHeight: 420, display: "grid", placeItems: "center", color: C.dim, textAlign: "center" }}>
             <div><Users size={42} style={{ opacity: 0.55 }} /><div style={{ marginTop: 10, fontWeight: 900 }}>Crie um cliente para iniciar o acompanhamento.</div></div>
@@ -761,8 +1370,8 @@ export function ClientesCRMPanel({
                       <div style={{ color: isAtrasado(ativo) ? C.danger : isHoje(ativo) ? C.warn : C.text, fontWeight: 950 }}>{ativo.proximoContato || "Sem data"}</div>
                     </div>
                     <div style={{ border: `1px solid ${C.border2}`, borderRadius: 12, padding: 10, background: C.panel2 }}>
-                      <div style={{ color: C.dim, fontSize: 10 }}>Potencial</div>
-                      <div style={{ color: C.green, fontWeight: 950 }}>{brl(ativo.valorPotencial || relacionados.reduce((acc, o) => acc + valorNumerico(o.valorGlobal || o.valor), 0))}</div>
+                      <div style={{ color: C.dim, fontSize: 10 }}>Historico</div>
+                      <div style={{ color: C.green, fontWeight: 950 }}>{contatosAtivo.length} registro(s)</div>
                     </div>
                   </div>
                   <div><strong style={{ color: C.text }}>Empresa:</strong> {ativo.empresa || "Nao informado"}</div>
@@ -773,6 +1382,7 @@ export function ClientesCRMPanel({
                   <div><strong style={{ color: C.text }}>Decisor:</strong> {ativo.decisor || ativo.cargo || "Nao informado"}</div>
                   <div><strong style={{ color: C.text }}>Segmento:</strong> {ativo.segmento || "Nao informado"}</div>
                   <div><strong style={{ color: C.text }}>Origem:</strong> {ativo.origem || "Nao informado"}</div>
+                  <div><strong style={{ color: C.text }}>Orcamentos no perfil:</strong> {orcamentosVinculadosAtivo.length ? `${orcamentosVinculadosAtivo.length} vinculado(s), cada um com historico proprio.` : relacionados.length ? `${relacionados.length} possivel(is) por nome. Vincule abaixo para historico separado.` : "Nenhum orcamento vinculado"}</div>
                   <div><strong style={{ color: C.text }}>Perfil:</strong> {ativo.perfil || "Sem perfil detalhado"}</div>
                   <div><strong style={{ color: C.text }}>Proximo passo:</strong> {ativo.proximoPasso || "Nara ainda nao analisou"}</div>
                   <div><strong style={{ color: C.text }}>Lembrete Nara:</strong> {ativo.lembreteJade || "Sem lembrete"}</div>
@@ -816,6 +1426,60 @@ export function ClientesCRMPanel({
               </div>
 
               <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: 16 }}>
+                <div style={{ color: C.green, fontSize: 10, letterSpacing: 2, fontWeight: 950, marginBottom: 8 }}>ORCAMENTOS DO CLIENTE</div>
+                <div style={{ color: C.dim, fontSize: 11, lineHeight: 1.5, marginBottom: 10 }}>Vincule orcamentos reais do sistema ou arquivos externos. Cada orcamento mantem um historico separado dentro deste cliente.</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8, marginBottom: 8 }}>
+                  <input value={buscaOrcamento} onChange={(e) => setBuscaOrcamento(e.target.value)} placeholder="Pesquisar orcamento do sistema..." style={INP} />
+                  <select value={orcamentoSistemaId} onChange={(e) => setOrcamentoSistemaId(e.target.value)} style={INP}>
+                    <option value="">Selecione um orcamento...</option>
+                    {opcoesOrcamentoSistema.map((orc) => <option key={orc.id} value={orc.id}>{orc.numero || "Orcamento"} - {orc.cliente || "Sem cliente"} - {brl(orc.valorGlobal || orc.valor)}</option>)}
+                  </select>
+                  <button onClick={vincularOrcamentoSistema} style={{ padding: "9px 12px", borderRadius: 10, border: `1px solid ${C.green2}55`, background: `${C.green2}12`, color: C.green, cursor: "pointer", fontWeight: 900 }}>Vincular</button>
+                </div>
+                <input ref={refArquivoOrcamento} type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.csv,.md,application/pdf,image/png,image/jpeg,image/webp,text/*" style={{ display: "none" }} onChange={(e) => { const file = e.target.files?.[0]; e.target.value = ""; anexarOrcamentoArquivo(file); }} />
+                <button onClick={() => refArquivoOrcamento.current?.click()} disabled={lendoOrcamentoArquivo || !ativo} style={{ marginBottom: 10, padding: "9px 12px", borderRadius: 10, border: `1px solid ${C.blue2}55`, background: `${C.blue2}12`, color: "#93C5FD", cursor: lendoOrcamentoArquivo ? "not-allowed" : "pointer", fontWeight: 850 }}>
+                  <Upload size={14} /> {lendoOrcamentoArquivo ? "Lendo orcamento..." : "Anexar orcamento do dispositivo"}
+                </button>
+
+                <div style={{ display: "grid", gap: 8 }}>
+                  {orcamentosVinculadosAtivo.length === 0 && <div style={{ color: C.dim, fontSize: 12 }}>Nenhum orcamento vinculado ao perfil ainda.</div>}
+                  {orcamentosVinculadosAtivo.map((orc) => {
+                    const selected = orc.id === orcamentoAtivo?.id;
+                    const totalHistorico = Array.isArray(orc.historico) ? orc.historico.length : 0;
+                    return (
+                      <button key={orc.id} onClick={() => { setOrcamentoAtivoId(orc.id); setContato((c) => ({ ...c, orcamentoClienteId: orc.id, orcamentoId: orc.orcamentoId || "" })); }} style={{ textAlign: "left", borderRadius: 12, padding: 11, border: `1px solid ${selected ? C.green2 : C.border2}`, background: selected ? `${C.green2}12` : C.panel2, color: C.text, cursor: "pointer" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                          <strong style={{ fontSize: 12 }}>{orc.numero || orc.titulo || orc.arquivoNome || "Orcamento"}</strong>
+                          <span style={{ color: orc.origem === "arquivo" ? "#93C5FD" : C.green, fontSize: 10, fontWeight: 950 }}>{orc.origem === "arquivo" ? "Arquivo" : "Sistema"}</span>
+                        </div>
+                        <div style={{ color: C.dim, fontSize: 10.5, marginTop: 4 }}>{[orc.empresaNome, orc.status, orc.valor ? brl(orc.valor) : ""].filter(Boolean).join(" | ") || "Sem dados adicionais"}</div>
+                        <div style={{ color: C.muted, fontSize: 10.5, marginTop: 5 }}>{totalHistorico} registro(s) neste orcamento</div>
+                        <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                          {orc.arquivoDataUrl && <span onClick={(e) => { e.stopPropagation(); window.open(orc.arquivoDataUrl, "_blank", "noopener,noreferrer"); }} style={{ padding: "5px 8px", borderRadius: 8, border: `1px solid ${C.blue2}55`, color: "#93C5FD", fontSize: 10, fontWeight: 850 }}>Abrir arquivo</span>}
+                          <span onClick={(e) => { e.stopPropagation(); removerOrcamentoVinculado(orc.id); }} style={{ padding: "5px 8px", borderRadius: 8, border: `1px solid ${C.danger}55`, color: C.danger, fontSize: 10, fontWeight: 850 }}>Remover vinculo</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {orcamentoAtivo && (
+                  <div style={{ marginTop: 12, borderTop: `1px solid ${C.border2}`, paddingTop: 10 }}>
+                    <div style={{ color: C.green, fontSize: 10, fontWeight: 950, letterSpacing: 1.6, marginBottom: 8 }}>HISTORICO DESTE ORCAMENTO</div>
+                    {(!Array.isArray(orcamentoAtivo.historico) || orcamentoAtivo.historico.length === 0) && <div style={{ color: C.dim, fontSize: 12 }}>Ainda nao ha tratativas registradas para este orcamento.</div>}
+                    <div style={{ display: "grid", gap: 8 }}>
+                      {(Array.isArray(orcamentoAtivo.historico) ? orcamentoAtivo.historico : []).slice(0, 12).map((msg) => (
+                        <div key={msg.id} style={{ background: C.panel2, border: `1px solid ${C.border2}`, borderRadius: 10, padding: 10 }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, color: C.dim, fontSize: 10, marginBottom: 5 }}><span>{msg.canal} | {msg.tipo}</span><span>{tsFmt(msg.criadoEm)}</span></div>
+                          <div style={{ whiteSpace: "pre-wrap", fontSize: 12, lineHeight: 1.55 }}>{msg.mensagem || msg.assunto || "Registro sem texto"}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: 16 }}>
                 <div style={{ color: C.green, fontSize: 10, letterSpacing: 2, fontWeight: 950, marginBottom: 10 }}>NOVO REGISTRO DE CONTATO</div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
                   <select value={contato.canal} onChange={(e) => setContato((c) => ({ ...c, canal: e.target.value }))} style={INP}>{["WhatsApp", "E-mail", "Ligacao", "Reuniao", "Visita", "Sistema"].map((op) => <option key={op}>{op}</option>)}</select>
@@ -824,9 +1488,13 @@ export function ClientesCRMPanel({
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
                   <input value={contato.assunto} onChange={(e) => setContato((c) => ({ ...c, assunto: e.target.value }))} placeholder="Assunto do contato" style={INP} />
-                  <select value={contato.orcamentoId} onChange={(e) => setContato((c) => ({ ...c, orcamentoId: e.target.value }))} style={INP}>
+                  <select value={contato.orcamentoClienteId} onChange={(e) => {
+                    const vinculo = orcamentosVinculadosAtivo.find((orc) => orc.id === e.target.value);
+                    setContato((c) => ({ ...c, orcamentoClienteId: e.target.value, orcamentoId: vinculo?.orcamentoId || "" }));
+                    setOrcamentoAtivoId(e.target.value);
+                  }} style={INP}>
                     <option value="">Sem orcamento vinculado</option>
-                    {relacionados.map((orc) => <option key={orc.id} value={orc.id}>{orc.numero || "Orcamento"} - {brl(orc.valorGlobal || orc.valor)}</option>)}
+                    {orcamentosVinculadosAtivo.map((orc) => <option key={orc.id} value={orc.id}>{orc.numero || orc.titulo || orc.arquivoNome || "Orcamento"} {orc.valor ? `- ${brl(orc.valor)}` : ""}</option>)}
                   </select>
                 </div>
                 <textarea value={contato.mensagem} onChange={(e) => setContato((c) => ({ ...c, mensagem: e.target.value }))} rows={4} placeholder="Cole conversa, observacao, resposta do cliente, print transcrito ou detalhe do contato..." style={{ ...INP, resize: "vertical", marginBottom: 8 }} />
@@ -840,26 +1508,13 @@ export function ClientesCRMPanel({
               </div>
 
               <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: 16 }}>
-                <div style={{ color: C.green, fontSize: 10, letterSpacing: 2, fontWeight: 950, marginBottom: 10 }}>ORCAMENTOS RELACIONADOS</div>
-                <div style={{ display: "grid", gap: 8 }}>
-                  {relacionados.length === 0 && <div style={{ color: C.dim, fontSize: 12 }}>Nenhum orcamento relacionado encontrado pelo nome do cliente.</div>}
-                  {relacionados.slice(0, 8).map((orc) => (
-                    <div key={orc.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", background: C.panel2, border: `1px solid ${C.border2}`, borderRadius: 10, padding: 10 }}>
-                      <div><div style={{ fontWeight: 900, fontSize: 12 }}>{orc.numero || "Orcamento"} - {orc.empresaNome}</div><div style={{ color: C.dim, fontSize: 11 }}>{brl(orc.valorGlobal || orc.valor)} | {statusFunil(orc)}</div></div>
-                      <div style={{ display: "flex", gap: 6 }}><button onClick={() => abrirOrcamentoSalvo?.(orc)} style={{ padding: "7px 9px", borderRadius: 8, border: `1px solid ${C.border2}`, background: "transparent", color: C.muted, cursor: "pointer" }}><FileText size={13} /> Abrir</button><button onClick={() => baixarOrcamento?.(orc)} style={{ padding: "7px 9px", borderRadius: 8, border: `1px solid ${C.blue2}55`, background: `${C.blue2}12`, color: "#93C5FD", cursor: "pointer" }}>PDF</button></div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: 16 }}>
                 <div style={{ color: C.green, fontSize: 10, letterSpacing: 2, fontWeight: 950, marginBottom: 10 }}>HISTORICO DO CLIENTE</div>
                 <div style={{ display: "grid", gap: 9 }}>
                   {contatosAtivo.length === 0 && <div style={{ color: C.dim, fontSize: 12 }}>Nenhum contato registrado ainda.</div>}
                   {contatosAtivo.slice(0, 30).map((msg) => (
                     <div key={msg.id} style={{ background: C.panel2, border: `1px solid ${C.border2}`, borderRadius: 12, padding: 11 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 5 }}><strong style={{ fontSize: 12 }}>{msg.canal} | {msg.tipo}</strong><span style={{ color: C.dim, fontSize: 10 }}>{tsFmt(msg.criadoEm)}</span></div>
-                      <div style={{ color: C.dim, fontSize: 11, marginBottom: 6 }}>{msg.direcao}{msg.orcamentoNumero ? ` | ${msg.orcamentoNumero}` : ""}</div>
+                      <div style={{ color: C.dim, fontSize: 11, marginBottom: 6 }}>{msg.direcao}{(msg.orcamentoNumero || msg.orcamentoTitulo) ? ` | ${msg.orcamentoNumero || msg.orcamentoTitulo}` : ""}</div>
                       {msg.mensagem && <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.55, fontSize: 12 }}>{msg.mensagem}</div>}
                       {msg.arquivoNome && <div style={{ marginTop: 8, color: "#93C5FD", fontSize: 11 }}>Anexo: {msg.arquivoNome} - {msg.arquivoResumo}</div>}
                       {msg.arquivoPreview && <img src={msg.arquivoPreview} alt="" style={{ marginTop: 8, maxHeight: 120, maxWidth: "100%", borderRadius: 8, border: `1px solid ${C.border2}` }} />}

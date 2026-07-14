@@ -206,7 +206,17 @@ export function WhatsAppInboxPanel({
         body: JSON.stringify({
           mode: "whatsapp",
           messages: [{ role: "user", content: pedido }],
-          context: { empresas, crm, clientesCRM: clientes },
+          context: {
+            empresas,
+            crm,
+            clientesCRM: clientes,
+            usuarioSistema: {
+              nomeTratamento: usuarioAtual?.nomeTratamento || usuarioAtual?.nome || usuarioAtual?.email || "responsavel",
+              assinatura: usuarioAtual?.nomeAssinatura || usuarioAtual?.nomeTratamento || usuarioAtual?.nome || "",
+              cargo: usuarioAtual?.cargo || "",
+              telefone: usuarioAtual?.telefone || "",
+            },
+          },
         }),
       });
       const data = await response.json().catch(() => ({}));

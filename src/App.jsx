@@ -1,10 +1,20 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { jsPDF } from "jspdf";
 import { authHeaders, supabase } from "./supabase.js";
 import { store } from "./store.js";
 import { ClientesCRMPanel } from "./ClientesCRMPanel.jsx";
+import { AgendaClientesPanel, KEY_AGENDA_CLIENTES } from "./AgendaClientesPanel.jsx";
 import { WhatsAppInboxPanel, KEY_WHATSAPP_INBOX } from "./WhatsAppInboxPanel.jsx";
 import { abrirWhatsRelatorio, gerarRelatorioSemanalNara, normalizarWhatsDestino, WHATS_REPORT_NUMBER, WEEKLY_REPORT_PENDING_KEY } from "./weeklyReport.js";
+import {
+  DEFAULT_NARA_CONFIG,
+  KEY_AUTO_BACKUP_LOG,
+  KEY_DAILY_RADAR_PENDING,
+  KEY_NARA_AUTOMATION,
+  gerarAuditoriaEquipe,
+  gerarChecklistPreGeracao,
+  gerarRadarDiarioNara,
+  precisaBackupAssistido,
+} from "./naraAutomation.js";
 
 import {
   FileText,
@@ -26,6 +36,14 @@ import {
 } from "lucide-react";
 
 let pdfJsPromise;
+let jsPdfPromise;
+
+async function getJsPdf() {
+  if (!jsPdfPromise) {
+    jsPdfPromise = import("jspdf").then((module) => module.jsPDF);
+  }
+  return jsPdfPromise;
+}
 
 async function getPdfJs() {
   if (!pdfJsPromise) {
@@ -62,7 +80,21 @@ const KEY_CLIENTES = "orcaflow_clientes_crm";
 const KEY_WHATS_RELATORIO = "orcaflow_whats_relatorio";
 const KEY_WEEKLY_REPORT_PENDING = WEEKLY_REPORT_PENDING_KEY;
 const KEY_WHATSAPP_MONITOR = KEY_WHATSAPP_INBOX;
-const BACKUP_KEYS = [KEY_EMP, KEY_CRM, KEY_META, KEY_LOG, KEY_USERS, KEY_RESET, KEY_CHAT, KEY_CLIENTES, KEY_WHATS_RELATORIO, KEY_WEEKLY_REPORT_PENDING, KEY_WHATSAPP_MONITOR];
+const KEY_AGENDA = KEY_AGENDA_CLIENTES;
+const KEY_NARA_AUTO = KEY_NARA_AUTOMATION;
+const KEY_NARA_RADAR = KEY_DAILY_RADAR_PENDING;
+const KEY_BACKUP_AUTO = KEY_AUTO_BACKUP_LOG;
+const BACKUP_KEYS = [KEY_EMP, KEY_CRM, KEY_META, KEY_LOG, KEY_USERS, KEY_RESET, KEY_CHAT, KEY_CLIENTES, KEY_AGENDA, KEY_WHATS_RELATORIO, KEY_WEEKLY_REPORT_PENDING, KEY_WHATSAPP_MONITOR, KEY_NARA_AUTO, KEY_NARA_RADAR, KEY_BACKUP_AUTO];
+const USER_TRANSFER_KEYS = [KEY_EMP, KEY_CRM, KEY_CLIENTES, KEY_AGENDA, KEY_CHAT, KEY_WHATSAPP_MONITOR];
+const USER_TRANSFER_OPTIONS = [
+  { id: "empresas", label: "Empresas cadastradas", keys: [KEY_EMP] },
+  { id: "orcamentos", label: "Orcamentos/gestao", keys: [KEY_CRM] },
+  { id: "clientes", label: "Clientes CRM", keys: [KEY_CLIENTES] },
+  { id: "agenda", label: "Agenda de contatos", keys: [KEY_AGENDA] },
+  { id: "chat", label: "Historico da Nara", keys: [KEY_CHAT] },
+  { id: "whatsapp", label: "Caixa WhatsApp", keys: [KEY_WHATSAPP_MONITOR] },
+  { id: "comercial", label: "Tudo comercial", keys: [KEY_EMP, KEY_CRM, KEY_CLIENTES, KEY_AGENDA] },
+];
 
 const ADMIN_PADRAO = {
   id: "admin-master",
@@ -72,6 +104,14 @@ const ADMIN_PADRAO = {
   ativo: true,
   criadoEm: new Date().toISOString(),
 };
+
+function nomeUsuarioSistema(usuario = {}) {
+  return clean(usuario.nomeTratamento || usuario.displayName || usuario.nome || usuario.email || "responsavel", 80);
+}
+
+function assinaturaUsuarioSistema(usuario = {}) {
+  return clean(usuario.nomeAssinatura || usuario.signatureName || usuario.nomeTratamento || usuario.nome || usuario.email || "", 100);
+}
 
 const usuariosBase = [
   ADMIN_PADRAO,
@@ -693,20 +733,28 @@ function extrairDadosCartaoCNPJ(textoOriginal) {
   };
 }
 
-async function lerTextoPDF(file) {
+async function lerTextoPDF(file, options = {}) {
+  const maxPages = Number(options.maxPages) > 0 ? Number(options.maxPages) : 20;
+  const maxChars = Number(options.maxChars) > 0 ? Number(options.maxChars) : 90000;
   const buffer = await file.arrayBuffer();
   const pdfjsLib = await getPdfJs();
-  const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+  const task = pdfjsLib.getDocument({ data: buffer });
+  const pdf = await task.promise;
 
   let texto = "";
 
-  for (let i = 1; i <= pdf.numPages; i += 1) {
+  for (let i = 1; i <= Math.min(pdf.numPages, maxPages); i += 1) {
     const page = await pdf.getPage(i);
     const content = await page.getTextContent();
     texto += content.items.map((item) => item.str).join("\n") + "\n";
+    if (texto.length >= maxChars) break;
   }
 
-  return texto;
+  try {
+    await pdf.destroy();
+  } catch {}
+
+  return texto.slice(0, maxChars);
 }
 
 async function pdfParaImagemCartaoCNPJ(file) {
@@ -717,7 +765,7 @@ async function pdfParaImagemCartaoCNPJ(file) {
 
   const base = page.getViewport({ scale: 1 });
   const maiorLado = Math.max(base.width, base.height);
-  const escala = Math.max(1.4, Math.min(2.4, 1700 / maiorLado));
+  const escala = Math.max(1.25, Math.min(2, 1400 / maiorLado));
   const viewport = page.getViewport({ scale: escala });
 
   const canvas = document.createElement("canvas");
@@ -729,7 +777,7 @@ async function pdfParaImagemCartaoCNPJ(file) {
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   await page.render({ canvasContext: ctx, viewport }).promise;
-  return canvas.toDataURL("image/jpeg", 0.88);
+  return canvas.toDataURL("image/jpeg", 0.82);
 }
 
 async function imagemParaLeitura(file) {
@@ -739,7 +787,7 @@ async function imagemParaLeitura(file) {
     const img = new Image();
     img.onload = () => {
       const maiorLado = Math.max(img.width, img.height);
-      const escala = maiorLado > 1800 ? 1800 / maiorLado : 1;
+      const escala = maiorLado > 1400 ? 1400 / maiorLado : 1;
       const width = Math.max(1, Math.round(img.width * escala));
       const height = Math.max(1, Math.round(img.height * escala));
       const canvas = document.createElement("canvas");
@@ -750,7 +798,7 @@ async function imagemParaLeitura(file) {
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(0, 0, width, height);
       ctx.drawImage(img, 0, 0, width, height);
-      resolve(canvas.toDataURL("image/jpeg", 0.88));
+      resolve(canvas.toDataURL("image/jpeg", 0.82));
     };
     img.onerror = () => resolve(dataUrl);
     img.src = dataUrl;
@@ -1144,7 +1192,7 @@ function ModalAnexarOrcamento({ empresas, usuarioAtual, onSave, onCancel, pushTo
           let imagem = "";
 
           if (isPdf) {
-            texto = await lerTextoPDF(file);
+            texto = await lerTextoPDF(file, { maxPages: 10, maxChars: 50000 });
             if (!texto || texto.trim().length < 40) {
               imagem = await pdfParaImagemCartaoCNPJ(file);
             }
@@ -1203,6 +1251,17 @@ function ModalAnexarOrcamento({ empresas, usuarioAtual, onSave, onCancel, pushTo
             arquivoPdf: dataUrl,
             arquivoNome: nome,
             arquivoTipo: file.type || (isDocx ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : "application/pdf"),
+            conversas: [{
+              id: `conv_import_${Date.now()}_${i}`,
+              canal: "Importacao",
+              direcao: "interna",
+              tipo: "Importacao em massa",
+              mensagem: `Arquivo importado com IA: ${nome}. ${dados.descricao ? clean(dados.descricao, 260) : "Revise os dados extraidos antes do acompanhamento."}`,
+              criadoEm: new Date().toISOString(),
+              origem: "ia",
+              usuarioNome: nomeUsuarioSistema(usuarioAtual),
+              arquivoNome: nome,
+            }],
             orcamentoCompleto: null,
           };
 
@@ -1243,6 +1302,17 @@ function ModalAnexarOrcamento({ empresas, usuarioAtual, onSave, onCancel, pushTo
       anexado: true,
       arquivoPdf: arquivo,
       arquivoNome: arquivoNome || "orcamento.pdf",
+      conversas: [{
+        id: `conv_anexo_${Date.now()}`,
+        canal: "Anexo",
+        direcao: "interna",
+        tipo: "Orcamento anexado",
+        mensagem: `Orcamento externo anexado para acompanhamento: ${arquivoNome || "orcamento.pdf"}.`,
+        criadoEm: new Date().toISOString(),
+        origem: "manual",
+        usuarioNome: nomeUsuarioSistema(usuarioAtual),
+        arquivoNome: arquivoNome || "orcamento.pdf",
+      }],
       orcamentoCompleto: null,
     };
     await onSave(item);
@@ -1342,9 +1412,9 @@ function useDB() {
 
   useEffect(() => {
     (async () => {
-      const [lista, m] = await Promise.all([store.get(KEY_EMP), store.get(KEY_META)]);
-      setEmpresas(lista || []);
-      setMeta(m || { totalOrcamentos: 0 });
+      const dados = await store.getMany([KEY_EMP, KEY_META]);
+      setEmpresas(dados[KEY_EMP] || []);
+      setMeta(dados[KEY_META] || { totalOrcamentos: 0 });
       setStatus("ok");
     })();
   }, []);
@@ -1393,12 +1463,11 @@ function useDB() {
 
   const exportarBackup = useCallback(async () => {
     try {
-      const dados = {};
-      await Promise.all(
-        BACKUP_KEYS.map(async (key) => {
-          dados[key] = (await store.get(key)) || (key === KEY_META || key === KEY_WEEKLY_REPORT_PENDING ? {} : key === KEY_WHATS_RELATORIO ? "" : []);
-        })
-      );
+      const dadosSalvos = await store.getMany(BACKUP_KEYS);
+      const dados = Object.fromEntries(BACKUP_KEYS.map((key) => [
+        key,
+        dadosSalvos[key] || (key === KEY_META || key === KEY_WEEKLY_REPORT_PENDING ? {} : key === KEY_WHATS_RELATORIO ? "" : []),
+      ]));
       dados[KEY_EMP] = empresasRef.current;
       const m = dados[KEY_META] || {};
       const blob = new Blob(
@@ -1415,6 +1484,7 @@ function useDB() {
           solicitacoesSenha: dados[KEY_RESET] || [],
           chatIA: dados[KEY_CHAT] || [],
           clientesCRM: dados[KEY_CLIENTES] || [],
+          agendaClientes: dados[KEY_AGENDA] || [],
           whatsRelatorio: typeof dados[KEY_WHATS_RELATORIO] === "string" ? dados[KEY_WHATS_RELATORIO] : "",
           relatorioSemanalPendente: dados[KEY_WEEKLY_REPORT_PENDING] || {},
           whatsappInbox: dados[KEY_WHATSAPP_MONITOR] || [],
@@ -1451,6 +1521,7 @@ function useDB() {
         const resetImport = Array.isArray(parsed.solicitacoesSenha) ? parsed.solicitacoesSenha : dados[KEY_RESET];
         const chatImport = Array.isArray(parsed.chatIA) ? parsed.chatIA : dados[KEY_CHAT];
         const clientesImport = Array.isArray(parsed.clientesCRM) ? parsed.clientesCRM : dados[KEY_CLIENTES];
+        const agendaImport = Array.isArray(parsed.agendaClientes) ? parsed.agendaClientes : dados[KEY_AGENDA];
         const whatsappInboxImport = Array.isArray(parsed.whatsappInbox) ? parsed.whatsappInbox : dados[KEY_WHATSAPP_MONITOR];
         const relatorioPendenteImport = parsed.relatorioSemanalPendente && typeof parsed.relatorioSemanalPendente === "object"
           ? parsed.relatorioSemanalPendente
@@ -1472,13 +1543,14 @@ function useDB() {
           [KEY_RESET]: Array.isArray(resetImport) ? resetImport : [],
           [KEY_CHAT]: Array.isArray(chatImport) ? chatImport : [],
           [KEY_CLIENTES]: Array.isArray(clientesImport) ? clientesImport : [],
+          [KEY_AGENDA]: Array.isArray(agendaImport) ? agendaImport : [],
           [KEY_WHATS_RELATORIO]: whatsRelatorioImport,
           [KEY_WEEKLY_REPORT_PENDING]: relatorioPendenteImport,
           [KEY_WHATSAPP_MONITOR]: Array.isArray(whatsappInboxImport) ? whatsappInboxImport : [],
         };
 
-        const results = await Promise.all(BACKUP_KEYS.map((key) => store.set(key, payload[key])));
-        if (results.every(Boolean)) {
+        const ok = await store.setMany(Object.fromEntries(BACKUP_KEYS.map((key) => [key, payload[key]])));
+        if (ok) {
           setEmpresas(payload[KEY_EMP]);
           setMeta(payload[KEY_META]);
           window.dispatchEvent(new CustomEvent("orcaflow:clientes-imported", { detail: { clientes: payload[KEY_CLIENTES] } }));
@@ -1763,7 +1835,7 @@ function ModalEmpresa({ empresa, onSave, onCancel, salvando, pushToast }) {
     }
     setImportandoCNPJ(true);
     try {
-      const texto = await lerTextoPDF(file);
+      const texto = await lerTextoPDF(file, { maxPages: 2, maxChars: 25000 });
       const temTextoPesquisavel = Boolean(texto && texto.trim().length >= 40);
       let imagemCartao = "";
       if (!temTextoPesquisavel) {
@@ -2535,7 +2607,7 @@ function empresasCompactasParaGeracao(empresas = [], selecao = []) {
     }));
 }
 
-function ChatIAPanel({ empresas = [], crm = [], clientes = [], pushToast }) {
+function ChatIAPanel({ empresas = [], crm = [], clientes = [], pushToast, usuarioAtual }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [mode, setMode] = useState("geral");
@@ -2612,7 +2684,15 @@ function ChatIAPanel({ empresas = [], crm = [], clientes = [], pushToast }) {
         body: JSON.stringify({
           mode,
           messages: base.slice(-12).map((msg) => ({ role: msg.role, content: textoCurto(msg.content, 3000) })),
-          context: contextoCompactoChat(empresas, crm, clientes),
+          context: {
+            ...contextoCompactoChat(empresas, crm, clientes),
+            usuarioSistema: {
+              nomeTratamento: nomeUsuarioSistema(usuarioAtual),
+              assinatura: assinaturaUsuarioSistema(usuarioAtual),
+              cargo: usuarioAtual?.cargo || "",
+              telefone: usuarioAtual?.telefone || "",
+            },
+          },
         }),
       });
 
@@ -3256,7 +3336,7 @@ function avaliarPrioridadeOrcamento(item) {
   return { score, nivel: "Baixa", cor: BRAND.green, motivos, acao: "Acompanhar" };
 }
 
-function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], meta = {}, pushToast, usuarioAtual, setView, abrirOrcamentoSalvo, baixarOrcamento, onAnexar }) {
+function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], meta = {}, pushToast, usuarioAtual, setView, abrirOrcamentoSalvo, baixarOrcamento, onAnexar, naraConfig = DEFAULT_NARA_CONFIG, setNaraConfig, radarPendente, setRadarPendente, exportarBackup }) {
   const [busca, setBusca] = useState("");
   const [statusFiltro, setStatusFiltro] = useState("Todos");
   const [empresaFiltro, setEmpresaFiltro] = useState("Todas");
@@ -3268,9 +3348,22 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], meta = {},
   const [historicoAberto, setHistoricoAberto] = useState(null);
   const [conversaDrafts, setConversaDrafts] = useState({});
   const [whats, setWhats] = useState("");
+  const [auditoriaNara, setAuditoriaNara] = useState(null);
+  const [backupSugerido, setBackupSugerido] = useState(false);
 
   const isAdmin = usuarioAtual?.tipo === "admin";
   const base = isAdmin ? crm : crm.filter((o) => o.userId === usuarioAtual?.id);
+
+  useEffect(() => {
+    let ativo = true;
+    (async () => {
+      const log = (await store.get(KEY_BACKUP_AUTO)) || {};
+      if (ativo) setBackupSugerido(Boolean(naraConfig?.backupAssistidoAtivo && precisaBackupAssistido(log.ultimoBackupEm)));
+    })();
+    return () => {
+      ativo = false;
+    };
+  }, [naraConfig?.backupAssistidoAtivo, crm.length, clientes.length]);
 
   useEffect(() => {
     let ativo = true;
@@ -3449,7 +3542,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], meta = {},
       mensagem: texto,
       criadoEm: dados.criadoEm || new Date().toISOString(),
       origem: dados.origem || "manual",
-      usuarioNome: usuarioAtual?.nome || "",
+      usuarioNome: nomeUsuarioSistema(usuarioAtual),
     };
 
     atualizarOrcamento(item.id, (atual) => ({
@@ -3494,7 +3587,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], meta = {},
       mensagem: texto,
       criadoEm,
       origem: contato.origem,
-      usuarioNome: usuarioAtual?.nome || "",
+      usuarioNome: nomeUsuarioSistema(usuarioAtual),
     };
     atualizarOrcamento(item.id, (atual) => ({
       ...atual,
@@ -3643,7 +3736,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], meta = {},
           mensagem: resposta,
           criadoEm: new Date().toISOString(),
           origem: "ia",
-          usuarioNome: usuarioAtual?.nome || "",
+          usuarioNome: nomeUsuarioSistema(usuarioAtual),
         };
         atualizarOrcamento(item.id, (atual) => ({
           ...atual,
@@ -3731,10 +3824,90 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], meta = {},
       crm: base,
       clientes,
       empresas,
-      usuarioNome: usuarioAtual?.nome || usuarioAtual?.email || "OrcaFlow",
+      usuarioNome: nomeUsuarioSistema(usuarioAtual),
     });
     abrirWhatsRelatorio({ numero, texto });
     pushToast("Relatorio semanal da Nara aberto no WhatsApp.", "ok");
+  };
+
+  const salvarConfigNara = async (patch) => {
+    const nova = { ...DEFAULT_NARA_CONFIG, ...(naraConfig || {}), ...patch };
+    setNaraConfig?.(nova);
+    await store.set(KEY_NARA_AUTO, nova);
+    pushToast("Automacao da Nara atualizada.", "ok");
+  };
+
+  const gerarRadarAgora = async () => {
+    const radar = gerarRadarDiarioNara({
+      crm: base,
+      clientes,
+      empresas,
+      usuarioNome: nomeUsuarioSistema(usuarioAtual),
+    });
+    const pendente = { ...radar, status: "pendente" };
+    setRadarPendente?.(pendente);
+    await store.set(KEY_NARA_RADAR, pendente);
+    const hoje = new Date().toISOString().slice(0, 10);
+    const novaConfig = {
+      ...DEFAULT_NARA_CONFIG,
+      ...(naraConfig || {}),
+      ultimoRadar: { dia: hoje, geradoEm: new Date().toISOString() },
+    };
+    setNaraConfig?.(novaConfig);
+    await store.set(KEY_NARA_AUTO, novaConfig);
+    pushToast("Radar diario da Nara gerado.", "ok");
+  };
+
+  const abrirRadarWhats = () => {
+    const texto = radarPendente?.texto;
+    if (!texto) {
+      pushToast("Gere o radar da Nara primeiro.", "aviso");
+      return;
+    }
+    const numero = normalizarWhatsDestino(whats || WHATS_REPORT_NUMBER);
+    setWhats(numero);
+    store.set(KEY_WHATS_RELATORIO, numero);
+    abrirWhatsRelatorio({ numero, texto });
+    pushToast("Radar da Nara aberto no WhatsApp. O envio continua manual.", "ok");
+  };
+
+  const copiarRadar = async () => {
+    if (!radarPendente?.texto) {
+      pushToast("Gere o radar da Nara primeiro.", "aviso");
+      return;
+    }
+    await copiarTexto(radarPendente.texto);
+  };
+
+  const dispensarRadar = async () => {
+    const resolvido = { ...(radarPendente || {}), status: "resolvido", resolvidoEm: new Date().toISOString() };
+    setRadarPendente?.(null);
+    await store.set(KEY_NARA_RADAR, resolvido);
+    pushToast("Radar diario marcado como resolvido.", "ok");
+  };
+
+  const rodarAuditoriaNara = () => {
+    const auditoria = gerarAuditoriaEquipe({ crm: base, clientes });
+    setAuditoriaNara(auditoria);
+    pushToast(auditoria.total ? `Nara encontrou ${auditoria.total} ponto(s) para revisar.` : "Auditoria sem pontos criticos.", auditoria.total ? "aviso" : "ok");
+  };
+
+  const copiarAuditoria = async () => {
+    if (!auditoriaNara?.texto) {
+      pushToast("Rode a auditoria primeiro.", "aviso");
+      return;
+    }
+    await copiarTexto(auditoriaNara.texto);
+  };
+
+  const executarBackupAssistido = async () => {
+    exportarBackup?.();
+    await store.set(KEY_BACKUP_AUTO, {
+      ultimoBackupEm: new Date().toISOString(),
+      usuario: usuarioAtual?.email || usuarioAtual?.nome || "",
+    });
+    setBackupSugerido(false);
+    pushToast("Backup exportado e registrado pela Nara.", "ok");
   };
 
   const notificarPendentes = async () => {
@@ -3784,6 +3957,70 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], meta = {},
             🔔 Notificar pendentes
           </button>
         </div>
+      </div>
+
+      <div className="of-glass" style={{ borderRadius: 18, padding: 16, marginBottom: 18 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap", marginBottom: 12 }}>
+          <div>
+            <div style={{ fontSize: 13, color: BRAND.green, fontWeight: 950, letterSpacing: 1.8 }}>AUTOMAÇÕES NARA</div>
+            <div style={{ fontSize: 12, color: BRAND.muted, marginTop: 4 }}>Radar diário, auditoria de registros, backup assistido e follow-up comercial sem envio automático.</div>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button onClick={gerarRadarAgora} style={{ padding: "9px 12px", borderRadius: 11, border: `1px solid ${BRAND.green2}66`, background: `${BRAND.green2}18`, color: BRAND.green, cursor: "pointer", fontWeight: 900 }}>Radar agora</button>
+            <button onClick={rodarAuditoriaNara} style={{ padding: "9px 12px", borderRadius: 11, border: `1px solid ${BRAND.blue2}66`, background: `${BRAND.blue2}18`, color: "#93C5FD", cursor: "pointer", fontWeight: 900 }}>Auditoria</button>
+            <button onClick={executarBackupAssistido} style={{ padding: "9px 12px", borderRadius: 11, border: `1px solid ${backupSugerido ? BRAND.warn : BRAND.border2}`, background: backupSugerido ? `${BRAND.warn}18` : "transparent", color: backupSugerido ? "#FBBF24" : BRAND.muted, cursor: "pointer", fontWeight: 900 }}>
+              {backupSugerido ? "Backup sugerido" : "Backup"}
+            </button>
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(5,minmax(130px,1fr))", gap: 8, marginBottom: radarPendente || auditoriaNara ? 12 : 0 }}>
+          {[
+            ["Radar diário", "radarDiarioAtivo"],
+            ["Checklist geração", "checklistGeracaoAtivo"],
+            ["Detector similar", "detectorSimilaridadeAtivo"],
+            ["Auditoria equipe", "auditoriaContatosAtiva"],
+            ["Backup assistido", "backupAssistidoAtivo"],
+          ].map(([label, key]) => {
+            const ativo = naraConfig?.[key] !== false;
+            return (
+              <button key={key} onClick={() => salvarConfigNara({ [key]: !ativo })} style={{ textAlign: "left", padding: "9px 10px", borderRadius: 12, border: `1px solid ${ativo ? BRAND.green2 : BRAND.border2}55`, background: ativo ? `${BRAND.green2}12` : BRAND.panel2, color: ativo ? BRAND.green : BRAND.dim, cursor: "pointer", fontWeight: 900 }}>
+                <span style={{ display: "block", fontSize: 11 }}>{label}</span>
+                <span style={{ display: "block", fontSize: 9, marginTop: 3, opacity: 0.8 }}>{ativo ? "ativo" : "pausado"}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {radarPendente?.texto && (
+          <div style={{ border: `1px solid ${BRAND.green2}33`, background: `${BRAND.green2}0d`, borderRadius: 14, padding: 12, marginBottom: 10 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 950 }}>Radar diário pronto</div>
+                <div style={{ fontSize: 11, color: BRAND.dim }}>Nara encontrou {radarPendente.totalOrcamentos || 0} orçamento(s) e {radarPendente.totalClientes || 0} cliente(s) para acompanhamento.</div>
+              </div>
+              <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+                <button onClick={copiarRadar} style={{ padding: "7px 10px", borderRadius: 9, border: `1px solid ${BRAND.border2}`, background: "transparent", color: BRAND.muted, cursor: "pointer", fontWeight: 850 }}>Copiar</button>
+                <button onClick={abrirRadarWhats} style={{ padding: "7px 10px", borderRadius: 9, border: `1px solid ${BRAND.green2}55`, background: `${BRAND.green2}14`, color: BRAND.green, cursor: "pointer", fontWeight: 850 }}>WhatsApp</button>
+                <button onClick={dispensarRadar} style={{ padding: "7px 10px", borderRadius: 9, border: `1px solid ${BRAND.border2}`, background: "transparent", color: BRAND.dim, cursor: "pointer", fontWeight: 850 }}>Resolver</button>
+              </div>
+            </div>
+            <pre style={{ margin: 0, whiteSpace: "pre-wrap", color: BRAND.muted, fontSize: 11, lineHeight: 1.5, maxHeight: 180, overflowY: "auto", fontFamily: "inherit" }}>{radarPendente.texto}</pre>
+          </div>
+        )}
+
+        {auditoriaNara?.texto && (
+          <div style={{ border: `1px solid ${auditoriaNara.total ? BRAND.warn : BRAND.green2}33`, background: auditoriaNara.total ? `${BRAND.warn}0d` : `${BRAND.green2}0d`, borderRadius: 14, padding: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 950 }}>Auditoria de registros</div>
+                <div style={{ fontSize: 11, color: BRAND.dim }}>{auditoriaNara.total} ponto(s) para revisar nos históricos.</div>
+              </div>
+              <button onClick={copiarAuditoria} style={{ padding: "7px 10px", borderRadius: 9, border: `1px solid ${BRAND.border2}`, background: "transparent", color: BRAND.muted, cursor: "pointer", fontWeight: 850 }}>Copiar auditoria</button>
+            </div>
+            <pre style={{ margin: 0, whiteSpace: "pre-wrap", color: BRAND.muted, fontSize: 11, lineHeight: 1.5, maxHeight: 150, overflowY: "auto", fontFamily: "inherit" }}>{auditoriaNara.texto}</pre>
+          </div>
+        )}
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4,minmax(150px,1fr))", gap: 14, marginBottom: 18 }}>
@@ -4385,31 +4622,189 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
   const [solicitacoes, setSolicitacoes] = useState([]);
   const [acessos, setAcessos] = useState([]);
   const [carregandoAcessos, setCarregandoAcessos] = useState(false);
+  const [encerrandoSessoes, setEncerrandoSessoes] = useState(false);
+  const [perfilForm, setPerfilForm] = useState({ displayName: "", signatureName: "", phone: "", cargo: "" });
+  const [salvandoPerfil, setSalvandoPerfil] = useState(false);
+  const [resumoUsuarios, setResumoUsuarios] = useState({});
+  const [transferencia, setTransferencia] = useState({ origem: "", destino: "", tipo: "empresas", modo: "copiar" });
 
   useEffect(() => {
     (async () => setSolicitacoes((await store.get(KEY_RESET)) || []))();
   }, []);
 
+  useEffect(() => {
+    setPerfilForm({
+      displayName: usuarioAtual?.nomeTratamento || usuarioAtual?.nome || "",
+      signatureName: usuarioAtual?.nomeAssinatura || usuarioAtual?.nomeTratamento || usuarioAtual?.nome || "",
+      phone: usuarioAtual?.telefone || "",
+      cargo: usuarioAtual?.cargo || "",
+    });
+  }, [usuarioAtual?.id, usuarioAtual?.nomeTratamento, usuarioAtual?.nomeAssinatura, usuarioAtual?.telefone, usuarioAtual?.cargo, usuarioAtual?.nome]);
+
+  const resumirLinhasUsuario = (rows = []) => {
+    const resumo = {};
+    for (const row of rows) {
+      const userId = row.user_id;
+      if (!userId) continue;
+      if (!resumo[userId]) resumo[userId] = { empresas: 0, orcamentos: 0, clientes: 0, agenda: 0, chat: 0, whatsapp: 0, atualizadoEm: "" };
+      const qtd = Array.isArray(row.value) ? row.value.length : row.value ? 1 : 0;
+      if (row.key === KEY_EMP) resumo[userId].empresas = qtd;
+      if (row.key === KEY_CRM) resumo[userId].orcamentos = qtd;
+      if (row.key === KEY_CLIENTES) resumo[userId].clientes = qtd;
+      if (row.key === KEY_AGENDA) resumo[userId].agenda = qtd;
+      if (row.key === KEY_CHAT) resumo[userId].chat = qtd;
+      if (row.key === KEY_WHATSAPP_MONITOR) resumo[userId].whatsapp = qtd;
+      if (!resumo[userId].atualizadoEm || new Date(row.updated_at) > new Date(resumo[userId].atualizadoEm)) {
+        resumo[userId].atualizadoEm = row.updated_at;
+      }
+    }
+    return resumo;
+  };
+
   const carregarAcessos = useCallback(async () => {
     if (usuarioAtual?.tipo !== "admin") return;
     setCarregandoAcessos(true);
-    const { data, error } = await supabase
-      .from("app_users")
-      .select("*")
-      .order("requested_at", { ascending: false });
+    const [{ data, error }, rowsEstado] = await Promise.all([
+      supabase
+        .from("app_users")
+        .select("*")
+        .order("requested_at", { ascending: false }),
+      store.getAllUserRows(USER_TRANSFER_KEYS),
+    ]);
 
     if (error) {
       console.error("Erro ao carregar acessos:", error);
       pushToast("Não foi possível carregar os cadastros. Rode o schema.sql atualizado.", "erro");
     } else {
-      setAcessos(Array.isArray(data) ? data : []);
+      const lista = Array.isArray(data) ? data : [];
+      setAcessos(lista);
+      setResumoUsuarios(resumirLinhasUsuario(rowsEstado));
+      setTransferencia((atual) => ({
+        ...atual,
+        origem: atual.origem || usuarioAtual?.id || lista[0]?.user_id || "",
+        destino: atual.destino || lista.find((item) => item.user_id !== usuarioAtual?.id)?.user_id || lista[0]?.user_id || "",
+      }));
     }
     setCarregandoAcessos(false);
-  }, [pushToast, usuarioAtual?.tipo]);
+  }, [pushToast, usuarioAtual?.id, usuarioAtual?.tipo]);
 
   useEffect(() => {
     carregarAcessos();
   }, [carregarAcessos]);
+
+  const salvarPerfilProprio = async () => {
+    setSalvandoPerfil(true);
+    try {
+      const payload = {
+        p_display_name: clean(perfilForm.displayName, 90),
+        p_signature_name: clean(perfilForm.signatureName, 120),
+        p_phone: clean(perfilForm.phone, 40),
+        p_cargo: clean(perfilForm.cargo, 90),
+      };
+      const { data, error } = await supabase.rpc("update_my_app_profile", payload);
+      if (error) throw error;
+
+      const atualizado = {
+        ...usuarioAtual,
+        nome: data?.display_name || data?.name || usuarioAtual?.nome || "",
+        nomeTratamento: data?.display_name || data?.name || usuarioAtual?.nomeTratamento || "",
+        nomeAssinatura: data?.signature_name || data?.display_name || data?.name || usuarioAtual?.nomeAssinatura || "",
+        telefone: data?.phone || "",
+        cargo: data?.cargo || "",
+      };
+      setUsuarioAtual(atualizado);
+      pushToast("Perfil comercial atualizado. A Nara usara esse nome nas mensagens.", "ok");
+      await carregarAcessos();
+    } catch (error) {
+      console.error("Erro ao salvar perfil:", error);
+      pushToast(error?.message || "Nao foi possivel salvar seu perfil.", "erro");
+    } finally {
+      setSalvandoPerfil(false);
+    }
+  };
+
+  const prepararValorTransferencia = (key, value, destinoId, origemId) => {
+    if (!Array.isArray(value)) return value;
+    return value.map((item) => ({
+      ...item,
+      userId: destinoId,
+      origemUserId: item.origemUserId || item.userId || origemId,
+      compartilhadoPor: usuarioAtual?.id || "",
+      compartilhadoEm: new Date().toISOString(),
+    }));
+  };
+
+  const mesclarLista = (atual = [], entrada = []) => {
+    const mapa = new Map();
+    for (const item of [...entrada, ...atual]) {
+      const id = item?.id || item?.numero || item?.email || JSON.stringify(item).slice(0, 80);
+      mapa.set(id, item);
+    }
+    return [...mapa.values()];
+  };
+
+  const transferirDados = async () => {
+    if (usuarioAtual?.tipo !== "admin") return;
+    const origem = transferencia.origem;
+    const destino = transferencia.destino;
+    const opcao = USER_TRANSFER_OPTIONS.find((item) => item.id === transferencia.tipo) || USER_TRANSFER_OPTIONS[0];
+
+    if (!origem || !destino || origem === destino) {
+      pushToast("Escolha usuarios diferentes para origem e destino.", "erro");
+      return;
+    }
+
+    const mover = transferencia.modo === "mover";
+    if (mover && !window.confirm("Mover dados remove esses registros da origem depois de copiar para o destino. Confirmar?")) return;
+
+    setCarregandoAcessos(true);
+    try {
+      const origemDados = await store.getManyForUser(origem, opcao.keys);
+      const destinoDados = await store.getManyForUser(destino, opcao.keys);
+      const payloadDestino = {};
+      const payloadOrigem = {};
+      let total = 0;
+
+      for (const key of opcao.keys) {
+        const valorOrigem = origemDados[key];
+        if (Array.isArray(valorOrigem)) {
+          const entrada = prepararValorTransferencia(key, valorOrigem, destino, origem);
+          payloadDestino[key] = mesclarLista(Array.isArray(destinoDados[key]) ? destinoDados[key] : [], entrada);
+          payloadOrigem[key] = [];
+          total += entrada.length;
+        } else if (valorOrigem && typeof valorOrigem === "object") {
+          payloadDestino[key] = { ...(destinoDados[key] || {}), ...valorOrigem, compartilhadoPor: usuarioAtual?.id || "", compartilhadoEm: new Date().toISOString() };
+          payloadOrigem[key] = {};
+          total += 1;
+        } else if (typeof valorOrigem === "string" && valorOrigem.trim()) {
+          payloadDestino[key] = valorOrigem;
+          payloadOrigem[key] = "";
+          total += 1;
+        }
+      }
+
+      if (!total) {
+        pushToast("Nao ha dados nesta origem para transferir.", "aviso");
+        return;
+      }
+
+      const okDestino = await store.setManyForUser(destino, payloadDestino);
+      if (!okDestino) throw new Error("Falha ao salvar dados no usuario destino.");
+
+      if (mover) {
+        const okOrigem = await store.setManyForUser(origem, payloadOrigem);
+        if (!okOrigem) throw new Error("Dados copiados, mas nao foi possivel limpar a origem.");
+      }
+
+      pushToast(`${mover ? "Movidos" : "Copiados"} ${total} registro(s) de ${opcao.label}.`, "ok");
+      await carregarAcessos();
+    } catch (error) {
+      console.error("Erro na transferencia:", error);
+      pushToast(error?.message || "Nao foi possivel transferir dados.", "erro");
+    } finally {
+      setCarregandoAcessos(false);
+    }
+  };
 
   const atualizarAcesso = async (userId, patch) => {
     const payload = {
@@ -4438,6 +4833,21 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
 
     pushToast("Acesso atualizado.", "ok");
     await carregarAcessos();
+  };
+
+  const editarPerfilAcesso = async (acesso) => {
+    const displayName = window.prompt("Como este usuario quer ser chamado pela Nara?", acesso.display_name || acesso.name || acesso.email || "");
+    if (displayName === null) return;
+    const signatureName = window.prompt("Nome/assinatura para mensagens ao cliente:", acesso.signature_name || displayName || acesso.name || acesso.email || "");
+    if (signatureName === null) return;
+    const cargo = window.prompt("Cargo/função comercial:", acesso.cargo || "");
+    if (cargo === null) return;
+
+    await atualizarAcesso(acesso.user_id, {
+      display_name: clean(displayName, 90),
+      signature_name: clean(signatureName, 120),
+      cargo: clean(cargo, 90),
+    });
   };
 
   const salvarSolicitacoes = (nova) => {
@@ -4549,9 +4959,70 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
     pushToast(`Perfil ativo: ${u.nome}`, "ok");
   };
 
+  const deslogarOutrosAparelhos = async () => {
+    const confirmou = window.confirm("Deslogar este usuário mestre de outros navegadores e aparelhos? Esta sessão atual continua ativa.");
+
+    if (!confirmou) return;
+
+    setEncerrandoSessoes(true);
+    try {
+      const { error } = await supabase.auth.signOut({ scope: "others" });
+      if (error) throw error;
+      pushToast("Outros aparelhos foram deslogados. Esta sessão continua ativa.", "ok");
+    } catch (error) {
+      console.error("Erro ao encerrar outras sessões:", error);
+      pushToast(error?.message || "Não foi possível deslogar os outros aparelhos.", "erro");
+    } finally {
+      setEncerrandoSessoes(false);
+    }
+  };
+
+  const perfilCard = (
+    <div className="of-glass" style={{ borderRadius: 16, padding: 16, marginBottom: 16, maxWidth: usuarioAtual?.tipo === "admin" ? "none" : 720 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", marginBottom: 12 }}>
+        <div>
+          <div style={{ fontSize: 16, fontWeight: 950 }}>Meu perfil comercial</div>
+          <div style={{ fontSize: 11, color: BRAND.dim, marginTop: 4 }}>
+            A Nara usa estes dados para falar com voce pelo nome e para sugerir mensagens ao cliente com o responsavel correto.
+          </div>
+        </div>
+        <div style={{ fontSize: 10, color: BRAND.muted, padding: "5px 8px", borderRadius: 999, border: `1px solid ${BRAND.border2}` }}>
+          {usuarioAtual?.email || "Conta conectada"}
+        </div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(180px,1fr))", gap: 10 }}>
+        <label style={{ display: "grid", gap: 5, fontSize: 10, color: BRAND.dim, fontWeight: 900, textTransform: "uppercase", letterSpacing: 1 }}>
+          Como quer ser chamado
+          <input value={perfilForm.displayName} onChange={(e) => setPerfilForm((f) => ({ ...f, displayName: e.target.value }))} placeholder="Ex: Deyverson" style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, borderRadius: 10, padding: "10px 12px", color: BRAND.text, fontSize: 12, textTransform: "none", letterSpacing: 0 }} />
+        </label>
+        <label style={{ display: "grid", gap: 5, fontSize: 10, color: BRAND.dim, fontWeight: 900, textTransform: "uppercase", letterSpacing: 1 }}>
+          Nome/assinatura para contato
+          <input value={perfilForm.signatureName} onChange={(e) => setPerfilForm((f) => ({ ...f, signatureName: e.target.value }))} placeholder="Ex: Deyverson - OrcaFlow" style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, borderRadius: 10, padding: "10px 12px", color: BRAND.text, fontSize: 12, textTransform: "none", letterSpacing: 0 }} />
+        </label>
+        <label style={{ display: "grid", gap: 5, fontSize: 10, color: BRAND.dim, fontWeight: 900, textTransform: "uppercase", letterSpacing: 1 }}>
+          WhatsApp/telefone
+          <input value={perfilForm.phone} onChange={(e) => setPerfilForm((f) => ({ ...f, phone: e.target.value }))} placeholder="Ex: +55 17 99252-9930" style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, borderRadius: 10, padding: "10px 12px", color: BRAND.text, fontSize: 12, textTransform: "none", letterSpacing: 0 }} />
+        </label>
+        <label style={{ display: "grid", gap: 5, fontSize: 10, color: BRAND.dim, fontWeight: 900, textTransform: "uppercase", letterSpacing: 1 }}>
+          Cargo/funcao
+          <input value={perfilForm.cargo} onChange={(e) => setPerfilForm((f) => ({ ...f, cargo: e.target.value }))} placeholder="Ex: Comercial / Orcamentos" style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, borderRadius: 10, padding: "10px 12px", color: BRAND.text, fontSize: 12, textTransform: "none", letterSpacing: 0 }} />
+        </label>
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", marginTop: 12, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 11, color: BRAND.muted }}>
+          Exemplo: Nara vai tratar voce como <strong>{clean(perfilForm.displayName || usuarioAtual?.nome || "responsavel", 50)}</strong>.
+        </div>
+        <button onClick={salvarPerfilProprio} disabled={salvandoPerfil} style={{ padding: "10px 14px", borderRadius: 10, border: 0, background: `linear-gradient(135deg, ${BRAND.green2}, ${BRAND.blue2})`, color: "#fff", fontWeight: 950, cursor: salvandoPerfil ? "wait" : "pointer" }}>
+          {salvandoPerfil ? "Salvando..." : "Salvar perfil"}
+        </button>
+      </div>
+    </div>
+  );
+
   if (usuarioAtual?.tipo !== "admin") {
     return (
       <div style={{ padding: 24 }}>
+        {perfilCard}
         <div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 16, padding: 20, maxWidth: 520 }}>
           <div style={{ fontSize: 16, fontWeight: 950, marginBottom: 6 }}>Perfil do usuário</div>
           <div style={{ fontSize: 12, color: BRAND.muted }}>Usuário atual: {usuarioAtual?.nome || "—"}</div>
@@ -4565,6 +5036,83 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
     <div style={{ flex: 1, overflowY: "auto", padding: 18 }}>
       <div style={{ fontSize: 18, fontWeight: 950, marginBottom: 4 }}>Administrador de Usuários</div>
       <div style={{ fontSize: 12, color: BRAND.dim, marginBottom: 16 }}>Controle total dos perfis, ativação, cancelamento e acesso aos orçamentos.</div>
+
+      {perfilCard}
+
+      <div className="of-glass" style={{ borderRadius: 16, padding: 14, marginBottom: 16, display: "grid", gridTemplateColumns: "minmax(260px,1fr) auto", gap: 12, alignItems: "center" }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 950 }}>Segurança do usuário mestre</div>
+          <div style={{ fontSize: 11, color: BRAND.dim, lineHeight: 1.55, marginTop: 4 }}>
+            Use quando acessar em outro computador ou celular e quiser derrubar as outras sessões da sua conta. O navegador atual permanece conectado.
+          </div>
+          <div style={{ fontSize: 10, color: BRAND.muted, marginTop: 6 }}>
+            Conta atual: {usuarioAtual?.email || usuarioAtual?.nome || "admin"}
+          </div>
+        </div>
+        <button
+          onClick={deslogarOutrosAparelhos}
+          disabled={encerrandoSessoes}
+          style={{ padding: "10px 12px", borderRadius: 10, border: `1px solid ${BRAND.warn}66`, background: `${BRAND.warn}14`, color: BRAND.warn, cursor: encerrandoSessoes ? "wait" : "pointer", fontWeight: 950, minWidth: 210 }}
+        >
+          {encerrandoSessoes ? "Deslogando..." : "Deslogar outros aparelhos"}
+        </button>
+      </div>
+
+      <div className="of-glass" style={{ borderRadius: 16, padding: 14, marginBottom: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", marginBottom: 10 }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 900 }}>Dados por usuario e compartilhamento</div>
+            <div style={{ fontSize: 11, color: BRAND.dim, marginTop: 3 }}>Copie empresas, orcamentos, clientes e agenda entre contas sem misturar automaticamente os dados.</div>
+          </div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(5,minmax(130px,1fr))", gap: 8, alignItems: "end" }}>
+          <label style={{ display: "grid", gap: 5, fontSize: 10, color: BRAND.dim, fontWeight: 900, textTransform: "uppercase", letterSpacing: 1 }}>
+            Origem
+            <select value={transferencia.origem} onChange={(e) => setTransferencia((t) => ({ ...t, origem: e.target.value }))} style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, color: BRAND.text, borderRadius: 9, padding: 9, fontSize: 12 }}>
+              {acessos.map((a) => <option key={a.user_id} value={a.user_id}>{a.display_name || a.name || a.email || a.user_id}</option>)}
+            </select>
+          </label>
+          <label style={{ display: "grid", gap: 5, fontSize: 10, color: BRAND.dim, fontWeight: 900, textTransform: "uppercase", letterSpacing: 1 }}>
+            Destino
+            <select value={transferencia.destino} onChange={(e) => setTransferencia((t) => ({ ...t, destino: e.target.value }))} style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, color: BRAND.text, borderRadius: 9, padding: 9, fontSize: 12 }}>
+              {acessos.map((a) => <option key={a.user_id} value={a.user_id}>{a.display_name || a.name || a.email || a.user_id}</option>)}
+            </select>
+          </label>
+          <label style={{ display: "grid", gap: 5, fontSize: 10, color: BRAND.dim, fontWeight: 900, textTransform: "uppercase", letterSpacing: 1 }}>
+            Conteudo
+            <select value={transferencia.tipo} onChange={(e) => setTransferencia((t) => ({ ...t, tipo: e.target.value }))} style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, color: BRAND.text, borderRadius: 9, padding: 9, fontSize: 12 }}>
+              {USER_TRANSFER_OPTIONS.map((op) => <option key={op.id} value={op.id}>{op.label}</option>)}
+            </select>
+          </label>
+          <label style={{ display: "grid", gap: 5, fontSize: 10, color: BRAND.dim, fontWeight: 900, textTransform: "uppercase", letterSpacing: 1 }}>
+            Acao
+            <select value={transferencia.modo} onChange={(e) => setTransferencia((t) => ({ ...t, modo: e.target.value }))} style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, color: BRAND.text, borderRadius: 9, padding: 9, fontSize: 12 }}>
+              <option value="copiar">Copiar</option>
+              <option value="mover">Mover</option>
+            </select>
+          </label>
+          <button onClick={transferirDados} disabled={carregandoAcessos || acessos.length < 2} style={{ padding: "10px 12px", borderRadius: 10, border: 0, background: `linear-gradient(135deg, ${BRAND.green2}, ${BRAND.blue2})`, color: "#fff", cursor: carregandoAcessos || acessos.length < 2 ? "not-allowed" : "pointer", fontWeight: 950 }}>
+            Aplicar
+          </button>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 8, marginTop: 12 }}>
+          {acessos.map((a) => {
+            const r = resumoUsuarios[a.user_id] || {};
+            return (
+              <div key={`resumo_${a.user_id}`} style={{ border: `1px solid ${BRAND.border2}`, background: BRAND.panel2, borderRadius: 12, padding: 10 }}>
+                <div style={{ fontSize: 12, fontWeight: 950, overflowWrap: "anywhere" }}>{a.display_name || a.name || a.email || "Usuario"}</div>
+                <div style={{ fontSize: 10, color: BRAND.dim, marginTop: 3, overflowWrap: "anywhere" }}>{a.email || a.user_id}</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 5, marginTop: 8, fontSize: 10, color: BRAND.muted }}>
+                  <span>Emp.: <strong style={{ color: BRAND.green }}>{r.empresas || 0}</strong></span>
+                  <span>Orc.: <strong style={{ color: BRAND.blue }}>{r.orcamentos || 0}</strong></span>
+                  <span>Clientes: <strong style={{ color: BRAND.warn }}>{r.clientes || 0}</strong></span>
+                  <span>Agenda: <strong style={{ color: "#93C5FD" }}>{r.agenda || 0}</strong></span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
 
       <div className="of-glass" style={{ borderRadius: 16, padding: 14, marginBottom: 16 }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", marginBottom: 10 }}>
@@ -4590,6 +5138,9 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
                 <div key={a.user_id} style={{ display: "grid", gridTemplateColumns: "minmax(220px,1.5fr) 130px 110px auto", gap: 8, alignItems: "center", padding: 10, borderRadius: 12, background: BRAND.panel2, border: `1px solid ${BRAND.border2}` }}>
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontSize: 13, fontWeight: 900, overflowWrap: "anywhere" }}>{a.email || a.name || "Usuário sem e-mail"}</div>
+                    <div style={{ fontSize: 10, color: BRAND.muted, marginTop: 3 }}>
+                      Chamado: {a.display_name || a.name || "nao definido"} {a.signature_name ? ` | Assina: ${a.signature_name}` : ""}
+                    </div>
                     <div style={{ fontSize: 10, color: BRAND.dim, marginTop: 3 }}>
                       Solicitado: {tsFmt(a.requested_at)} {isSelf ? "· você" : ""}
                     </div>
@@ -4605,6 +5156,9 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
                   </select>
                   <div style={{ color: statusCor, fontSize: 12, fontWeight: 950 }}>{a.status || "pending"}</div>
                   <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                    <button onClick={() => editarPerfilAcesso(a)} style={{ padding: "8px 10px", borderRadius: 9, border: `1px solid ${BRAND.blue2}55`, background: `${BRAND.blue2}12`, color: "#93C5FD", cursor: "pointer", fontWeight: 850 }}>
+                      Perfil
+                    </button>
                     {a.status !== "approved" && (
                       <button onClick={() => atualizarAcesso(a.user_id, { status: "approved" })} style={{ padding: "8px 10px", borderRadius: 9, border: `1px solid ${BRAND.green2}55`, background: `${BRAND.green2}16`, color: BRAND.green, cursor: "pointer", fontWeight: 850 }}>
                         Aprovar
@@ -4695,6 +5249,9 @@ export default function App() {
   const [usuarioAtual, setUsuarioAtual] = useState(null);
   const [acessoPerfil, setAcessoPerfil] = useState(null);
   const [relatorioPendente, setRelatorioPendente] = useState(null);
+  const [naraConfig, setNaraConfig] = useState(DEFAULT_NARA_CONFIG);
+  const [radarPendente, setRadarPendente] = useState(null);
+  const radarAutoRef = useRef("");
 
   useEffect(() => {
     const onBackupImported = (event) => {
@@ -4722,6 +5279,7 @@ export default function App() {
         setAcessoPerfil(null);
         setClientesCRM([]);
         setRelatorioPendente(null);
+        setRadarPendente(null);
         return;
       }
 
@@ -4751,16 +5309,28 @@ export default function App() {
       setUsuarioAtual({
         id: user.id,
         nome: perfilAcesso?.name || user.email || "Usuário",
+        nomeTratamento: perfilAcesso?.display_name || perfilAcesso?.name || user.email || "Usuario",
+        nomeAssinatura: perfilAcesso?.signature_name || perfilAcesso?.display_name || perfilAcesso?.name || user.email || "",
+        cargo: perfilAcesso?.cargo || "",
+        telefone: perfilAcesso?.phone || "",
         email: user.email,
         tipo: perfilAcesso?.role === "admin" ? "admin" : "usuario",
         perfil: perfilAcesso?.role === "admin" ? "Administrador" : "Usuário",
         ativo: true,
       });
       setAutenticado(true);
-      await store.migrate([KEY_EMP, KEY_LOG, KEY_META, KEY_CRM, KEY_CHAT, KEY_CLIENTES, KEY_WHATS_RELATORIO, KEY_WEEKLY_REPORT_PENDING, KEY_WHATSAPP_MONITOR]);
-      setCrm((await store.get(KEY_CRM)) || []);
-      setClientesCRM((await store.get(KEY_CLIENTES)) || []);
-      const pendente = await store.get(KEY_WEEKLY_REPORT_PENDING);
+      const dados = await store.getMany([KEY_EMP, KEY_LOG, KEY_META, KEY_CRM, KEY_CHAT, KEY_CLIENTES, KEY_AGENDA, KEY_WHATS_RELATORIO, KEY_WEEKLY_REPORT_PENDING, KEY_WHATSAPP_MONITOR, KEY_NARA_AUTO, KEY_NARA_RADAR, KEY_BACKUP_AUTO]);
+      setCrm(dados[KEY_CRM] || []);
+      setClientesCRM(dados[KEY_CLIENTES] || []);
+      const configNara = { ...DEFAULT_NARA_CONFIG, ...(dados[KEY_NARA_AUTO] || {}) };
+      setNaraConfig(configNara);
+      const radarSalvo = dados[KEY_NARA_RADAR];
+      if (radarSalvo?.status === "pendente" && radarSalvo?.texto) {
+        setRadarPendente(radarSalvo);
+      } else {
+        setRadarPendente(null);
+      }
+      const pendente = dados[KEY_WEEKLY_REPORT_PENDING];
       if (pendente?.status === "pendente" && pendente?.texto) {
         setRelatorioPendente(pendente);
         pushToast("Nara deixou um relatorio semanal pronto para envio assistido.", "aviso");
@@ -4776,6 +5346,38 @@ export default function App() {
 
     return () => listener.subscription.unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (!autenticado || !naraConfig?.radarDiarioAtivo) return;
+    if (!crm.length && !clientesCRM.length) return;
+
+    const hoje = new Date().toISOString().slice(0, 10);
+    if (radarAutoRef.current === hoje) return;
+    radarAutoRef.current = hoje;
+
+    (async () => {
+      const configSalva = { ...DEFAULT_NARA_CONFIG, ...((await store.get(KEY_NARA_AUTO)) || {}), ...(naraConfig || {}) };
+      if (configSalva?.ultimoRadar?.dia === hoje) return;
+
+      const radar = gerarRadarDiarioNara({
+        crm,
+        clientes: clientesCRM,
+        empresas,
+        usuarioNome: nomeUsuarioSistema(usuarioAtual),
+      });
+      const pendente = { ...radar, status: "pendente" };
+      const novaConfig = {
+        ...configSalva,
+        ultimoRadar: { dia: hoje, geradoEm: new Date().toISOString() },
+      };
+
+      setRadarPendente(pendente);
+      setNaraConfig(novaConfig);
+      await store.set(KEY_NARA_RADAR, pendente);
+      await store.set(KEY_NARA_AUTO, novaConfig);
+      pushToast("Nara preparou o radar diario de acompanhamento.", "aviso");
+    })();
+  }, [autenticado, naraConfig?.radarDiarioAtivo, crm.length, clientesCRM.length, empresas.length, usuarioAtual?.id]);
 
   const [cliente, setCliente] = useState("");
   const [texto, setTexto] = useState("");
@@ -4812,6 +5414,123 @@ export default function App() {
     const logs = (await store.get(KEY_LOG)) || [];
     setLogData(logs);
     setLogOpen(true);
+  };
+
+  const sincronizarOrcamentosNosClientes = async (orcamentosNovos = []) => {
+    const itens = (Array.isArray(orcamentosNovos) ? orcamentosNovos : [orcamentosNovos]).filter(Boolean);
+    if (!itens.length) return false;
+
+    const salvos = await store.get(KEY_CLIENTES);
+    let lista = Array.isArray(salvos) ? salvos : Array.isArray(clientesCRM) ? clientesCRM : [];
+    let alterou = false;
+
+    const clienteKey = (valor = "") => textoBuscaVisual(clean(valor, 180));
+    const acharCliente = (nomeCliente) => {
+      const alvo = clienteKey(nomeCliente);
+      if (!alvo) return -1;
+      return lista.findIndex((clienteItem) => {
+        const atual = clienteKey(clienteItem.nome || clienteItem.empresa || "");
+        if (!atual) return false;
+        return atual === alvo || (alvo.length >= 8 && atual.length >= 8 && (atual.includes(alvo) || alvo.includes(atual)));
+      });
+    };
+
+    for (const orc of itens) {
+      const nomeCliente = clean(orc.cliente || orc.orcamentoCompleto?.campos?.cliente || "", 180);
+      if (!nomeCliente || !orc.id) continue;
+
+      const registro = {
+        id: `ct_orc_${orc.id}`,
+        canal: "Sistema",
+        direcao: "Registro interno",
+        tipo: orc.anexado ? "Orcamento anexado/importado" : "Orcamento gerado",
+        assunto: orc.numero || "Orcamento",
+        mensagem: `${orc.anexado ? "Orcamento anexado/importado" : "Orcamento gerado"} no sistema: ${orc.numero || orc.id}. Valor: ${brl(orc.valorGlobal ?? orc.valor)}.`,
+        orcamentoId: orc.id,
+        orcamentoNumero: orc.numero || "",
+        orcamentoTitulo: nomeCliente,
+        criadoEm: orc.criadoEm || new Date().toISOString(),
+        userId: orc.userId || usuarioAtual?.id || "admin",
+        origem: orc.anexado ? (orc.origemImportacao || "anexo_orcamento") : "geracao_orcamento",
+      };
+
+      const vinculo = {
+        id: `ocli_${orc.id}`,
+        origem: orc.anexado ? (orc.origemImportacao || "anexo") : "sistema",
+        orcamentoId: orc.id,
+        numero: orc.numero || "",
+        titulo: nomeCliente,
+        empresaNome: orc.empresaNome || "",
+        valor: orc.valorGlobal ?? orc.valor ?? "",
+        status: orc.status || "Aberto",
+        resumo: clean(orc.lembreteIA || orc.descricaoArquivo || orc.resumoConversas || "", 2200),
+        arquivoNome: orc.arquivoNome || "",
+        arquivoTipo: orc.arquivoTipo || "",
+        arquivoTamanho: orc.arquivoTamanho || 0,
+        historico: [registro],
+        userId: orc.userId || usuarioAtual?.id || "admin",
+        criadoEm: orc.criadoEm || new Date().toISOString(),
+        anexadoEm: new Date().toISOString(),
+        atualizadoEm: new Date().toISOString(),
+      };
+
+      const idx = acharCliente(nomeCliente);
+      if (idx >= 0) {
+        const clienteAtual = lista[idx];
+        const vinculados = Array.isArray(clienteAtual.orcamentosVinculados) ? clienteAtual.orcamentosVinculados : [];
+        if (vinculados.some((item) => item.orcamentoId === orc.id)) continue;
+        const contatos = Array.isArray(clienteAtual.contatos) ? clienteAtual.contatos : [];
+        lista = lista.map((clienteItem, itemIdx) => itemIdx === idx ? {
+          ...clienteItem,
+          valorPotencial: clienteItem.valorPotencial || orc.valorGlobal || orc.valor || "",
+          proximoContato: clienteItem.proximoContato || orc.proximoContato || "",
+          proximoPasso: clienteItem.proximoPasso || "Acompanhar retorno do orcamento vinculado.",
+          contatos: [registro, ...contatos].slice(0, 160),
+          orcamentosVinculados: [vinculo, ...vinculados].slice(0, 80),
+          atualizadoEm: new Date().toISOString(),
+        } : clienteItem);
+        alterou = true;
+      } else {
+        lista = [{
+          id: `cli_orc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          nome: nomeCliente,
+          empresa: nomeCliente,
+          cargo: "",
+          email: "",
+          email2: "",
+          telefone: "",
+          whatsapp: "",
+          telefone2: "",
+          documento: "",
+          endereco: "",
+          cidadeUf: "",
+          segmento: "",
+          decisor: "",
+          origem: `Orcamento ${orc.numero || ""}`.trim(),
+          perfil: "",
+          status: statusFunilOrcamento(orc),
+          temperatura: isAtrasadoOrcamento(orc) ? "Quente" : "Morno",
+          proximoContato: orc.proximoContato || "",
+          valorPotencial: orc.valorGlobal || orc.valor || "",
+          observacoes: clean(orc.lembreteIA || orc.descricaoArquivo || "", 1200),
+          proximoPasso: orc.proximoContato ? `Retomar contato em ${orc.proximoContato}` : "Acompanhar retorno do orcamento vinculado.",
+          lembreteJade: "",
+          jade: null,
+          contatos: [registro],
+          orcamentosVinculados: [vinculo],
+          userId: orc.userId || usuarioAtual?.id || "admin",
+          criadoEm: new Date().toISOString(),
+          atualizadoEm: new Date().toISOString(),
+        }, ...lista];
+        alterou = true;
+      }
+    }
+
+    if (!alterou) return false;
+    setClientesCRM(lista);
+    const ok = await store.set(KEY_CLIENTES, lista);
+    if (!ok) pushToast("Orcamento salvo, mas nao foi possivel sincronizar o perfil do cliente na nuvem.", "erro");
+    return ok;
   };
 
   const abrirRelatorioPendente = async () => {
@@ -4970,15 +5689,17 @@ export default function App() {
 
       if (isPdf) {
         try {
-          textoExtraido = await lerTextoPDF(file);
+          textoExtraido = await lerTextoPDF(file, { maxPages: 12, maxChars: 50000 });
         } catch (error) {
           console.warn("Falha ao extrair texto do PDF:", error);
         }
 
-        try {
-          imagem = await pdfParaImagemCartaoCNPJ(file);
-        } catch (error) {
-          console.warn("Falha ao renderizar PDF para OCR:", error);
+        if (clean(textoExtraido).length < 80) {
+          try {
+            imagem = await pdfParaImagemCartaoCNPJ(file);
+          } catch (error) {
+            console.warn("Falha ao renderizar PDF para OCR:", error);
+          }
         }
       } else {
         imagem = await imagemParaLeitura(file);
@@ -4997,7 +5718,7 @@ export default function App() {
         body: JSON.stringify({
           filename: file.name || "anexo",
           mimeType: file.type || "",
-          texto: textoCurto(textoExtraido, 65000),
+          texto: textoCurto(textoExtraido, 50000),
           imagem,
         }),
       });
@@ -5051,6 +5772,28 @@ export default function App() {
   const handleGerar = async () => {
     if (!canGerar || gerando) return;
 
+    const checklistGeracao = naraConfig?.checklistGeracaoAtivo === false
+      ? { ok: true, bloqueios: [], avisos: [], acoes: [], parecidos: [] }
+      : gerarChecklistPreGeracao({
+          cliente,
+          texto,
+          obs,
+          selecao,
+          empresas,
+          crm,
+        });
+
+    if (!checklistGeracao.ok) {
+      const mensagem = `Checklist da Nara bloqueou a geracao: ${checklistGeracao.bloqueios.join(" | ")}`;
+      setErroGeracao(mensagem);
+      pushToast(mensagem, "erro");
+      return;
+    }
+
+    if (checklistGeracao.avisos?.length) {
+      pushToast(`Nara ajustou ${checklistGeracao.avisos.length} ponto(s) antes de gerar.`, "aviso");
+    }
+
     setGerando(true);
     setIaStatus("Gerando orçamentos com IA...");
     setErroGeracao("");
@@ -5062,6 +5805,7 @@ export default function App() {
         obs: textoCurto(obs, 5000),
         empresas: empresasCompactasParaGeracao(empresas, selecao),
         selecao,
+        automacaoNara: checklistGeracao,
       };
 
       const response = await fetch("/api/generate-budget", {
@@ -5104,6 +5848,7 @@ export default function App() {
           identidadeDocumento: ed.identidadeDocumento || {},
           materiaisTabela: Array.isArray(ed.materiaisTabela) ? ed.materiaisTabela : [],
           precificacao: ed.precificacao || {},
+          checklistNara: checklistGeracao,
           retornoIA: ed,
           campos: {
             cliente,
@@ -5131,17 +5876,31 @@ export default function App() {
           status: "Aberto",
           proximoContato: "",
           lembreteIA: "",
+          checklistNara: checklistGeracao,
+          orcamentosParecidosNara: checklistGeracao.parecidos || [],
           userId: usuarioAtual?.id || "admin",
           criadoEm: new Date().toISOString(),
           atualizadoEm: new Date().toISOString(),
+          conversas: [{
+            id: `conv_gerado_${Date.now()}_${s.empId}`,
+            canal: "Sistema",
+            direcao: "interna",
+            tipo: "Orcamento gerado",
+            mensagem: checklistGeracao.avisos?.length
+              ? `Orcamento gerado com checklist da Nara. Avisos tratados: ${checklistGeracao.avisos.join(" | ")}`
+              : "Orcamento gerado no sistema e aguardando tratativa comercial real.",
+            criadoEm: new Date().toISOString(),
+            origem: "sistema",
+            usuarioNome: nomeUsuarioSistema(usuarioAtual),
+          }],
           orcamentoCompleto: novos[s.empId],
         };
       });
-      setCrm((prev) => {
-        const atualizado = [...novosCRM, ...prev];
-        store.set(KEY_CRM, atualizado);
-        return atualizado;
-      });
+      const crmAtual = (await store.get(KEY_CRM)) || crm;
+      const atualizadoCRM = [...novosCRM, ...crmAtual];
+      setCrm(atualizadoCRM);
+      await store.set(KEY_CRM, atualizadoCRM);
+      await sincronizarOrcamentosNosClientes(novosCRM);
 
 
       if (selecao.length > 0) {
@@ -5179,6 +5938,7 @@ export default function App() {
       // Quando há timbrado, a PÁGINA do PDF é criada com as MESMAS dimensões
       // do arquivo enviado. Assim o timbrado entra inteiro (sem corte e sem
       // distorção) e o cabeçalho/rodapé dele nunca são cortados.
+      const jsPDF = await getJsPdf();
       const temTimbrado = Boolean(emp.papelTimbrado);
       const tW = Number(emp.timbradoLarguraPt) || 595.28;
       const tH = Number(emp.timbradoAlturaPt) || 841.89;
@@ -6017,11 +6777,11 @@ export default function App() {
 
   // Salva no CRM/Gestão um orçamento anexado externamente.
   const salvarOrcamentoAnexado = async (item, options = {}) => {
-    setCrm((prev) => {
-      const atualizado = [item, ...prev];
-      store.set(KEY_CRM, atualizado);
-      return atualizado;
-    });
+    const crmAtual = (await store.get(KEY_CRM)) || crm;
+    const atualizado = [item, ...crmAtual.filter((orc) => orc.id !== item.id)];
+    setCrm(atualizado);
+    await store.set(KEY_CRM, atualizado);
+    await sincronizarOrcamentosNosClientes([item]);
     await incOrcamentos(1);
     if (!options.keepOpen) setAnexarOpen(false);
     pushToast("Orçamento anexado e adicionado ao acompanhamento.", "ok");
@@ -6038,7 +6798,7 @@ export default function App() {
         <AccessStatusScreen
           perfil={acessoPerfil}
           onSignOut={async () => {
-            await supabase.auth.signOut();
+            await supabase.auth.signOut({ scope: "local" });
             setAcessoPerfil(null);
             setUsuarioAtual(null);
             setAutenticado(false);
@@ -6064,7 +6824,7 @@ export default function App() {
   }
 
   return (
-    <div style={{ minHeight: "100vh", background: `radial-gradient(circle at 0% 0%, ${BRAND.green2}12, transparent 28%), radial-gradient(circle at 100% 5%, ${BRAND.blue2}12, transparent 28%), ${BRAND.bg}`, color: BRAND.text, fontFamily: "'Segoe UI', system-ui, sans-serif", display: "flex", flexDirection: "column" }}>
+    <div className="of-app-shell" style={{ minHeight: "100vh", background: `radial-gradient(circle at 0% 0%, ${BRAND.green2}12, transparent 28%), radial-gradient(circle at 100% 5%, ${BRAND.blue2}12, transparent 28%), ${BRAND.bg}`, color: BRAND.text, fontFamily: "'Segoe UI', system-ui, sans-serif", display: "flex", flexDirection: "column" }}>
       <style>{`
         :root {
           --of-bg: #030712;
@@ -6089,6 +6849,90 @@ export default function App() {
         button:hover { filter: brightness(1.1); transform: translateY(-1px); }
         button:active { transform: translateY(0); }
         input:focus, textarea:focus, select:focus { border-color: ${BRAND.green2} !important; box-shadow: 0 0 0 3px ${BRAND.green2}18; }
+        img, canvas, svg, video { max-width: 100%; }
+        .of-app-shell { min-height: 100vh; min-height: 100dvh; overflow-x: hidden; }
+        .of-topbar { isolation: isolate; }
+        .of-main-nav { scrollbar-width: none; }
+        .of-main-nav::-webkit-scrollbar { display: none; }
+        @media (max-width: 1180px) {
+          .of-app-shell [style*="repeat(4"] { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+          .of-app-shell [style*="repeat(5"] { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+        }
+        @media (max-width: 820px) {
+          body { overscroll-behavior-y: contain; }
+          .of-app-shell { min-height: 100dvh !important; width: 100vw !important; }
+          .of-topbar {
+            position: sticky !important;
+            top: 0 !important;
+            height: auto !important;
+            min-height: 0 !important;
+            padding: max(8px, env(safe-area-inset-top)) 10px 8px !important;
+            flex-direction: column !important;
+            align-items: stretch !important;
+            gap: 8px !important;
+            z-index: 1000 !important;
+          }
+          .of-topbar > div { width: 100% !important; min-width: 0 !important; }
+          .of-topbar-identity { justify-content: space-between !important; gap: 8px !important; }
+          .of-topbar-actions { align-items: stretch !important; gap: 8px !important; }
+          .of-main-nav {
+            width: 100% !important;
+            max-width: 100% !important;
+            overflow-x: auto !important;
+            overflow-y: hidden !important;
+            justify-content: flex-start !important;
+            border-radius: 14px !important;
+            padding: 5px !important;
+            scroll-snap-type: x proximity;
+            -webkit-overflow-scrolling: touch;
+          }
+          .of-main-nav button {
+            flex: 0 0 auto !important;
+            min-height: 40px !important;
+            padding: 9px 11px !important;
+            font-size: 11px !important;
+            white-space: nowrap !important;
+            scroll-snap-align: start;
+          }
+          .of-app-shell > img[aria-hidden="true"] { display: none !important; }
+          .of-watermark { display: none !important; }
+          .of-app-shell [style*="display: grid"][style*="overflow: hidden"] { overflow: visible !important; }
+          .of-app-shell [style*="display: flex"][style*="overflow: hidden"] { overflow: visible !important; flex-direction: column !important; }
+          .of-app-shell [style*="grid-template-columns"] { grid-template-columns: minmax(0, 1fr) !important; }
+          .of-app-shell [style*="width: 262px"] { width: 100% !important; max-height: 42dvh !important; border-right: 0 !important; border-bottom: 1px solid var(--of-border) !important; }
+          .of-app-shell [style*="padding: 22px"], .of-app-shell [style*="padding: 18px"], .of-app-shell [style*="padding: 24px"] { padding: 12px !important; }
+          .of-app-shell [style*="border-radius: 18px"], .of-app-shell [style*="border-radius: 16px"] { border-radius: 14px !important; }
+          .of-app-shell [style*="minmax(290px"] { grid-template-columns: minmax(0, 1fr) !important; }
+          .of-app-shell [style*="white-space: nowrap"] { white-space: normal !important; overflow-wrap: anywhere !important; }
+          .of-app-shell input, .of-app-shell textarea, .of-app-shell select {
+            font-size: 16px !important;
+            min-height: 44px;
+            max-width: 100%;
+          }
+          .of-app-shell textarea { line-height: 1.45 !important; }
+          .of-app-shell button {
+            min-height: 40px;
+            touch-action: manipulation;
+          }
+          .of-app-shell table {
+            display: block;
+            max-width: 100%;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+          }
+          .of-app-shell * {
+            min-width: 0;
+          }
+        }
+        @media (max-width: 520px) {
+          .of-topbar-identity { flex-wrap: wrap !important; }
+          .of-topbar-actions { flex-direction: column !important; }
+          .of-topbar-actions > button { width: 100% !important; }
+          .of-main-nav { border-radius: 12px !important; }
+          .of-main-nav button { padding: 8px 10px !important; }
+          .of-app-shell [style*="font-size: 44px"], .of-app-shell [style*="font-size: 48px"] { font-size: 34px !important; }
+          .of-app-shell [style*="font-size: 28px"], .of-app-shell [style*="font-size: 30px"] { font-size: 23px !important; }
+        }
       `}</style>
       <Toast toast={toast} />
 
@@ -6118,8 +6962,8 @@ export default function App() {
         onDispensar={dispensarRelatorioPendente}
       />
 
-      <div style={{ position: "relative", zIndex: 2, background: "rgba(10,20,32,.92)", backdropFilter: "blur(12px)", borderBottom: `1px solid ${BRAND.border}`, padding: "0 16px", height: 84, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+      <div className="of-topbar" style={{ position: "relative", zIndex: 2, background: "rgba(10,20,32,.92)", backdropFilter: "blur(12px)", borderBottom: `1px solid ${BRAND.border}`, padding: "0 16px", height: 84, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+        <div className="of-topbar-identity" style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <OrcaFlowLogo onClick={resetInicio} />
           <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "3px 9px", borderRadius: 20, background: status === "ok" ? `${BRAND.green2}14` : BRAND.border2, border: `1px solid ${status === "ok" ? `${BRAND.green2}33` : BRAND.border2}` }}>
             <span style={{ width: 6, height: 6, borderRadius: "50%", background: corDB[status] || BRAND.warn }} />
@@ -6130,14 +6974,16 @@ export default function App() {
           </div>
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{ display: "flex", gap: 3, background: BRAND.bg, borderRadius: 10, padding: 4, border: `1px solid ${BRAND.border2}` }}>
+        <div className="of-topbar-actions" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div className="of-main-nav" style={{ display: "flex", gap: 3, background: BRAND.bg, borderRadius: 10, padding: 4, border: `1px solid ${BRAND.border2}` }}>
             {[
               ["gestao", "📊 Gestão"],
               ["clientes", "👥 Clientes"],
               ["orcamento", "✦ Orçamento"],
+              ["agenda", "Agenda"],
               ["whatsapp", "WhatsApp"],
               ["chat", "Nara"],
+              ["perfil", "Meu Perfil"],
               ["empresas", "🏢 Empresas"],
               ...(usuarioAtual?.tipo === "admin" ? [["usuarios", "🔐 Acessos"]] : []),
               ["banco", "🗄 Banco"],
@@ -6145,7 +6991,7 @@ export default function App() {
               <button key={v} onClick={() => setView(v)} style={{ padding: "7px 12px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 850, background: view === v ? `linear-gradient(135deg, ${BRAND.green2}, #15803D)` : "transparent", color: view === v ? "#fff" : BRAND.dim, transition: "all .22s ease" }}>{l}</button>
             ))}
           </div>
-          <button onClick={async () => { await supabase.auth.signOut(); setAutenticado(false); setUsuarioAtual(null); setAcessoPerfil(null); setClientesCRM([]); }} title="Sair" style={{ padding: "8px 10px", borderRadius: 10, border: `1px solid ${BRAND.border2}`, background: "transparent", color: BRAND.muted, cursor: "pointer", fontWeight: 900 }}>Sair</button>
+          <button onClick={async () => { await supabase.auth.signOut({ scope: "local" }); setAutenticado(false); setUsuarioAtual(null); setAcessoPerfil(null); setClientesCRM([]); }} title="Sair" style={{ padding: "8px 10px", borderRadius: 10, border: `1px solid ${BRAND.border2}`, background: "transparent", color: BRAND.muted, cursor: "pointer", fontWeight: 900 }}>Sair</button>
         </div>
       </div>
 
@@ -6162,6 +7008,11 @@ export default function App() {
           abrirOrcamentoSalvo={abrirOrcamentoSalvo}
           baixarOrcamento={baixarOrcamento}
           onAnexar={() => setAnexarOpen(true)}
+          naraConfig={naraConfig}
+          setNaraConfig={setNaraConfig}
+          radarPendente={radarPendente}
+          setRadarPendente={setRadarPendente}
+          exportarBackup={exportarBackup}
         />
       )}
 
@@ -6170,13 +7021,23 @@ export default function App() {
           clientes={clientesCRM}
           setClientes={setClientesCRM}
           crm={crm}
+          setCrm={setCrm}
           empresas={empresas}
           pushToast={pushToast}
           usuarioAtual={usuarioAtual}
-          abrirOrcamentoSalvo={abrirOrcamentoSalvo}
-          baixarOrcamento={baixarOrcamento}
           lerTextoPDF={lerTextoPDF}
           imagemParaLeitura={imagemParaLeitura}
+        />
+      )}
+
+      {view === "agenda" && (
+        <AgendaClientesPanel
+          clientes={clientesCRM}
+          setClientes={setClientesCRM}
+          crm={crm}
+          setCrm={setCrm}
+          pushToast={pushToast}
+          usuarioAtual={usuarioAtual}
         />
       )}
 
@@ -6197,10 +7058,15 @@ export default function App() {
           crm={crm}
           clientes={clientesCRM}
           pushToast={pushToast}
+          usuarioAtual={usuarioAtual}
         />
       )}
 
       {view === "usuarios" && (
+        <UsuariosPanel usuarios={usuarios} setUsuarios={setUsuarios} usuarioAtual={usuarioAtual} setUsuarioAtual={setUsuarioAtual} pushToast={pushToast} />
+      )}
+
+      {view === "perfil" && (
         <UsuariosPanel usuarios={usuarios} setUsuarios={setUsuarios} usuarioAtual={usuarioAtual} setUsuarioAtual={setUsuarioAtual} pushToast={pushToast} />
       )}
 
