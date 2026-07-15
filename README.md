@@ -28,6 +28,7 @@ Aplicacao React/Vite para gerar, revisar, salvar e exportar orcamentos comerciai
 - Historico de conversas por orcamento, com canal, direcao da mensagem, tipo de interacao, resumo IA e sugestao IA de resposta ao cliente.
 - Cadastro de empresa com leitura IA do PDF do Cartao CNPJ para preencher dados cadastrais, assinatura e rodape; PDFs escaneados usam OCR visual com IA e PDFs com texto mantem fallback local.
 - Controle de acesso com aprovacao: o primeiro usuario vira admin, novos cadastros ficam pendentes e so entram apos aprovacao.
+- Reset seguro da base comercial pela aba Banco ou pelo SQL `LIMPAR-BASE-COMERCIAL-MANTER-EMPRESAS.sql`, mantendo empresas, usuarios e acessos.
 
 ## Variaveis de ambiente
 

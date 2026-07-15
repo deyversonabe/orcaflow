@@ -1,6 +1,6 @@
 # OrcaFlow Studio AI - Relatorio completo de estrutura e atualizacoes
 
-Versao atual do projeto: 3.3.5  
+Versao atual do projeto: 3.3.6  
 Data do registro: 15/07/2026  
 Projeto: OrcaFlow Studio AI  
 Dominio em uso: orcaflow.ia.br  
@@ -37,6 +37,7 @@ O sistema permite:
 - lembrar somente o e-mail/usuario de acesso, nunca a senha;
 - exigir nova senha ao sair ou fechar a aba do navegador;
 - permitir que o administrador copie ou mova dados entre usuarios.
+- permitir reset controlado da base comercial, mantendo empresas e acessos.
 
 ## 2. Estrutura atual de pastas
 
@@ -493,12 +494,13 @@ outputs/orcaflow-studio-ai-3.3.2-resumo-sem-orc.zip
 outputs/orcaflow-studio-ai-3.3.3-crm-sem-cliente-fantasma.zip
 outputs/orcaflow-studio-ai-3.3.4-logo-na-aba-navegador.zip
 outputs/orcaflow-studio-ai-3.3.5-completo-crm-clientes-limpo.zip
+outputs/orcaflow-studio-ai-3.3.6-completo-reset-base-comercial.zip
 ```
 
 Versao recomendada para subir:
 
 ```text
-outputs/orcaflow-studio-ai-3.3.5-completo-crm-clientes-limpo.zip
+outputs/orcaflow-studio-ai-3.3.6-completo-reset-base-comercial.zip
 ```
 
 ## 15. Validacoes realizadas
@@ -525,7 +527,7 @@ Arquivos sensiveis no zip: nao encontrados
 1. Usar o zip:
 
 ```text
-outputs/orcaflow-studio-ai-3.3.5-completo-crm-clientes-limpo.zip
+outputs/orcaflow-studio-ai-3.3.6-completo-reset-base-comercial.zip
 ```
 
 2. Enviar os arquivos para o GitHub.
@@ -660,4 +662,24 @@ outputs/orcaflow-studio-ai-3.3.4-logo-na-aba-navegador.zip
 
 ```text
 outputs/orcaflow-studio-ai-3.3.5-completo-crm-clientes-limpo.zip
+```
+
+---
+
+# Atualizacao 3.3.6 - reset da base comercial mantendo empresas
+
+## O que foi ajustado
+
+- Foi criada uma acao de administrador na aba Banco para zerar a base comercial.
+- A limpeza remove orcamentos, clientes CRM, agenda, historico da Nara/chat, inbox WhatsApp, lixeira, auditoria comercial, relatorios pendentes e contadores.
+- A limpeza preserva cadastros de empresas, usuarios, acessos, solicitacoes de senha, configuracao da Nara e numero de WhatsApp dos relatorios.
+- A limpeza grava valores vazios no Supabase em vez de apenas apagar registros, evitando que dados antigos voltem pelo cache local do navegador.
+- Foi criado o arquivo `LIMPAR-BASE-COMERCIAL-MANTER-EMPRESAS.sql` para executar a limpeza diretamente no Supabase SQL Editor.
+- Antes da limpeza pelo SQL, os dados antigos das chaves comerciais sao copiados para `public.user_state_reset_backup`.
+- O CRM manteve a regra reforcada: orcamentos soltos nao viram cliente e so aparecem no cliente quando forem vinculados manualmente.
+
+## Arquivo final desta versao
+
+```text
+outputs/orcaflow-studio-ai-3.3.6-completo-reset-base-comercial.zip
 ```
