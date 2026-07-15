@@ -1,6 +1,6 @@
 # OrcaFlow Studio AI - Relatorio completo de estrutura e atualizacoes
 
-Versao atual do projeto: 3.2.8  
+Versao atual do projeto: 3.3.0  
 Data do registro: 14/07/2026  
 Projeto: OrcaFlow Studio AI  
 Dominio em uso: orcaflow.ia.br  
@@ -25,9 +25,12 @@ O sistema permite:
 - visualizar pipeline comercial por etapa, quantidade e valor;
 - importar orcamentos antigos em massa;
 - criar e acompanhar clientes em CRM;
+- manter cliente e orcamento como cadastros separados, com vinculo manual entre eles;
+- sugerir clientes compativeis para orcamentos sem transformar orcamento em cliente automaticamente;
 - segmentar clientes com etiquetas inteligentes e filtros comerciais;
 - preparar campanhas assistidas sem envio automatico pago;
 - usar playbooks manuais de follow-up, cobranca, reativacao e pedido de dados;
+- operar o CRM com lateral mais limpa, cards compactos e acoes em lote separadas;
 - registrar historico real de contatos por cliente e por orcamento;
 - usar a assistente Nara para mensagens, follow-up, analise comercial e relatorios;
 - controlar usuarios, acessos e isolamento de dados por usuario;
@@ -481,12 +484,14 @@ outputs/orcaflow-studio-ai-3.2.5-agenda-telefonica.zip
 outputs/orcaflow-studio-ai-3.2.6-exclusao-orcamentos.zip
 outputs/orcaflow-studio-ai-3.2.7-upgrades-gestao.zip
 outputs/orcaflow-studio-ai-3.2.8-manychat-assistido-gratis.zip
+outputs/orcaflow-studio-ai-3.2.9-crm-limpo-acoes-em-lote.zip
+outputs/orcaflow-studio-ai-3.3.0-vinculo-manual-clientes-orcamentos.zip
 ```
 
 Versao recomendada para subir:
 
 ```text
-outputs/orcaflow-studio-ai-3.2.8-manychat-assistido-gratis.zip
+outputs/orcaflow-studio-ai-3.3.0-vinculo-manual-clientes-orcamentos.zip
 ```
 
 ## 15. Validacoes realizadas
@@ -513,7 +518,7 @@ Arquivos sensiveis no zip: nao encontrados
 1. Usar o zip:
 
 ```text
-outputs/orcaflow-studio-ai-3.2.7-upgrades-gestao.zip
+outputs/orcaflow-studio-ai-3.3.0-vinculo-manual-clientes-orcamentos.zip
 ```
 
 2. Enviar os arquivos para o GitHub.
@@ -534,6 +539,9 @@ outputs/orcaflow-studio-ai-3.2.7-upgrades-gestao.zip
 - admin copiar empresa cadastrada para outro usuario;
 - gerar orcamento;
 - salvar no CRM;
+- conferir que orcamento sem cliente vinculado nao cria cliente automaticamente;
+- vincular cliente a um orcamento pela Gestao;
+- vincular orcamento ao perfil de cliente pela aba Clientes;
 - apagar orcamento individual e apagar orcamentos selecionados em bloco;
 - restaurar orcamento pela lixeira;
 - conferir auditoria de acoes;
@@ -542,6 +550,7 @@ outputs/orcaflow-studio-ai-3.2.7-upgrades-gestao.zip
 - usar filtros por etiqueta inteligente;
 - gerar campanha assistida e abrir WhatsApp externo manualmente;
 - preparar playbooks sem envio automatico.
+- conferir CRM com lista lateral compacta e acoes em lote no painel principal.
 
 ## 17. Pontos que ainda podem evoluir
 
@@ -565,8 +574,8 @@ O sistema esta estruturado para operar como uma plataforma multiusuario:
 - usuario comum trabalha com sua propria base;
 - administrador controla acessos e compartilhamentos;
 - Nara atua como assistente comercial;
-- CRM guarda historico real por cliente e por orcamento;
+- CRM guarda historico real por cliente e por orcamento, somente quando houver vinculo real;
 - orcamentos respeitam o DNA de cada empresa;
 - banco fica em nuvem pelo Supabase.
 
-Antes de considerar tudo em producao, a etapa mais importante e rodar o `schema.sql` atualizado no Supabase e redeployar a versao 3.2.8 no Vercel.
+Antes de considerar tudo em producao, a etapa mais importante e rodar o `schema.sql` atualizado no Supabase e redeployar a versao 3.3.0 no Vercel.
