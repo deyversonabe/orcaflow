@@ -300,7 +300,7 @@ function perfilDocumentoEmpresa(empresa = {}, indice = 0) {
   if (/power|service|operacional|execucao/.test(alvo)) {
     return {
       tipo: "execucao-operacional",
-      tituloDocumento: "Orcamento operacional",
+      tituloDocumento: "Proposta operacional",
       tom: "direto, pratico e voltado a capacidade de mobilizacao e execucao",
       ordemSecoes: ["objetivo", "escopo", "recursos", "materiais", "fechamento"],
       rotulos: {
@@ -349,7 +349,7 @@ function perfilDocumentoEmpresa(empresa = {}, indice = 0) {
 
   const variantes = [
     "proposta institucional",
-    "orcamento executivo",
+    "proposta executiva",
     "documento comercial sintetico",
     "proposta tecnica objetiva",
   ];
@@ -613,6 +613,8 @@ REGRAS GERAIS
 - Nao use linguagem promocional generica.
 - Nao crie escopos nao informados.
 - Use apenas informacoes fornecidas pelo usuario e pelo cadastro da empresa.
+- Somente empresas de perfil "loja-materiais-eletricos" podem usar "orcamento", "cotacao" ou codigo do tipo ORC no titulo visivel do documento.
+- Para todas as demais empresas, use "proposta", "atendimento", "solucao", "documento tecnico" ou outro titulo compativel com o DNA, sem numero/codigo no titulo ou nos textos.
 - Se uma informacao nao foi fornecida, deixe o campo vazio ou escreva somente o que for tecnicamente seguro.
 - O valor global deve ser usado somente quando estiver informado na selecao da empresa.
 - Nao incluir prazo, data, validade, garantia, condicoes de pagamento, condicoes comerciais, cronograma ou condicoes para execucao.
