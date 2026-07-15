@@ -578,11 +578,41 @@ function clienteTemContatoReal(cliente = {}) {
   );
 }
 
+function clienteTemHistoricoHumano(cliente = {}) {
+  return (Array.isArray(cliente.contatos) ? cliente.contatos : []).some((contato) => {
+    const origem = textoBusca(contato?.origem || "");
+    const canal = textoBusca(contato?.canal || "");
+    const direcao = textoBusca(contato?.direcao || "");
+    const tipo = textoBusca(contato?.tipo || "");
+    const ehRegistroAutomatico = /sistema|nara|jade|ia|vinculo|orcamento|orçamento|proposta|cotacao|cotação/.test(origem);
+    const canalHumano = /whatsapp|email|e-mail|telefone|ligacao|ligação|presencial|reuniao|reunião/.test(canal);
+    const direcaoHumana = /cliente respondeu|empresa enviou|entrada|saida|saída/.test(direcao);
+    const tipoHumano = /conversa|follow|retorno|cobranca|cobrança|duvida|dúvida|reuniao|reunião/.test(tipo);
+    return !ehRegistroAutomatico || canalHumano || direcaoHumana || tipoHumano;
+  });
+}
+
 function clienteCriadoApenasDeOrcamento(cliente = {}) {
   const origem = textoBusca(cliente.origem || "");
-  const origemOrcamento = /\borcamento\b|\borc\b|proposta|cotacao/.test(origem);
+  const origemOrcamento = /\borcamento\b|\borçamento\b|\borc\b|proposta|cotacao|cotação/.test(origem);
+  const textoCadastro = textoBusca([
+    cliente.nome,
+    cliente.empresa,
+    cliente.origem,
+    cliente.proximoPasso,
+    cliente.lembreteJade,
+    cliente.observacoes,
+    cliente.perfil,
+    cliente.intencao,
+    cliente.objecao,
+    ...(Array.isArray(cliente.etiquetas) ? cliente.etiquetas : []),
+  ].filter(Boolean).join(" "));
+  const temSinalDeOrcamentoSolto = /\borc[-\s]*\d+|\borcamento\b|orçamento aberto|proposta aberta|cotacao|cotação/.test(textoCadastro);
   const semVinculoManual = !Array.isArray(cliente.orcamentosVinculados) || cliente.orcamentosVinculados.length === 0;
-  return origemOrcamento && !clienteTemContatoReal(cliente) && semVinculoManual;
+  const semHistoricoHumano = !clienteTemHistoricoHumano(cliente);
+  if (!semVinculoManual || !semHistoricoHumano) return false;
+  if (origemOrcamento) return true;
+  return !clienteTemContatoReal(cliente) && temSinalDeOrcamentoSolto;
 }
 
 function clienteVisivelNoCRM(cliente = {}) {
