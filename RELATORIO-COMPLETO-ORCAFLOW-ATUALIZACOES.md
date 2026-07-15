@@ -1,6 +1,6 @@
 # OrcaFlow Studio AI - Relatorio completo de estrutura e atualizacoes
 
-Versao atual do projeto: 3.3.7  
+Versao atual do projeto: 3.3.8  
 Data do registro: 15/07/2026  
 Projeto: OrcaFlow Studio AI  
 Dominio em uso: orcaflow.ia.br  
@@ -39,6 +39,7 @@ O sistema permite:
 - permitir que o administrador copie ou mova dados entre usuarios.
 - permitir reset controlado da base comercial, mantendo empresas e acessos.
 - usar favicon e logos otimizadas com fundo preto para melhorar a leitura na aba do navegador e no sistema.
+- corrigir erro de perfil comercial quando o Supabase ainda nao possui a funcao `update_my_app_profile`.
 
 ## 2. Estrutura atual de pastas
 
@@ -497,12 +498,13 @@ outputs/orcaflow-studio-ai-3.3.4-logo-na-aba-navegador.zip
 outputs/orcaflow-studio-ai-3.3.5-completo-crm-clientes-limpo.zip
 outputs/orcaflow-studio-ai-3.3.6-completo-reset-base-comercial.zip
 outputs/orcaflow-studio-ai-3.3.7-completo-logo-favicon-preto.zip
+outputs/orcaflow-studio-ai-3.3.8-completo-correcao-perfil-supabase.zip
 ```
 
 Versao recomendada para subir:
 
 ```text
-outputs/orcaflow-studio-ai-3.3.7-completo-logo-favicon-preto.zip
+outputs/orcaflow-studio-ai-3.3.8-completo-correcao-perfil-supabase.zip
 ```
 
 ## 15. Validacoes realizadas
@@ -529,7 +531,7 @@ Arquivos sensiveis no zip: nao encontrados
 1. Usar o zip:
 
 ```text
-outputs/orcaflow-studio-ai-3.3.7-completo-logo-favicon-preto.zip
+outputs/orcaflow-studio-ai-3.3.8-completo-correcao-perfil-supabase.zip
 ```
 
 2. Enviar os arquivos para o GitHub.
@@ -703,4 +705,31 @@ outputs/orcaflow-studio-ai-3.3.6-completo-reset-base-comercial.zip
 
 ```text
 outputs/orcaflow-studio-ai-3.3.7-completo-logo-favicon-preto.zip
+```
+
+---
+
+# Atualizacao 3.3.8 - correcao do perfil comercial no Supabase
+
+## O que foi ajustado
+
+- Foi criado o arquivo `CORRIGIR-ERRO-PERFIL-USUARIO.sql`.
+- O SQL recria a funcao `public.update_my_app_profile(p_display_name, p_signature_name, p_phone, p_cargo)`.
+- O SQL garante as colunas `display_name`, `signature_name`, `phone` e `cargo` na tabela `public.app_users`.
+- O SQL concede permissao de execucao para usuarios autenticados.
+- Foi incluido `notify pgrst, 'reload schema';` para forcar o Supabase/PostgREST a recarregar o cache do schema.
+- O `supabase/schema.sql` completo tambem recebeu o recarregamento de cache ao final.
+
+## Acao obrigatoria para corrigir o erro mostrado na tela
+
+Rodar no Supabase SQL Editor:
+
+```text
+CORRIGIR-ERRO-PERFIL-USUARIO.sql
+```
+
+## Arquivo final desta versao
+
+```text
+outputs/orcaflow-studio-ai-3.3.8-completo-correcao-perfil-supabase.zip
 ```

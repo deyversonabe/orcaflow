@@ -30,6 +30,7 @@ Aplicacao React/Vite para gerar, revisar, salvar e exportar orcamentos comerciai
 - Controle de acesso com aprovacao: o primeiro usuario vira admin, novos cadastros ficam pendentes e so entram apos aprovacao.
 - Reset seguro da base comercial pela aba Banco ou pelo SQL `LIMPAR-BASE-COMERCIAL-MANTER-EMPRESAS.sql`, mantendo empresas, usuarios e acessos.
 - Logo/favicons otimizados com fundo preto para aba do navegador, PWA no celular, login e topo interno.
+- Correcao rapida de perfil comercial pelo SQL `CORRIGIR-ERRO-PERFIL-USUARIO.sql` quando o Supabase acusar funcao ausente no cache.
 
 ## Variaveis de ambiente
 
