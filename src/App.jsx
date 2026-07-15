@@ -1781,15 +1781,15 @@ function OrcaFlowLogo({ onClick }) {
       }}
     >
       <img
-        src="/logo-orcaflow.png"
+        src="/logo-orcaflow-banner.png"
         alt="OrçaFlow"
         style={{
-          height: 68,
+          height: 58,
           width: "auto",
-          maxWidth: 280,
+          maxWidth: 300,
           objectFit: "contain",
           display: "block",
-          filter: "drop-shadow(0 8px 22px rgba(0, 176, 255, .22))",
+          filter: "drop-shadow(0 8px 22px rgba(0, 176, 255, .28))",
         }}
       />
     </button>
@@ -3141,7 +3141,7 @@ function LoginScreen({ onLogin, pushToast }) {
       <div className="of-glass" style={{ width: "100%", maxWidth: 430, borderRadius: 26, padding: 34, position: "relative", overflow: "hidden" }}>
         <div style={{ position: "absolute", inset: "auto -80px -120px auto", width: 280, height: 280, borderRadius: "50%", background: `${BRAND.blue2}20`, filter: "blur(30px)" }} />
         <div style={{ textAlign: "center", position: "relative" }}>
-          <img src="/logo-orcaflow.png" alt="OrçaFlow" style={{ height: 84, objectFit: "contain", filter: "drop-shadow(0 0 28px rgba(0,230,118,.25))" }} />
+          <img src="/logo-orcaflow-app.png" alt="OrçaFlow" style={{ height: 92, objectFit: "contain", filter: "drop-shadow(0 0 28px rgba(0,230,118,.28))" }} />
           <div className="of-title-gradient" style={{ fontSize: 30, fontWeight: 950, marginTop: 12 }}>OrçaFlow</div>
           <div style={{ fontSize: 11, letterSpacing: 3, color: BRAND.muted, marginTop: 2 }}>STUDIO AI</div>
           <div style={{ fontSize: 12, color: BRAND.muted, margin: "10px 0 24px" }}>Orçamentos Inteligentes. Resultados Reais.</div>
@@ -3183,7 +3183,7 @@ function AccessStatusScreen({ perfil, onSignOut }) {
         .of-glass { background:linear-gradient(145deg,rgba(15,23,42,.86),rgba(3,7,18,.78)); border:1px solid rgba(0,176,255,.22); box-shadow:0 0 35px rgba(0,230,118,.08), inset 0 1px 0 rgba(255,255,255,.05); backdrop-filter:blur(18px); }
       `}</style>
       <div className="of-glass" style={{ width: "100%", maxWidth: 460, borderRadius: 24, padding: 30, textAlign: "center", border: `1px solid ${bloqueado ? BRAND.danger : BRAND.warn}55` }}>
-        <img src="/logo-orcaflow.png" alt="OrçaFlow" style={{ height: 76, objectFit: "contain", marginBottom: 12 }} />
+        <img src="/logo-orcaflow-app.png" alt="OrçaFlow" style={{ height: 84, objectFit: "contain", marginBottom: 12 }} />
         <div style={{ fontSize: 22, fontWeight: 950, marginBottom: 8, color: bloqueado ? BRAND.danger : BRAND.warn }}>{titulo}</div>
         <div style={{ fontSize: 13, color: BRAND.muted, lineHeight: 1.7, marginBottom: 16 }}>{texto}</div>
         <div style={{ padding: 12, borderRadius: 12, background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, color: BRAND.text, fontSize: 12, marginBottom: 18 }}>
@@ -7595,7 +7595,7 @@ export default function App() {
       <Toast toast={toast} />
 
       <img
-        src="/logo-orcaflow.png"
+        src="/logo-orcaflow-banner.png"
         alt=""
         aria-hidden="true"
         style={{
