@@ -1730,7 +1730,7 @@ function useDB() {
     }
   };
 
-  return { empresas, status, meta, toast, salvarEmpresa, excluirEmpresa, exportarBackup, importarBackup, incOrcamentos, kbUsados, pushToast };
+  return { empresas, status, meta, setMeta, toast, salvarEmpresa, excluirEmpresa, exportarBackup, importarBackup, incOrcamentos, kbUsados, pushToast };
 }
 
 function Toast({ toast }) {
@@ -5881,7 +5881,7 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
 }
 
 export default function App() {
-  const { empresas, status, meta, toast, salvarEmpresa, excluirEmpresa, exportarBackup, importarBackup, incOrcamentos, kbUsados, pushToast } = useDB();
+  const { empresas, status, meta, setMeta, toast, salvarEmpresa, excluirEmpresa, exportarBackup, importarBackup, incOrcamentos, kbUsados, pushToast } = useDB();
   const [view, setView] = useState("gestao");
   const [autenticado, setAutenticado] = useState(false);
   const [modal, setModal] = useState(null);
@@ -6063,6 +6063,66 @@ export default function App() {
     const logs = (await store.get(KEY_LOG)) || [];
     setLogData(logs);
     setLogOpen(true);
+  };
+
+  const limparBaseComercialMantendoEmpresas = async () => {
+    if (usuarioAtual?.tipo !== "admin") {
+      pushToast("Apenas administrador pode limpar a base comercial.", "erro");
+      return;
+    }
+
+    const confirmacao = window.prompt(
+      "Esta acao limpa orcamentos, clientes, agenda, historicos comerciais, inbox WhatsApp, lixeira e contadores. Empresas, usuarios e acessos serao mantidos. Digite LIMPAR para confirmar."
+    );
+    if ((confirmacao || "").trim().toUpperCase() !== "LIMPAR") {
+      pushToast("Limpeza cancelada.", "aviso");
+      return;
+    }
+
+    const payloadLimpo = {
+      [KEY_CRM]: [],
+      [KEY_CRM_TRASH]: [],
+      [KEY_AUDITORIA]: [],
+      [KEY_META]: { totalOrcamentos: 0 },
+      [KEY_CHAT]: [],
+      [KEY_CLIENTES]: [],
+      [KEY_AGENDA]: [],
+      [KEY_WEEKLY_REPORT_PENDING]: {},
+      [KEY_WHATSAPP_MONITOR]: [],
+      [KEY_NARA_RADAR]: {},
+      [KEY_BACKUP_AUTO]: [],
+    };
+
+    try {
+      const rows = await store.getAllUserRows(BACKUP_KEYS);
+      const userIds = [...new Set((rows || []).map((row) => row.user_id).filter(Boolean))];
+      if (usuarioAtual?.id && !userIds.includes(usuarioAtual.id)) userIds.push(usuarioAtual.id);
+
+      const resultados = await Promise.all(
+        userIds.map((userId) => (
+          userId === usuarioAtual?.id
+            ? store.setMany(payloadLimpo)
+            : store.setManyForUser(userId, payloadLimpo)
+        ))
+      );
+
+      if (!resultados.every(Boolean)) {
+        throw new Error("Nao foi possivel zerar todos os registros no banco.");
+      }
+
+      setCrm([]);
+      setClientesCRM([]);
+      setRelatorioPendente(null);
+      setRadarPendente(null);
+      setMeta({ totalOrcamentos: 0 });
+      window.dispatchEvent(new CustomEvent("orcaflow:backup-imported", { detail: { crm: [], clientes: [] } }));
+      window.dispatchEvent(new CustomEvent("orcaflow:clientes-imported", { detail: { clientes: [] } }));
+      await logOp("RESET", `Base comercial zerada mantendo empresas (${userIds.length || 1} usuario(s))`, "comercial");
+      pushToast("Base comercial zerada. Cadastros de empresas mantidos.", "ok");
+    } catch (error) {
+      console.error("Falha ao limpar base comercial:", error);
+      pushToast(error.message || "Falha ao limpar base comercial.", "erro");
+    }
   };
 
   const sincronizarOrcamentosNosClientes = async (orcamentosNovos = []) => {
@@ -7686,6 +7746,24 @@ export default function App() {
               <div key={c.label} style={{ background: BRAND.panel, border: `1px solid ${c.cor}24`, borderRadius: 14, padding: "15px 17px", animation: "ofCardIn .28s ease both" }}><div style={{ fontSize: 22, marginBottom: 6 }}>{c.icon}</div><div style={{ fontSize: 22, fontWeight: 900, color: c.cor, marginBottom: 2 }}>{c.valor}</div><div style={{ fontSize: 11, color: BRAND.dim }}>{c.label}</div></div>
             ))}
           </div>
+          {usuarioAtual?.tipo === "admin" && (
+            <div style={{ background: "rgba(127,29,29,.16)", border: `1px solid ${BRAND.danger}55`, borderRadius: 14, padding: 16, marginBottom: 18 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ color: "#FCA5A5", fontSize: 13, fontWeight: 900, letterSpacing: 1 }}>Zerar base comercial</div>
+                  <div style={{ color: BRAND.muted, fontSize: 12, lineHeight: 1.55, marginTop: 5, maxWidth: 650 }}>
+                    Limpa clientes, orcamentos, agenda, historicos comerciais, WhatsApp, Nara e contadores. Mantem empresas, usuarios, acessos e configuracoes essenciais.
+                  </div>
+                </div>
+                <button
+                  onClick={limparBaseComercialMantendoEmpresas}
+                  style={{ padding: "9px 16px", borderRadius: 10, border: `1px solid ${BRAND.danger}88`, background: `${BRAND.danger}20`, color: "#FCA5A5", cursor: "pointer", fontSize: 12, fontWeight: 900 }}
+                >
+                  Limpar clientes e orcamentos
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
