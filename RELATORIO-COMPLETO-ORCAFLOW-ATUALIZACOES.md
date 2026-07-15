@@ -1,6 +1,6 @@
 # OrcaFlow Studio AI - Relatorio completo de estrutura e atualizacoes
 
-Versao atual do projeto: 3.3.4  
+Versao atual do projeto: 3.3.5  
 Data do registro: 15/07/2026  
 Projeto: OrcaFlow Studio AI  
 Dominio em uso: orcaflow.ia.br  
@@ -492,12 +492,13 @@ outputs/orcaflow-studio-ai-3.3.1-sessao-segura-sem-senha.zip
 outputs/orcaflow-studio-ai-3.3.2-resumo-sem-orc.zip
 outputs/orcaflow-studio-ai-3.3.3-crm-sem-cliente-fantasma.zip
 outputs/orcaflow-studio-ai-3.3.4-logo-na-aba-navegador.zip
+outputs/orcaflow-studio-ai-3.3.5-completo-crm-clientes-limpo.zip
 ```
 
 Versao recomendada para subir:
 
 ```text
-outputs/orcaflow-studio-ai-3.3.4-logo-na-aba-navegador.zip
+outputs/orcaflow-studio-ai-3.3.5-completo-crm-clientes-limpo.zip
 ```
 
 ## 15. Validacoes realizadas
@@ -524,7 +525,7 @@ Arquivos sensiveis no zip: nao encontrados
 1. Usar o zip:
 
 ```text
-outputs/orcaflow-studio-ai-3.3.4-logo-na-aba-navegador.zip
+outputs/orcaflow-studio-ai-3.3.5-completo-crm-clientes-limpo.zip
 ```
 
 2. Enviar os arquivos para o GitHub.
@@ -641,4 +642,22 @@ outputs/orcaflow-studio-ai-3.3.3-crm-sem-cliente-fantasma.zip
 
 ```text
 outputs/orcaflow-studio-ai-3.3.4-logo-na-aba-navegador.zip
+```
+
+---
+
+# Atualizacao 3.3.5 - CRM mostra somente clientes reais
+
+## O que foi ajustado
+
+- A aba Clientes ficou mais restritiva: cadastros que nasceram apenas de orcamento/proposta/cotacao nao aparecem como cliente.
+- Mesmo que um telefone tenha sido extraido do orcamento, o card nao aparece se nao houver historico humano real nem vinculo manual.
+- Orcamentos parecidos continuam existindo como sugestao de vinculo, mas nao contam como historico do cliente.
+- Um orcamento so aparece dentro do perfil do cliente quando for vinculado manualmente ou anexado dentro daquele cliente.
+- A Gestao continua sendo a area correta para ver orcamentos soltos, sem cliente vinculado.
+
+## Arquivo final desta versao
+
+```text
+outputs/orcaflow-studio-ai-3.3.5-completo-crm-clientes-limpo.zip
 ```
