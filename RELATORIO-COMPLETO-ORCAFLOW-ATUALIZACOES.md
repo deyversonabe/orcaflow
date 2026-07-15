@@ -1,7 +1,7 @@
 # OrcaFlow Studio AI - Relatorio completo de estrutura e atualizacoes
 
-Versao atual do projeto: 3.3.0  
-Data do registro: 14/07/2026  
+Versao atual do projeto: 3.3.4  
+Data do registro: 15/07/2026  
 Projeto: OrcaFlow Studio AI  
 Dominio em uso: orcaflow.ia.br  
 Hospedagem prevista: Vercel  
@@ -34,6 +34,8 @@ O sistema permite:
 - registrar historico real de contatos por cliente e por orcamento;
 - usar a assistente Nara para mensagens, follow-up, analise comercial e relatorios;
 - controlar usuarios, acessos e isolamento de dados por usuario;
+- lembrar somente o e-mail/usuario de acesso, nunca a senha;
+- exigir nova senha ao sair ou fechar a aba do navegador;
 - permitir que o administrador copie ou mova dados entre usuarios.
 
 ## 2. Estrutura atual de pastas
@@ -486,12 +488,16 @@ outputs/orcaflow-studio-ai-3.2.7-upgrades-gestao.zip
 outputs/orcaflow-studio-ai-3.2.8-manychat-assistido-gratis.zip
 outputs/orcaflow-studio-ai-3.2.9-crm-limpo-acoes-em-lote.zip
 outputs/orcaflow-studio-ai-3.3.0-vinculo-manual-clientes-orcamentos.zip
+outputs/orcaflow-studio-ai-3.3.1-sessao-segura-sem-senha.zip
+outputs/orcaflow-studio-ai-3.3.2-resumo-sem-orc.zip
+outputs/orcaflow-studio-ai-3.3.3-crm-sem-cliente-fantasma.zip
+outputs/orcaflow-studio-ai-3.3.4-logo-na-aba-navegador.zip
 ```
 
 Versao recomendada para subir:
 
 ```text
-outputs/orcaflow-studio-ai-3.3.0-vinculo-manual-clientes-orcamentos.zip
+outputs/orcaflow-studio-ai-3.3.4-logo-na-aba-navegador.zip
 ```
 
 ## 15. Validacoes realizadas
@@ -518,7 +524,7 @@ Arquivos sensiveis no zip: nao encontrados
 1. Usar o zip:
 
 ```text
-outputs/orcaflow-studio-ai-3.3.0-vinculo-manual-clientes-orcamentos.zip
+outputs/orcaflow-studio-ai-3.3.4-logo-na-aba-navegador.zip
 ```
 
 2. Enviar os arquivos para o GitHub.
@@ -532,6 +538,8 @@ outputs/orcaflow-studio-ai-3.3.0-vinculo-manual-clientes-orcamentos.zip
 6. Testar:
 
 - login;
+- fechar a aba e abrir novamente exigindo senha;
+- confirmar que o e-mail/usuario aparece lembrado e o campo senha fica vazio;
 - aprovacao de usuario;
 - editar Meu Perfil;
 - usuario comum ver apenas seus dados;
@@ -578,4 +586,59 @@ O sistema esta estruturado para operar como uma plataforma multiusuario:
 - orcamentos respeitam o DNA de cada empresa;
 - banco fica em nuvem pelo Supabase.
 
-Antes de considerar tudo em producao, a etapa mais importante e rodar o `schema.sql` atualizado no Supabase e redeployar a versao 3.3.0 no Vercel.
+Antes de considerar tudo em producao, a etapa mais importante e rodar o `schema.sql` atualizado no Supabase e redeployar a versao mais recente no Vercel.
+
+---
+
+# Atualizacao 3.3.2 - nomes publicos sem ORC
+
+## O que foi ajustado
+
+- O card final de exportacao agora mostra um resumo comercial breve, no formato cliente + assunto, em vez de destacar o numero interno do orcamento.
+- Os PDFs das empresas comuns agora sao salvos com nome baseado no resumo do cliente e assunto, sem `ORC` no nome do arquivo.
+- A excecao fica apenas para a Eletro Lider / Pupo e Agnelo Materiais Eletricos, que continua podendo usar cotacao, numero e codigo `ORC`.
+- A geracao do PDF oculta numero/codigo no cabecalho para todas as empresas que nao sejam Eletro Lider.
+- A geracao limpa termos como orcamento, cotacao e codigos `ORC-000000` do texto visivel de documentos que nao sejam Eletro Lider, trocando para proposta quando necessario.
+- A tela de Gestao passa a exibir titulo resumido do documento, e nao o numero, exceto na Eletro Lider.
+- Orcamentos antigos reabertos para novo download tambem passam pela limpeza visual antes de gerar PDF.
+
+## Arquivo final desta versao
+
+```text
+outputs/orcaflow-studio-ai-3.3.2-resumo-sem-orc.zip
+```
+
+---
+
+# Atualizacao 3.3.3 - CRM sem cliente fantasma
+
+## O que foi ajustado
+
+- A aba Clientes nao exibe mais cadastros criados apenas a partir de orcamentos sem telefone, e-mail, documento, decisor ou contato real.
+- Orcamento com nome parecido nao entra mais como historico real do cliente automaticamente.
+- Orcamentos compativeis aparecem somente como sugestao para revisao e vinculo manual.
+- O vinculo real continua disponivel nos dois caminhos: pela Gestao do orcamento ou pelo perfil do cliente.
+- Clientes reais continuam aparecendo normalmente, inclusive se tiverem orcamentos vinculados manualmente ou arquivos anexados ao perfil.
+
+## Arquivo final desta versao
+
+```text
+outputs/orcaflow-studio-ai-3.3.3-crm-sem-cliente-fantasma.zip
+```
+
+---
+
+# Atualizacao 3.3.4 - logo na aba do navegador
+
+## O que foi ajustado
+
+- O `index.html` agora declara a logo do OrcaFlow como favicon do navegador.
+- Foram adicionados `rel="icon"`, `rel="shortcut icon"` e `apple-touch-icon`.
+- O link recebeu versao no parametro `?v=3.3.4` para ajudar o navegador a trocar o icone em cache apos o deploy.
+- O manifesto PWA continua usando `public/logo-orcaflow.png`.
+
+## Arquivo final desta versao
+
+```text
+outputs/orcaflow-studio-ai-3.3.4-logo-na-aba-navegador.zip
+```
