@@ -565,10 +565,51 @@ function alvoCliente(cliente = {}) {
   return textoBusca([cliente.nome, cliente.empresa, cliente.email, cliente.email2, cliente.telefone, cliente.whatsapp, cliente.documento].filter(Boolean).join(" "));
 }
 
+function clienteTemContatoReal(cliente = {}) {
+  return Boolean(
+    clean(cliente.whatsapp) ||
+    clean(cliente.telefone) ||
+    clean(cliente.telefone2) ||
+    clean(cliente.email) ||
+    clean(cliente.email2) ||
+    clean(cliente.documento) ||
+    clean(cliente.decisor) ||
+    clean(cliente.cargo)
+  );
+}
+
+function clienteCriadoApenasDeOrcamento(cliente = {}) {
+  const origem = textoBusca(cliente.origem || "");
+  const origemOrcamento = /\borcamento\b|\borc\b|proposta|cotacao/.test(origem);
+  const semVinculoManual = !Array.isArray(cliente.orcamentosVinculados) || cliente.orcamentosVinculados.length === 0;
+  return origemOrcamento && !clienteTemContatoReal(cliente) && semVinculoManual;
+}
+
+function clienteVisivelNoCRM(cliente = {}) {
+  return !clienteCriadoApenasDeOrcamento(cliente);
+}
+
+function idsOrcamentosVinculados(cliente = {}) {
+  return new Set((Array.isArray(cliente.orcamentosVinculados) ? cliente.orcamentosVinculados : []).map((item) => item.orcamentoId).filter(Boolean));
+}
+
 function orcamentosDoCliente(cliente = {}, crm = []) {
+  const ids = idsOrcamentosVinculados(cliente);
+  if (!cliente?.id && !ids.size) return [];
+  return (Array.isArray(crm) ? crm : []).filter((item) => (
+    (item?.id && ids.has(item.id)) ||
+    item?.clienteVinculadoId === cliente.id ||
+    item?.clienteCRMId === cliente.id
+  ));
+}
+
+function orcamentosCompativeisCliente(cliente = {}, crm = []) {
   const alvo = alvoCliente(cliente);
   if (!alvo) return [];
+  const ids = idsOrcamentosVinculados(cliente);
   return (Array.isArray(crm) ? crm : []).filter((item) => {
+    if (item?.id && ids.has(item.id)) return false;
+    if (item?.clienteVinculadoId || item?.clienteCRMId) return false;
     const clienteOrc = textoBusca(item?.cliente || "");
     const texto = textoBusca([item?.cliente, item?.empresaNome, item?.numero, item?.lembreteIA].filter(Boolean).join(" "));
     return texto.includes(alvo) || (clienteOrc && alvo.includes(clienteOrc));
@@ -652,7 +693,7 @@ export function ClientesCRMPanel({
 }) {
   const isAdmin = usuarioAtual?.tipo === "admin";
   const base = useMemo(
-    () => (isAdmin ? clientes : clientes.filter((item) => item.userId === usuarioAtual?.id)),
+    () => (isAdmin ? clientes : clientes.filter((item) => item.userId === usuarioAtual?.id)).filter(clienteVisivelNoCRM),
     [clientes, isAdmin, usuarioAtual?.id]
   );
   const [busca, setBusca] = useState("");
@@ -699,7 +740,7 @@ export function ClientesCRMPanel({
 
   const enriquecidos = useMemo(() => {
     return base.map((item) => {
-      const sugestoesPorNome = orcamentosDoCliente(item, crm);
+      const sugestoesPorNome = orcamentosCompativeisCliente(item, crm);
       const vinculadosExplicitos = Array.isArray(item.orcamentosVinculados) ? item.orcamentosVinculados : [];
       const sugestoesNaoVinculadas = sugestoesPorNome.filter((orc) => !vinculadosExplicitos.some((v) => v.orcamentoId === orc.id));
       const score = scoreCliente(item, vinculadosExplicitos);

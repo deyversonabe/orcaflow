@@ -79,6 +79,7 @@ const KEY_USERS = "orcaflow_users";
 const KEY_RESET = "orcaflow_reset_senha";
 const KEY_CHAT = "orcaflow_chat_ia";
 const KEY_CLIENTES = "orcaflow_clientes_crm";
+const KEY_LAST_LOGIN_USER = "orcaflow_last_login_user";
 const KEY_WHATS_RELATORIO = "orcaflow_whats_relatorio";
 const KEY_WEEKLY_REPORT_PENDING = WEEKLY_REPORT_PENDING_KEY;
 const KEY_WHATSAPP_MONITOR = KEY_WHATSAPP_INBOX;
@@ -313,8 +314,117 @@ function materialTotal(rows = []) {
   return rows.reduce((acc, item) => acc + parseValorBR(item?.subtotal), 0);
 }
 
-function getDocTitle(dados) {
-  return clean(dados?.identidadeDocumento?.tituloDocumento || "PROPOSTA COMERCIAL");
+function isEletroLiderProfile(perfil = {}) {
+  return perfil?.tipo === "varejo-eletrico";
+}
+
+function documentoExibeCodigo(perfil = {}) {
+  return isEletroLiderProfile(perfil);
+}
+
+function normalizarTituloDocumento(texto = "", perfil = {}) {
+  let titulo = clean(texto || "PROPOSTA COMERCIAL");
+  if (!isEletroLiderProfile(perfil)) {
+    titulo = titulo
+      .replace(/\bor[cç]amentos?\b/gi, "Proposta")
+      .replace(/\bcota[cç][aã]o\b/gi, "Proposta")
+      .replace(/\bORC[-\s]*\d+\b/gi, "")
+      .replace(/\s+[-–—]\s*$/g, "")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+  }
+  return titulo || "PROPOSTA COMERCIAL";
+}
+
+function getDocTitle(dados, perfil = {}) {
+  return normalizarTituloDocumento(dados?.identidadeDocumento?.tituloDocumento || "PROPOSTA COMERCIAL", perfil);
+}
+
+function assuntoResumoDocumento(dados = {}, textoBase = "") {
+  let origem = [
+    dados?.assuntoResumo,
+    dados?.campos?.objetivo,
+    dados?.campos?.escopo,
+    dados?.campos?.intro,
+    textoBase,
+  ].find((item) => clean(item));
+
+  if (!origem && clean(dados?.tituloResumo)) {
+    const partes = clean(dados.tituloResumo).split(/\s+-\s+/).filter(Boolean);
+    origem = partes.length > 1 ? partes.slice(1).join(" - ") : dados.tituloResumo;
+  }
+
+  const texto = clean(origem || "")
+    .replace(/^leitura do anexo\s*\([^)]+\)\s*:/i, "")
+    .replace(/\b(valor identificado|observacoes do anexo|observações do anexo)\b.*$/i, "")
+    .replace(/\b(orcamento|orçamento|proposta|cotacao|cotação)\b\s*/gi, "")
+    .replace(/\bORC[-\s]*\d+\b/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
+  const palavras = texto.split(/\s+/).filter(Boolean).slice(0, 9).join(" ");
+  return clean(palavras || "Servico solicitado", 90);
+}
+
+function resumoComercialOrcamento(dados = {}, emp = {}, clienteFallback = "", textoBase = "") {
+  const clienteDoc = clean(dados?.campos?.cliente || clienteFallback || "Cliente", 80);
+  const assunto = assuntoResumoDocumento(dados, textoBase);
+  return clean(`${clienteDoc} - ${assunto}`, 130);
+}
+
+function nomeArquivoPDFOrcamento(emp = {}, dados = {}, clienteFallback = "", textoBase = "") {
+  const perfil = perfilVisualEmpresa(emp, dados);
+  if (isEletroLiderProfile(perfil)) {
+    return `${safeFileName(emp.nome)}-${safeFileName(dados?.numero || "cotacao")}.pdf`;
+  }
+  const resumo = resumoComercialOrcamento(dados, emp, clienteFallback, textoBase);
+  return `${safeFileName(resumo)}-${safeFileName(emp.nome || "empresa")}.pdf`;
+}
+
+function termoComCase(original = "", singular = "proposta", plural = "propostas") {
+  const texto = String(original || "");
+  const isPlural = /s$/i.test(texto) || /(coes|ções)$/i.test(texto);
+  const base = isPlural ? plural : singular;
+  if (texto === texto.toUpperCase()) return base.toUpperCase();
+  if (/^[A-ZÁÉÍÓÚÂÊÔÃÕÇ]/.test(texto)) return base.charAt(0).toUpperCase() + base.slice(1);
+  return base;
+}
+
+function normalizarTextoPublicoDocumento(valor = "", perfil = {}) {
+  if (typeof valor !== "string" || isEletroLiderProfile(perfil)) return valor;
+  return valor
+    .replace(/\bORC[-\s]*\d+\b/gi, "")
+    .replace(/\bor[cç]amentos?\b/gi, (m) => termoComCase(m))
+    .replace(/\bcota[cç](?:ao|ão|oes|ões)\b/gi, (m) => termoComCase(m))
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function normalizarDocumentoPublico(dados = {}, emp = {}) {
+  const perfil = perfilVisualEmpresa(emp, dados);
+  if (isEletroLiderProfile(perfil)) return dados;
+
+  const normalizarMapa = (obj = {}) => Object.fromEntries(
+    Object.entries(obj || {}).map(([key, value]) => [key, typeof value === "string" ? normalizarTextoPublicoDocumento(value, perfil) : value])
+  );
+
+  return {
+    ...dados,
+    identidadeDocumento: {
+      ...(dados.identidadeDocumento || {}),
+      tituloDocumento: normalizarTituloDocumento(dados.identidadeDocumento?.tituloDocumento || "", perfil),
+      subtitulo: normalizarTextoPublicoDocumento(dados.identidadeDocumento?.subtitulo || "", perfil),
+      rotulos: normalizarMapa(dados.identidadeDocumento?.rotulos || {}),
+    },
+    campos: normalizarMapa(dados.campos || {}),
+    itensIA: Array.isArray(dados.itensIA) ? dados.itensIA.map((item) => normalizarTextoPublicoDocumento(item, perfil)) : [],
+    materiaisTabela: Array.isArray(dados.materiaisTabela)
+      ? dados.materiaisTabela.map((item) => ({
+          ...item,
+          descricao: normalizarTextoPublicoDocumento(item?.descricao || "", perfil),
+        }))
+      : [],
+  };
 }
 
 function getSectionLabel(dados, key) {
@@ -2408,6 +2518,7 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
   const perfil = perfilVisualEmpresa(emp, dados);
   const cor = corDocumento(emp, perfil, "primaria");
   const corSec = corDocumento(emp, perfil, "secundaria");
+  const exibirCodigoDocumento = documentoExibeCodigo(perfil);
 
   const F = ({ campo, multiline }) => {
     const val = dados.campos?.[campo] || "";
@@ -2429,7 +2540,7 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
   };
 
   const secLbl = { fontSize: 9, fontWeight: 900, color: "#000000", letterSpacing: 2.2, fontFamily: "sans-serif", marginBottom: 7, display: "block" };
-  const docTitle = getDocTitle(dados).toUpperCase();
+  const docTitle = getDocTitle(dados, perfil).toUpperCase();
 
   const renderItens = () => {
     if (!dados.itensIA?.length) return null;
@@ -2494,11 +2605,12 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
       {emp.papelTimbrado ? (
         <div style={{ position: "relative", overflow: "hidden" }}>
           <img src={emp.papelTimbrado} style={{ width: "100%", height: "auto", display: "block" }} alt="" />
-          <div style={{ position: "absolute", top: 10, right: 18, background: "rgba(0,0,0,.58)", backdropFilter: "blur(4px)", borderRadius: 9, padding: "8px 13px", textAlign: "right" }}>
-            <div style={{ fontSize: 8, color: "rgba(255,255,255,.72)", letterSpacing: 1.5 }}>{perfil.numeroLabel}</div>
-            <div style={{ fontSize: 13, fontWeight: 900, color: "#fff", fontFamily: "monospace" }}>{dados.numero}</div>
-            
-          </div>
+          {exibirCodigoDocumento && (
+            <div style={{ position: "absolute", top: 10, right: 18, background: "rgba(0,0,0,.58)", backdropFilter: "blur(4px)", borderRadius: 9, padding: "8px 13px", textAlign: "right" }}>
+              <div style={{ fontSize: 8, color: "rgba(255,255,255,.72)", letterSpacing: 1.5 }}>{perfil.numeroLabel}</div>
+              <div style={{ fontSize: 13, fontWeight: 900, color: "#fff", fontFamily: "monospace" }}>{dados.numero}</div>
+            </div>
+          )}
         </div>
       ) : (
         <div style={{ background: `linear-gradient(135deg, ${cor}, ${corSec})`, padding: "22px 28px", minHeight: emp.altoCabecalho || 120, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -2506,11 +2618,12 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
             {emp.logo ? <img src={emp.logo} style={{ maxHeight: 48, maxWidth: 150, objectFit: "contain", display: "block", marginBottom: 6 }} alt="" /> : <div style={{ fontFamily: emp.fonteTitulo, fontSize: Number(emp.tamanhoTitulo) || 24, fontWeight: 900, color: "#fff", marginBottom: 4 }}>{emp.nome}</div>}
             <div style={{ fontSize: 10.5, color: "rgba(255,255,255,.78)", fontFamily: "sans-serif" }}>{assinaturaDocumento(emp, perfil)}</div>
           </div>
-          <div style={{ textAlign: "right", background: "rgba(0,0,0,.18)", borderRadius: 10, padding: "11px 16px" }}>
-            <div style={{ fontSize: 8, color: "rgba(255,255,255,.65)", letterSpacing: 1.5 }}>{perfil.numeroLabel}</div>
-            <div style={{ fontSize: 15, fontWeight: 900, color: "#fff", fontFamily: "monospace" }}>{dados.numero}</div>
-            
-          </div>
+          {exibirCodigoDocumento && (
+            <div style={{ textAlign: "right", background: "rgba(0,0,0,.18)", borderRadius: 10, padding: "11px 16px" }}>
+              <div style={{ fontSize: 8, color: "rgba(255,255,255,.65)", letterSpacing: 1.5 }}>{perfil.numeroLabel}</div>
+              <div style={{ fontSize: 15, fontWeight: 900, color: "#fff", fontFamily: "monospace" }}>{dados.numero}</div>
+            </div>
+          )}
         </div>
       )}
 
@@ -2972,7 +3085,13 @@ function DashboardPanel({ crm, empresas, meta, usuarioAtual, setView }) {
 }
 
 function LoginScreen({ onLogin, pushToast }) {
-  const [usuario, setUsuario] = useState("");
+  const [usuario, setUsuario] = useState(() => {
+    try {
+      return localStorage.getItem(KEY_LAST_LOGIN_USER) || "";
+    } catch {
+      return "";
+    }
+  });
   const [senha, setSenha] = useState("");
   const [mostrar, setMostrar] = useState(false);
   const [criandoConta, setCriandoConta] = useState(false);
@@ -2988,6 +3107,11 @@ function LoginScreen({ onLogin, pushToast }) {
     setEntrando(true);
     try {
       const email = usuario.trim().toLowerCase();
+      try {
+        localStorage.setItem(KEY_LAST_LOGIN_USER, email);
+      } catch {
+        // O sistema nunca grava senha; se o navegador bloquear localStorage, apenas nao lembra o e-mail.
+      }
       const result = criandoConta
         ? await supabase.auth.signUp({ email, password: senha })
         : await supabase.auth.signInWithPassword({ email, password: senha });
@@ -2995,8 +3119,10 @@ function LoginScreen({ onLogin, pushToast }) {
       if (criandoConta && !result.data.session) {
         pushToast("Conta criada. Confirme o e-mail antes de entrar.", "ok");
         setCriandoConta(false);
+        setSenha("");
         return;
       }
+      setSenha("");
       onLogin(result.data.user);
     } catch (error) {
       pushToast(error.message || "Usuário ou senha inválidos.", "erro");
@@ -3023,12 +3149,12 @@ function LoginScreen({ onLogin, pushToast }) {
         <div style={{ display: "grid", gap: 12, position: "relative" }}>
           <div>
             <div style={{ fontSize: 10, color: BRAND.muted, fontWeight: 900, letterSpacing: 1.5, marginBottom: 6 }}>E-MAIL / USUÁRIO</div>
-            <input type="email" value={usuario} onChange={(e) => setUsuario(e.target.value)} onKeyDown={(e) => e.key === "Enter" && entrar()} placeholder="voce@empresa.com" style={{ width: "100%", boxSizing: "border-box", background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, borderRadius: 13, padding: "13px 14px", color: BRAND.text, outline: "none" }} />
+            <input type="email" autoComplete="username" value={usuario} onChange={(e) => setUsuario(e.target.value)} onKeyDown={(e) => e.key === "Enter" && entrar()} placeholder="voce@empresa.com" style={{ width: "100%", boxSizing: "border-box", background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, borderRadius: 13, padding: "13px 14px", color: BRAND.text, outline: "none" }} />
           </div>
           <div>
             <div style={{ fontSize: 10, color: BRAND.muted, fontWeight: 900, letterSpacing: 1.5, marginBottom: 6 }}>SENHA</div>
             <div style={{ display: "flex", background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, borderRadius: 13, overflow: "hidden" }}>
-              <input type={mostrar ? "text" : "password"} value={senha} onChange={(e) => setSenha(e.target.value)} onKeyDown={(e) => e.key === "Enter" && entrar()} placeholder="Digite sua senha" style={{ flex: 1, background: "transparent", border: 0, padding: "13px 14px", color: BRAND.text, outline: "none" }} />
+              <input type={mostrar ? "text" : "password"} autoComplete="new-password" data-lpignore="true" data-1p-ignore="true" value={senha} onChange={(e) => setSenha(e.target.value)} onKeyDown={(e) => e.key === "Enter" && entrar()} placeholder="Digite sua senha" style={{ flex: 1, background: "transparent", border: 0, padding: "13px 14px", color: BRAND.text, outline: "none" }} />
               <button onClick={() => setMostrar((v) => !v)} style={{ width: 52, border: 0, background: "transparent", color: BRAND.muted, cursor: "pointer" }}>{mostrar ? "Ocultar" : "Ver"}</button>
             </div>
           </div>
@@ -4672,6 +4798,14 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
                   const clienteVinculado = clienteVinculadoOrcamento(item);
                   const sugestoesCliente = clienteVinculado ? [] : clientesCompativeisComOrcamento(item, clientesVisiveis, 3);
                   const clienteDraft = clienteLinkDrafts[item.id] || item.clienteSugeridoId || "";
+                  const empresaItem = empresas.find((emp) => emp.id === item.empresaId || emp.nome === item.empresaNome || emp.nome === item.empresa);
+                  const tituloVisivel = item.tituloResumo || resumoComercialOrcamento(
+                    item.orcamentoCompleto || { campos: { cliente: item.cliente, escopo: item.descricaoArquivo || item.lembreteIA || item.resumoConversas || "" } },
+                    empresaItem || {},
+                    item.cliente,
+                    item.descricaoArquivo || item.lembreteIA || item.resumoConversas || ""
+                  );
+                  const mostrarNumeroVisivel = documentoExibeCodigo(perfilVisualEmpresa(empresaItem || {}, item.orcamentoCompleto || {}));
                   return (
                     <React.Fragment key={item.id}>
                       <tr style={{ borderTop: `1px solid ${BRAND.border}` }}>
@@ -4714,11 +4848,11 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
                               textUnderlineOffset: 3,
                             }}
                           >
-                            {item.cliente || "—"}
+                            {tituloVisivel || item.cliente || "—"}
                           </button>
 
                           <div style={{ fontSize: 10, color: BRAND.dim, marginTop: 3 }}>
-                            {item.numero || "—"} · {tsFmt(item.criadoEm)}
+                            {mostrarNumeroVisivel && item.numero ? `${item.numero} · ` : ""}{tsFmt(item.criadoEm)}
                             {item.anexado && <span style={{ marginLeft: 6, padding: "1px 6px", borderRadius: 8, background: `${BRAND.green2}1e`, color: BRAND.green, fontWeight: 800, fontSize: 9 }}>📎 anexado</span>}
                           </div>
 
@@ -6272,8 +6406,9 @@ export default function App() {
 
       for (const s of selecao) {
         const ed = data.empresas?.[s.empId] || {};
+        const empAtual = empresas.find((e) => e.id === s.empId) || {};
 
-        novos[s.empId] = {
+        const documentoBase = {
           numero: orcNum(),
           empresaId: s.empId,
           valorGlobal: s.valorGlobal || "",
@@ -6295,6 +6430,10 @@ export default function App() {
             fechamento: ed.fechamento || "",
           },
         };
+        const documentoGerado = normalizarDocumentoPublico(documentoBase, empAtual);
+        documentoGerado.assuntoResumo = assuntoResumoDocumento(documentoGerado, texto);
+        documentoGerado.tituloResumo = resumoComercialOrcamento(documentoGerado, empAtual, cliente, texto);
+        novos[s.empId] = documentoGerado;
       }
 
       setOrcamentos(novos);
@@ -6306,6 +6445,8 @@ export default function App() {
           empresaId: s.empId,
           empresaNome: emp?.nome || "",
           cliente,
+          tituloResumo: novos[s.empId]?.tituloResumo || resumoComercialOrcamento(novos[s.empId], emp, cliente, texto),
+          assuntoResumo: novos[s.empId]?.assuntoResumo || assuntoResumoDocumento(novos[s.empId], texto),
           valorGlobal: s.valorGlobal || "",
           status: "Aberto",
           proximoContato: "",
@@ -6360,7 +6501,7 @@ export default function App() {
 
   const baixarPDF = async (empId) => {
     const emp = empresas.find((e) => e.id === empId);
-    const dados = orcamentos[empId];
+    let dados = orcamentos[empId];
 
     if (!emp || !dados) {
       pushToast("Orçamento não encontrado para exportação.", "erro");
@@ -6368,6 +6509,7 @@ export default function App() {
     }
 
     try {
+      dados = normalizarDocumentoPublico(dados, emp);
 
       // Quando há timbrado, a PÁGINA do PDF é criada com as MESMAS dimensões
       // do arquivo enviado. Assim o timbrado entra inteiro (sem corte e sem
@@ -6386,6 +6528,7 @@ export default function App() {
       const pageH = pdf.internal.pageSize.getHeight();
 
       const perfil = perfilVisualEmpresa(emp, dados);
+      const exibirCodigoDocumento = documentoExibeCodigo(perfil);
       const corPrimariaDoc = corDocumento(emp, perfil, "primaria");
       const corSecundariaDoc = corDocumento(emp, perfil, "secundaria");
       const titleFont = mapPdfFont(emp.fonteTitulo);
@@ -6460,12 +6603,14 @@ export default function App() {
             52
           );
 
-          pdf.setFont("helvetica", "bold");
-          pdf.setFontSize(10);
-          pdf.setTextColor(0, 0, 0);
-          pdf.text(dados.numero || orcNum(), pageW - marginX, 52, {
-            align: "right",
-          });
+          if (exibirCodigoDocumento) {
+            pdf.setFont("helvetica", "bold");
+            pdf.setFontSize(10);
+            pdf.setTextColor(0, 0, 0);
+            pdf.text(dados.numero || orcNum(), pageW - marginX, 52, {
+              align: "right",
+            });
+          }
 
           pdf.setDrawColor(0, 0, 0);
           pdf.setLineWidth(0.6);
@@ -6978,16 +7123,18 @@ export default function App() {
       const writeOpening = () => {
         ensure(90);
         const numero = dados.numero || orcNum();
-        const titulo = getDocTitle(dados).toUpperCase();
-        const titleWidth = perfil.tipo === "varejo-eletrico" ? maxW * 0.74 : maxW - 130;
+        const titulo = getDocTitle(dados, perfil).toUpperCase();
+        const titleWidth = exibirCodigoDocumento ? maxW * 0.74 : maxW;
         const fitted = fitTitle(titulo, titleWidth);
 
-        pdf.setFont("helvetica", "bold");
-        pdf.setFontSize(7.5);
-        pdf.setTextColor(0, 0, 0);
-        pdf.text(String(perfil.numeroLabel || "Proposta").toUpperCase(), pageW - marginX, y, { align: "right" });
-        pdf.setFontSize(perfil.tipo === "varejo-eletrico" ? 9 : 10);
-        pdf.text(numero, pageW - marginX, y + 13, { align: "right" });
+        if (exibirCodigoDocumento) {
+          pdf.setFont("helvetica", "bold");
+          pdf.setFontSize(7.5);
+          pdf.setTextColor(0, 0, 0);
+          pdf.text(String(perfil.numeroLabel || "Cotacao").toUpperCase(), pageW - marginX, y, { align: "right" });
+          pdf.setFontSize(9);
+          pdf.text(numero, pageW - marginX, y + 13, { align: "right" });
+        }
 
         pdf.setFont(titleFont, "bold");
         pdf.setFontSize(fitted.size);
@@ -7151,7 +7298,7 @@ export default function App() {
       writeSignature();
       writeRodape();
 
-      pdf.save(`${safeFileName(emp.nome)}-${safeFileName(dados.numero || "orcamento")}.pdf`);
+      pdf.save(nomeArquivoPDFOrcamento(emp, dados, cliente, texto));
       pushToast("PDF baixado com sucesso.", "ok");
     } catch (error) {
       console.error("Erro ao exportar PDF:", error);
@@ -7192,20 +7339,22 @@ export default function App() {
       return;
     }
 
+    const empSalva = empresas.find((emp) => emp.id === item.empresaId) || {};
+    const orcamentoNormalizado = normalizarDocumentoPublico(item.orcamentoCompleto, empSalva);
     setView("orcamento");
     setStep("preview");
     setOrcamentos({
-      [item.empresaId]: item.orcamentoCompleto,
+      [item.empresaId]: orcamentoNormalizado,
     });
     setActiveTab(item.empresaId);
     setEditando(false);
     setSelecao([
       {
         empId: item.empresaId,
-        valorGlobal: item.valorGlobal || item.orcamentoCompleto.valorGlobal || "",
+        valorGlobal: item.valorGlobal || orcamentoNormalizado.valorGlobal || "",
       },
     ]);
-    setCliente(item.cliente || item.orcamentoCompleto?.campos?.cliente || "");
+    setCliente(item.cliente || orcamentoNormalizado?.campos?.cliente || "");
     pushToast("Orçamento aberto para visualização e novo download.", "ok");
   };
 
@@ -7221,6 +7370,21 @@ export default function App() {
     pushToast("Orçamento anexado e adicionado ao acompanhamento.", "ok");
   };
 
+
+  const tituloCardExportacao = (emp) => {
+    const dados = orcamentos[emp.id] || {};
+    return dados.tituloResumo || resumoComercialOrcamento(dados, emp, cliente, texto);
+  };
+
+  const detalheCardExportacao = (emp) => {
+    const dados = orcamentos[emp.id] || {};
+    const perfil = perfilVisualEmpresa(emp, dados);
+    return [
+      emp.nome,
+      dados.valorGlobal ? brl(dados.valorGlobal) : "",
+      documentoExibeCodigo(perfil) && dados.numero ? dados.numero : "",
+    ].filter(Boolean).join(" · ");
+  };
 
   const INP = { background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, borderRadius: 10, padding: "11px 14px", color: BRAND.text, fontSize: UI.text, outline: "none", width: "100%", boxSizing: "border-box", lineHeight: 1.6, fontFamily: "inherit", transition: "all .22s ease" };
   const corDB = { ok: BRAND.green, erro: BRAND.danger, carregando: BRAND.warn };
@@ -7642,7 +7806,7 @@ export default function App() {
               <button onClick={() => setEditando((v) => !v)} style={{ padding: "7px 13px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 850, border: `1px solid ${editando ? BRAND.warn : BRAND.border2}`, background: editando ? `${BRAND.warn}14` : "transparent", color: editando ? "#FBBF24" : BRAND.dim }}>{editando ? "✏ Editando" : "✏ Editar"}</button>
             </div></div>{activeTab && orcamentos[activeTab] && (() => { const emp = empresas.find((e) => e.id === activeTab); return emp ? <OrcamentoDoc emp={emp} dados={orcamentos[activeTab]} editando={editando} onChange={(c, v) => fieldChange(activeTab, c, v)} /> : null; })()}</div>}
 
-            {step === "exportacao" && <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "28px 16px" }}><div style={{ width: "100%", maxWidth: 540, textAlign: "center" }}><div style={{ fontSize: 48, marginBottom: 10 }}>✅</div><div style={{ fontSize: 19, fontWeight: 900, marginBottom: 5 }}>Orçamentos Aprovados!</div><div style={{ fontSize: 12, color: BRAND.dim, marginBottom: 20 }}>{empsSel.length} proposta{empsSel.length !== 1 ? "s" : ""} pronta{empsSel.length !== 1 ? "s" : ""}</div><div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 15, padding: 16, marginBottom: 15 }}>{empsSel.map((emp) => <div key={emp.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", background: BRAND.panel2, borderRadius: 10, border: `1px solid ${emp.corPrimaria || BRAND.green2}20`, marginBottom: 8 }}><div style={{ textAlign: "left" }}><div style={{ fontSize: 13, fontWeight: 850 }}>{emp.nome}</div><div style={{ fontSize: 10, color: BRAND.dim }}>{orcamentos[emp.id]?.numero}{orcamentos[emp.id]?.valorGlobal ? ` · ${brl(orcamentos[emp.id].valorGlobal)}` : ""}</div></div><button onClick={() => baixarPDF(emp.id)} style={{ padding: "6px 12px", borderRadius: 14, background: `linear-gradient(135deg, ${BRAND.green2}, ${BRAND.blue2})`, border: `1px solid ${BRAND.green2}66`, fontSize: 11, color: "#fff", fontWeight: 900, cursor: "pointer" }}>Baixar PDF</button></div>)}</div><button onClick={baixarTodosPDF} style={{ width: "100%", padding: 11, borderRadius: 10, border: `1px solid ${BRAND.green2}66`, background: `linear-gradient(135deg, ${BRAND.green2}, ${BRAND.blue2})`, color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 900, marginBottom: 9 }}>⬇ Baixar todos os PDFs</button><button onClick={resetOrcamento} style={{ width: "100%", padding: 10, borderRadius: 10, border: `1px solid ${BRAND.border2}`, background: "transparent", color: BRAND.dim, cursor: "pointer", fontSize: 12 }}>← Criar novo orçamento</button></div></div>}
+            {step === "exportacao" && <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "28px 16px" }}><div style={{ width: "100%", maxWidth: 540, textAlign: "center" }}><div style={{ fontSize: 48, marginBottom: 10 }}>✅</div><div style={{ fontSize: 19, fontWeight: 900, marginBottom: 5 }}>Propostas Aprovadas!</div><div style={{ fontSize: 12, color: BRAND.dim, marginBottom: 20 }}>{empsSel.length} proposta{empsSel.length !== 1 ? "s" : ""} pronta{empsSel.length !== 1 ? "s" : ""}</div><div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 15, padding: 16, marginBottom: 15 }}>{empsSel.map((emp) => <div key={emp.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "10px 12px", background: BRAND.panel2, borderRadius: 10, border: `1px solid ${emp.corPrimaria || BRAND.green2}20`, marginBottom: 8 }}><div style={{ textAlign: "left", minWidth: 0 }}><div title={tituloCardExportacao(emp)} style={{ fontSize: 13, fontWeight: 850, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 330 }}>{tituloCardExportacao(emp)}</div><div style={{ fontSize: 10, color: BRAND.dim }}>{detalheCardExportacao(emp)}</div></div><button onClick={() => baixarPDF(emp.id)} style={{ padding: "6px 12px", borderRadius: 14, background: `linear-gradient(135deg, ${BRAND.green2}, ${BRAND.blue2})`, border: `1px solid ${BRAND.green2}66`, fontSize: 11, color: "#fff", fontWeight: 900, cursor: "pointer", whiteSpace: "nowrap" }}>Baixar PDF</button></div>)}</div><button onClick={baixarTodosPDF} style={{ width: "100%", padding: 11, borderRadius: 10, border: `1px solid ${BRAND.green2}66`, background: `linear-gradient(135deg, ${BRAND.green2}, ${BRAND.blue2})`, color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 900, marginBottom: 9 }}>⬇ Baixar todos os PDFs</button><button onClick={resetOrcamento} style={{ width: "100%", padding: 10, borderRadius: 10, border: `1px solid ${BRAND.border2}`, background: "transparent", color: BRAND.dim, cursor: "pointer", fontSize: 12 }}>← Criar nova proposta</button></div></div>}
           </div>
         </div>
       )}
