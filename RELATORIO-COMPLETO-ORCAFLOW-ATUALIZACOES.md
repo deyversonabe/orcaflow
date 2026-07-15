@@ -1,6 +1,6 @@
 # OrcaFlow Studio AI - Relatorio completo de estrutura e atualizacoes
 
-Versao atual do projeto: 3.3.6  
+Versao atual do projeto: 3.3.7  
 Data do registro: 15/07/2026  
 Projeto: OrcaFlow Studio AI  
 Dominio em uso: orcaflow.ia.br  
@@ -38,6 +38,7 @@ O sistema permite:
 - exigir nova senha ao sair ou fechar a aba do navegador;
 - permitir que o administrador copie ou mova dados entre usuarios.
 - permitir reset controlado da base comercial, mantendo empresas e acessos.
+- usar favicon e logos otimizadas com fundo preto para melhorar a leitura na aba do navegador e no sistema.
 
 ## 2. Estrutura atual de pastas
 
@@ -495,12 +496,13 @@ outputs/orcaflow-studio-ai-3.3.3-crm-sem-cliente-fantasma.zip
 outputs/orcaflow-studio-ai-3.3.4-logo-na-aba-navegador.zip
 outputs/orcaflow-studio-ai-3.3.5-completo-crm-clientes-limpo.zip
 outputs/orcaflow-studio-ai-3.3.6-completo-reset-base-comercial.zip
+outputs/orcaflow-studio-ai-3.3.7-completo-logo-favicon-preto.zip
 ```
 
 Versao recomendada para subir:
 
 ```text
-outputs/orcaflow-studio-ai-3.3.6-completo-reset-base-comercial.zip
+outputs/orcaflow-studio-ai-3.3.7-completo-logo-favicon-preto.zip
 ```
 
 ## 15. Validacoes realizadas
@@ -527,7 +529,7 @@ Arquivos sensiveis no zip: nao encontrados
 1. Usar o zip:
 
 ```text
-outputs/orcaflow-studio-ai-3.3.6-completo-reset-base-comercial.zip
+outputs/orcaflow-studio-ai-3.3.7-completo-logo-favicon-preto.zip
 ```
 
 2. Enviar os arquivos para o GitHub.
@@ -682,4 +684,23 @@ outputs/orcaflow-studio-ai-3.3.5-completo-crm-clientes-limpo.zip
 
 ```text
 outputs/orcaflow-studio-ai-3.3.6-completo-reset-base-comercial.zip
+```
+
+---
+
+# Atualizacao 3.3.7 - logo e favicon com fundo preto
+
+## O que foi ajustado
+
+- A logo da aba do navegador foi substituida por um favicon recortado no simbolo principal, sem texto pequeno.
+- Foram criados os arquivos `public/favicon-orcaflow.png`, `public/icon-192.png`, `public/icon-512.png`, `public/logo-orcaflow-app.png` e `public/logo-orcaflow-banner.png`.
+- O manifesto PWA agora aponta para os icones novos, melhorando a aparencia quando o sistema for aberto no celular como app.
+- A tela de login e as telas de acesso bloqueado usam o icone quadrado com maior contraste.
+- O topo e a marca d'agua do sistema usam o banner preto horizontal.
+- O `index.html` recebeu parametro `?v=3.3.7` para forcar o navegador a trocar a logo antiga em cache.
+
+## Arquivo final desta versao
+
+```text
+outputs/orcaflow-studio-ai-3.3.7-completo-logo-favicon-preto.zip
 ```
