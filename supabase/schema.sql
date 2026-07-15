@@ -231,3 +231,5 @@ grant execute on function public.is_app_admin(uuid) to authenticated;
 
 create index if not exists app_users_status_idx
   on public.app_users (status, requested_at desc);
+
+notify pgrst, 'reload schema';
