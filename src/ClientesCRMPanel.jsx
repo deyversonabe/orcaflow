@@ -699,14 +699,16 @@ export function ClientesCRMPanel({
 
   const enriquecidos = useMemo(() => {
     return base.map((item) => {
-      const vinculados = orcamentosDoCliente(item, crm);
+      const sugestoesPorNome = orcamentosDoCliente(item, crm);
       const vinculadosExplicitos = Array.isArray(item.orcamentosVinculados) ? item.orcamentosVinculados : [];
-      const score = scoreCliente(item, vinculadosExplicitos.length ? vinculadosExplicitos : vinculados);
-      const baseOrcamentos = vinculadosExplicitos.length ? vinculadosExplicitos : vinculados;
+      const sugestoesNaoVinculadas = sugestoesPorNome.filter((orc) => !vinculadosExplicitos.some((v) => v.orcamentoId === orc.id));
+      const score = scoreCliente(item, vinculadosExplicitos);
+      const baseOrcamentos = vinculadosExplicitos;
       const tags = combinarEtiquetas(item.etiquetas, sugerirEtiquetasCliente(item, baseOrcamentos));
       return {
         ...item,
-        _orcamentos: vinculados,
+        _orcamentos: vinculadosExplicitos,
+        _orcamentosSugeridos: sugestoesNaoVinculadas,
         _score: score,
         _nivel: nivelCliente(score),
         _tags: tags,
@@ -759,11 +761,12 @@ export function ClientesCRMPanel({
     return (Array.isArray(crm) ? crm : [])
       .filter((orc) => {
         if (orc?.id && jaVinculados.has(orc.id)) return false;
+        if (orc?.clienteVinculadoId && orc.clienteVinculadoId !== ativo?.id) return false;
         const texto = textoBusca([orc?.numero, orc?.cliente, orc?.empresaNome, orc?.status, orc?.lembreteIA].filter(Boolean).join(" "));
         return !q || texto.includes(q);
       })
       .slice(0, 30);
-  }, [crm, buscaOrcamento, orcamentosVinculadosAtivo]);
+  }, [crm, buscaOrcamento, orcamentosVinculadosAtivo, ativo?.id]);
 
   const clientesCampanha = useMemo(
     () => selecionarClientesCampanha(filtrados, campanhaFiltro, filtroEtiqueta).slice(0, 25),
@@ -811,12 +814,13 @@ export function ClientesCRMPanel({
 
     const nova = (Array.isArray(crm) ? crm : []).map((orc) => {
       const registros = porOrcamento.get(orc.id);
-      if (!registros?.length) return orc;
+      const patches = validos.filter((par) => par?.orcamentoId === orc.id && par.patch).map((par) => par.patch);
+      if (!registros?.length && !patches.length) return orc;
       let conversas = Array.isArray(orc.conversas) ? [...orc.conversas] : [];
       let followups = Array.isArray(orc.followups) ? [...orc.followups] : [];
-      let itemMudou = false;
+      let itemMudou = Boolean(patches.length);
 
-      for (const registro of registros) {
+      for (const registro of registros || []) {
         const existeConversa = conversas.some((msg) => msg.followupId === registro.id || msg.id === `conv_${registro.id}`);
         const existeFollowup = followups.some((msg) => msg.id === registro.id);
         if (!existeConversa) {
@@ -831,9 +835,10 @@ export function ClientesCRMPanel({
 
       if (!itemMudou) return orc;
       mudou = true;
-      const ultimo = registros[0];
+      const ultimo = registros?.[0] || {};
       return {
         ...orc,
+        ...Object.assign({}, ...patches),
         conversas,
         followups,
         ultimoContatoEm: ultimo.criadoEm || new Date().toISOString(),
@@ -945,7 +950,7 @@ export function ClientesCRMPanel({
   const prepararPlaybook = (playbookId = ativo?._playbook || "confirmar-recebimento") => {
     if (!ativo) return;
     const playbook = PLAYBOOKS_ASSISTIDOS.find((item) => item.id === playbookId) || PLAYBOOKS_ASSISTIDOS[0];
-    const orc = orcamentoAtivo || orcamentosVinculadosAtivo[0] || relacionados[0] || null;
+    const orc = orcamentoAtivo || orcamentosVinculadosAtivo[0] || null;
     const mensagem = montarMensagemAssistida({
       cliente: ativo,
       orcamento: orc,
@@ -990,7 +995,7 @@ export function ClientesCRMPanel({
       return;
     }
     const resultados = clientesCampanha.slice(0, 15).map((cliente) => {
-      const orc = (Array.isArray(cliente.orcamentosVinculados) ? cliente.orcamentosVinculados[0] : null) || cliente._orcamentos?.[0] || null;
+      const orc = (Array.isArray(cliente.orcamentosVinculados) ? cliente.orcamentosVinculados[0] : null) || null;
       return {
         clienteId: cliente.id,
         nome: cliente.nome || cliente.empresa || "Cliente",
@@ -1038,6 +1043,10 @@ export function ClientesCRMPanel({
       pushToast("Este orcamento ja esta vinculado ao cliente.", "aviso");
       return;
     }
+    if (orc.clienteVinculadoId && orc.clienteVinculadoId !== ativo.id) {
+      pushToast("Este orcamento ja esta vinculado a outro cliente.", "erro");
+      return;
+    }
     const registro = criarRegistroSistemaCliente(usuarioAtual, {
       tipo: "Orcamento vinculado",
       assunto: orc.numero || "Orcamento do sistema",
@@ -1054,7 +1063,18 @@ export function ClientesCRMPanel({
       contatos: [registro, ...contatosAtivo].slice(0, 160),
       orcamentosVinculados: [vinculo, ...orcamentosVinculadosAtivo].slice(0, 80),
     });
-    await registrarHistoricoOrcamentoGlobal(orc.id, registro);
+    await adicionarRegistrosHistoricoOrcamentos([{
+      orcamentoId: orc.id,
+      registro,
+      patch: {
+        clienteVinculadoId: ativo.id,
+        clienteCRMId: ativo.id,
+        clienteVinculadoNome: ativo.nome || ativo.empresa || "",
+        clienteSugeridoId: "",
+        clienteSugeridoNome: "",
+        clienteSugeridoScore: 0,
+      },
+    }]);
     setOrcamentoAtivoId(vinculo.id);
     setContato((atual) => ({ ...atual, orcamentoClienteId: vinculo.id, orcamentoId: vinculo.orcamentoId }));
     setOrcamentoSistemaId("");
@@ -1122,54 +1142,29 @@ export function ClientesCRMPanel({
     await atualizarCliente({
       orcamentosVinculados: orcamentosVinculadosAtivo.filter((item) => item.id !== orcamentoClienteId),
     });
+    if (alvo.orcamentoId) {
+      await salvarOrcamentosGlobais((Array.isArray(crm) ? crm : []).map((orc) => orc.id === alvo.orcamentoId ? {
+        ...orc,
+        clienteVinculadoId: "",
+        clienteCRMId: "",
+        clienteVinculadoNome: "",
+        atualizadoEm: new Date().toISOString(),
+      } : orc));
+    }
     setOrcamentoAtivoId("");
     setContato((atual) => atual.orcamentoClienteId === orcamentoClienteId ? { ...atual, orcamentoClienteId: "", orcamentoId: "" } : atual);
     pushToast("Vinculo de orcamento removido do cliente.", "aviso");
   };
 
   const sincronizarOrcamentos = async () => {
-    const existentes = new Set(clientes.map((item) => textoBusca(item.nome || item.empresa)));
-    const novos = [];
-    const registrosOrcamentos = [];
-    for (const item of crm) {
-      const nome = clean(item?.cliente, 180);
-      if (!nome || existentes.has(textoBusca(nome))) continue;
-      existentes.add(textoBusca(nome));
-      const registro = criarRegistroSistemaCliente(usuarioAtual, {
-        tipo: "Cliente criado do orcamento",
-        assunto: item.numero || "Sincronizacao CRM",
-        mensagem: `Cliente criado automaticamente a partir do orcamento ${item.numero || item.id || ""}. Valor: ${brl(item.valorGlobal || item.valor)}.`,
-        orcamentoId: item.id || "",
-        orcamentoNumero: item.numero || "",
-      });
-      const vinculo = {
-        ...orcamentoDoSistemaParaCliente(item, usuarioAtual),
-        historico: [registro],
-        atualizadoEm: new Date().toISOString(),
-      };
-      if (item.id) registrosOrcamentos.push({ orcamentoId: item.id, registro });
-      novos.push(criarCliente(usuarioAtual, {
-        nome,
-        empresa: nome,
-        origem: `Orcamento ${item.numero || ""}`.trim(),
-        status: statusFunil(item),
-        temperatura: isAtrasado(item) ? "Quente" : "Morno",
-        proximoContato: item.proximoContato || "",
-        valorPotencial: item.valorGlobal || item.valor || "",
-        observacoes: item.lembreteIA || item.resumoConversas || "",
-        proximoPasso: item.proximoContato ? `Retomar contato em ${item.proximoContato}` : "Avaliar retorno comercial do orcamento.",
-        contatos: [registro],
-        orcamentosVinculados: [vinculo],
-      }));
-    }
-    if (!novos.length) {
-      pushToast("Nenhum novo cliente encontrado nos orcamentos.", "aviso");
+    if (!ativo) {
+      pushToast("Selecione um cliente para buscar orcamentos compativeis.", "aviso");
       return;
     }
-    await salvarLista([...novos, ...clientes]);
-    await adicionarRegistrosHistoricoOrcamentos(registrosOrcamentos);
-    setAtivoId(novos[0].id);
-    pushToast(`${novos.length} cliente(s) criado(s) a partir dos orcamentos.`, "ok");
+    const termo = clean(ativo.nome || ativo.empresa || "", 120);
+    setBuscaOrcamento(termo);
+    const sugestoes = (Array.isArray(ativo._orcamentosSugeridos) ? ativo._orcamentosSugeridos : []).length;
+    pushToast(sugestoes ? `${sugestoes} orcamento(s) compativel(is) encontrado(s). Revise e clique em Vincular.` : "Busca preenchida. Revise a lista e vincule manualmente se fizer sentido.", "ok");
   };
 
   const salvarContatosImportados = async (lista = [], origem = "Importacao de contatos") => {
@@ -1399,7 +1394,7 @@ export function ClientesCRMPanel({
                 criadoEm: msg.criadoEm,
               })),
             }))
-            : relacionados,
+            : [],
           pedido,
           imagem: imagemRecente,
         }),
@@ -1563,42 +1558,33 @@ export function ClientesCRMPanel({
             <button onClick={importarContatosDoAparelho} style={{ width: "100%", padding: "8px 10px", borderRadius: 10, border: `1px solid ${C.green2}66`, background: `${C.green2}16`, color: C.green, fontWeight: 900, cursor: "pointer" }}>Importar contatos do celular</button>
             <button onClick={() => refImportarContatos.current?.click()} style={{ width: "100%", padding: "8px 10px", borderRadius: 10, border: `1px solid ${C.border2}`, background: C.panel2, color: C.muted, fontWeight: 850, cursor: "pointer" }}>Importar arquivo .vcf/.csv</button>
             <div style={{ color: C.dim, fontSize: 10, lineHeight: 1.35 }}>No celular, use o navegador com permissao de contatos. Se nao aparecer a agenda, exporte contatos como .vcf ou .csv e importe aqui.</div>
-            <button onClick={sincronizarOrcamentos} style={{ width: "100%", padding: "8px 10px", borderRadius: 10, border: `1px solid ${C.blue2}55`, background: `${C.blue2}12`, color: "#93C5FD", fontWeight: 850, cursor: "pointer" }}>Sincronizar clientes dos orcamentos</button>
+            <button onClick={sincronizarOrcamentos} style={{ width: "100%", padding: "8px 10px", borderRadius: 10, border: `1px solid ${C.blue2}55`, background: `${C.blue2}12`, color: "#93C5FD", fontWeight: 850, cursor: "pointer" }}>Buscar orcamentos compativeis</button>
             <button onClick={abrirRelatorioSemanal} style={{ width: "100%", padding: "8px 10px", borderRadius: 10, border: `1px solid ${C.green2}66`, background: `${C.green2}16`, color: C.green, fontWeight: 900, cursor: "pointer" }}>Relatorio Nara</button>
             <button onClick={() => aplicarEtiquetasInteligentes(false)} style={{ width: "100%", padding: "8px 10px", borderRadius: 10, border: `1px solid ${C.warn}55`, background: `${C.warn}12`, color: C.warn, fontWeight: 850, cursor: "pointer" }}>Aplicar etiquetas nos filtrados</button>
-          </div>
-        </details>
-        <details style={{ marginBottom: 12 }}>
-          <summary style={{ color: C.green, cursor: "pointer", fontSize: 11, fontWeight: 950 }}>Campanhas assistidas</summary>
-          <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
-            <select value={campanhaFiltro} onChange={(e) => setCampanhaFiltro(e.target.value)} style={INP}>
-              {CAMPANHAS_ASSISTIDAS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-            </select>
-            <select value={campanhaPlaybook} onChange={(e) => setCampanhaPlaybook(e.target.value)} style={INP}>
-              {PLAYBOOKS_ASSISTIDOS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-            </select>
-            <div style={{ color: C.dim, fontSize: 10, lineHeight: 1.35 }}>{clientesCampanha.length} cliente(s) no segmento atual. O sistema prepara mensagens; o envio continua manual.</div>
-            <button onClick={gerarCampanhaAssistida} style={{ padding: "8px 10px", borderRadius: 10, border: `1px solid ${C.green2}66`, background: `${C.green2}16`, color: C.green, fontWeight: 900, cursor: "pointer" }}><Wand2 size={13} /> Gerar lista assistida</button>
           </div>
         </details>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {filtrados.map((item) => {
             const selected = item.id === ativo?.id;
+            const principal = item.nome || item.empresa || "Cliente sem nome";
+            const secundario = item.empresa && item.empresa !== item.nome ? item.empresa : item.email || item.email2 || item.whatsapp || item.telefone || "Sem dados de contato";
+            const sugestao = clean(item.proximoPasso || item.lembreteJade || "", 120);
             return (
-              <button key={item.id} onClick={() => { setAtivoId(item.id); setEditando(false); }} style={{ textAlign: "left", borderRadius: 12, padding: 11, border: `1px solid ${selected ? C.green2 : C.border2}`, background: selected ? `${C.green2}14` : C.panel2, color: C.text, cursor: "pointer" }}>
+              <button key={item.id} onClick={() => { setAtivoId(item.id); setEditando(false); }} style={{ textAlign: "left", borderRadius: 12, padding: 11, border: `1px solid ${selected ? C.green2 : C.border2}`, background: selected ? `${C.green2}14` : C.panel2, color: C.text, cursor: "pointer", minHeight: 0 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                  <strong style={{ fontSize: 12.5 }}>{item.nome || item.empresa || "Cliente sem nome"}</strong>
+                  <strong style={{ fontSize: 12.5, lineHeight: 1.25 }}>{principal}</strong>
                   <span style={{ color: item.temperatura === "Quente" ? C.warn : C.green, fontSize: 10, fontWeight: 900 }}>{item.temperatura}</span>
                 </div>
-                <div style={{ color: C.dim, fontSize: 10.5, marginTop: 3 }}>{item.empresa || item.email || item.email2 || item.whatsapp || item.telefone || "Sem dados de contato"}</div>
+                <div style={{ color: C.dim, fontSize: 10.5, marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{secundario}</div>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginTop: 6, alignItems: "center" }}>
                   <span style={{ color: item._score >= 78 ? C.danger : item._score >= 58 ? C.warn : "#93C5FD", fontSize: 10, fontWeight: 950 }}>Nara: {item._nivel} {item._score}</span>
                   <span style={{ color: isAtrasado(item) ? C.danger : isHoje(item) ? C.warn : C.dim, fontSize: 10 }}>{item.proximoContato || "sem data"}</span>
                 </div>
-                <div style={{ color: "#93C5FD", fontSize: 10, marginTop: 5 }}>{item.proximoPasso || item.lembreteJade || "Sem proximo passo definido"}</div>
+                {sugestao && <div style={{ color: "#93C5FD", fontSize: 10, marginTop: 5, lineHeight: 1.35, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{sugestao}</div>}
                 {!!item._tags?.length && (
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 7 }}>
-                    {item._tags.slice(0, 4).map((tag) => <span key={tag} style={{ border: `1px solid ${corEtiqueta(tag)}55`, color: labelEtiqueta(tag) === tag ? C.muted : corEtiqueta(tag), borderRadius: 999, padding: "2px 6px", fontSize: 9, fontWeight: 850 }}>{labelEtiqueta(tag)}</span>)}
+                    {item._tags.slice(0, 3).map((tag) => <span key={tag} style={{ border: `1px solid ${corEtiqueta(tag)}55`, color: labelEtiqueta(tag) === tag ? C.muted : corEtiqueta(tag), borderRadius: 999, padding: "2px 6px", fontSize: 9, fontWeight: 850 }}>{labelEtiqueta(tag)}</span>)}
+                    {item._tags.length > 3 && <span style={{ color: C.dim, fontSize: 9, padding: "2px 0" }}>+{item._tags.length - 3}</span>}
                   </div>
                 )}
               </button>
@@ -1613,6 +1599,48 @@ export function ClientesCRMPanel({
             <div><Users size={42} style={{ opacity: 0.55 }} /><div style={{ marginTop: 10, fontWeight: 900 }}>Crie um cliente para iniciar o acompanhamento.</div></div>
           </div>
         ) : (
+          <>
+          <section style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: 14, marginBottom: 14 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+              <div>
+                <div style={{ color: C.green, fontSize: 10, letterSpacing: 2, fontWeight: 950 }}>ACOES EM LOTE</div>
+                <div style={{ color: C.dim, fontSize: 12, marginTop: 3 }}>Segmentos e mensagens assistidas. A Nara prepara; voce revisa e envia manualmente.</div>
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                <select value={campanhaFiltro} onChange={(e) => setCampanhaFiltro(e.target.value)} style={{ ...INP, width: 190 }}>
+                  {CAMPANHAS_ASSISTIDAS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+                </select>
+                <select value={campanhaPlaybook} onChange={(e) => setCampanhaPlaybook(e.target.value)} style={{ ...INP, width: 180 }}>
+                  {PLAYBOOKS_ASSISTIDOS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+                </select>
+                <button onClick={gerarCampanhaAssistida} style={{ padding: "10px 12px", borderRadius: 10, border: `1px solid ${C.green2}66`, background: `${C.green2}16`, color: C.green, fontWeight: 900, cursor: "pointer" }}><Wand2 size={13} /> Preparar</button>
+              </div>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", marginTop: 10, color: C.dim, fontSize: 11 }}>
+              <span>{clientesCampanha.length} cliente(s) no segmento atual{filtroEtiqueta ? ` com etiqueta ${labelEtiqueta(filtroEtiqueta)}` : ""}.</span>
+              {campanhaResultados.length > 0 && <button onClick={() => setCampanhaResultados([])} style={{ border: "none", background: "transparent", color: C.danger, cursor: "pointer", fontSize: 11, fontWeight: 850 }}>Limpar lista preparada</button>}
+            </div>
+            {campanhaResultados.length > 0 && (
+              <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: 8, maxHeight: 260, overflowY: "auto" }}>
+                {campanhaResultados.map((item) => {
+                  const cliente = clientes.find((cli) => cli.id === item.clienteId) || {};
+                  return (
+                    <div key={item.clienteId} style={{ border: `1px solid ${C.border2}`, background: C.panel2, borderRadius: 12, padding: 10 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
+                        <strong style={{ fontSize: 12 }}>{item.nome}</strong>
+                        <span style={{ color: item.whatsapp ? C.green : C.danger, fontSize: 10, fontWeight: 900 }}>{item.whatsapp ? "WhatsApp ok" : "Sem numero"}</span>
+                      </div>
+                      <div style={{ whiteSpace: "pre-wrap", color: C.muted, fontSize: 11, lineHeight: 1.5, marginBottom: 8, display: "-webkit-box", WebkitLineClamp: 5, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{item.texto}</div>
+                      <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+                        <button onClick={() => copiarCampanha(item.clienteId, item.texto)} style={{ padding: "6px 9px", borderRadius: 8, border: `1px solid ${C.border2}`, background: "transparent", color: C.muted, cursor: "pointer", fontWeight: 850 }}><Copy size={12} /> Copiar</button>
+                        <button onClick={() => abrirWhatsCliente(cliente, item.texto)} style={{ padding: "6px 9px", borderRadius: 8, border: `1px solid ${C.green2}55`, background: `${C.green2}12`, color: C.green, cursor: "pointer", fontWeight: 850 }}><MessageCircle size={12} /> WhatsApp</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
           <div style={{ display: "grid", gridTemplateColumns: "minmax(360px, 0.9fr) minmax(420px, 1.1fr)", gap: 16, alignItems: "start" }}>
             <section style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: 16 }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", marginBottom: 14 }}>
@@ -1742,7 +1770,10 @@ export function ClientesCRMPanel({
                   <div><strong style={{ color: C.text }}>Canal preferido:</strong> {ativo.canalPreferido || "WhatsApp"}</div>
                   <div><strong style={{ color: C.text }}>Intencao:</strong> {ativo.intencao || "Nao informado"}</div>
                   <div><strong style={{ color: C.text }}>Objecao:</strong> {ativo.objecao || "Nao informado"}</div>
-                  <div><strong style={{ color: C.text }}>Orcamentos no perfil:</strong> {orcamentosVinculadosAtivo.length ? `${orcamentosVinculadosAtivo.length} vinculado(s), cada um com historico proprio.` : relacionados.length ? `${relacionados.length} possivel(is) por nome. Vincule abaixo para historico separado.` : "Nenhum orcamento vinculado"}</div>
+                  <div><strong style={{ color: C.text }}>Orcamentos no perfil:</strong> {orcamentosVinculadosAtivo.length ? `${orcamentosVinculadosAtivo.length} vinculado(s), cada um com historico proprio.` : "Nenhum orcamento vinculado"}</div>
+                  {!orcamentosVinculadosAtivo.length && Array.isArray(ativo._orcamentosSugeridos) && ativo._orcamentosSugeridos.length > 0 && (
+                    <div style={{ color: C.warn }}><strong>Sugestao:</strong> existem {ativo._orcamentosSugeridos.length} orcamento(s) com nome parecido. Eles nao entram no CRM deste cliente ate voce vincular manualmente.</div>
+                  )}
                   <div><strong style={{ color: C.text }}>Perfil:</strong> {ativo.perfil || "Sem perfil detalhado"}</div>
                   <div><strong style={{ color: C.text }}>Proximo passo:</strong> {ativo.proximoPasso || "Nara ainda nao analisou"}</div>
                   <div><strong style={{ color: C.text }}>Lembrete Nara:</strong> {ativo.lembreteJade || "Sem lembrete"}</div>
@@ -1793,36 +1824,13 @@ export function ClientesCRMPanel({
                   </div>
                   {ativo?._playbook && <span style={{ border: `1px solid ${C.green2}55`, color: C.green, borderRadius: 999, padding: "5px 8px", fontSize: 10, fontWeight: 900 }}>Sugestao: {PLAYBOOKS_ASSISTIDOS.find((p) => p.id === ativo._playbook)?.label || ativo._playbook}</span>}
                 </div>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: campanhaResultados.length ? 12 : 0 }}>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   {PLAYBOOKS_ASSISTIDOS.map((playbook) => (
                     <button key={playbook.id} onClick={() => prepararPlaybook(playbook.id)} disabled={!ativo} style={{ padding: "8px 10px", borderRadius: 10, border: `1px solid ${ativo?._playbook === playbook.id ? C.green2 : C.border2}`, background: ativo?._playbook === playbook.id ? `${C.green2}16` : C.panel2, color: ativo?._playbook === playbook.id ? C.green : C.muted, cursor: ativo ? "pointer" : "not-allowed", fontWeight: 850, fontSize: 11 }}>
                       {playbook.label}
                     </button>
                   ))}
                 </div>
-                {campanhaResultados.length > 0 && (
-                  <div style={{ borderTop: `1px solid ${C.border2}`, paddingTop: 10 }}>
-                    <div style={{ color: C.dim, fontSize: 11, marginBottom: 8 }}>Campanha assistida gerada: copie ou abra o WhatsApp externo cliente por cliente.</div>
-                    <div style={{ display: "grid", gap: 8, maxHeight: 260, overflowY: "auto" }}>
-                      {campanhaResultados.map((item) => {
-                        const cliente = clientes.find((cli) => cli.id === item.clienteId) || {};
-                        return (
-                          <div key={item.clienteId} style={{ border: `1px solid ${C.border2}`, background: C.panel2, borderRadius: 12, padding: 10 }}>
-                            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
-                              <strong style={{ fontSize: 12 }}>{item.nome}</strong>
-                              <span style={{ color: item.whatsapp ? C.green : C.danger, fontSize: 10, fontWeight: 900 }}>{item.whatsapp ? "WhatsApp ok" : "Sem numero"}</span>
-                            </div>
-                            <div style={{ whiteSpace: "pre-wrap", color: C.muted, fontSize: 11, lineHeight: 1.5, marginBottom: 8 }}>{item.texto}</div>
-                            <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
-                              <button onClick={() => copiarCampanha(item.clienteId, item.texto)} style={{ padding: "6px 9px", borderRadius: 8, border: `1px solid ${C.border2}`, background: "transparent", color: C.muted, cursor: "pointer", fontWeight: 850 }}><Copy size={12} /> Copiar</button>
-                              <button onClick={() => abrirWhatsCliente(cliente, item.texto)} style={{ padding: "6px 9px", borderRadius: 8, border: `1px solid ${C.green2}55`, background: `${C.green2}12`, color: C.green, cursor: "pointer", fontWeight: 850 }}><MessageCircle size={12} /> WhatsApp</button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
               </div>
 
               <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: 16 }}>
@@ -1924,6 +1932,7 @@ export function ClientesCRMPanel({
               </div>
             </section>
           </div>
+          </>
         )}
       </main>
     </div>

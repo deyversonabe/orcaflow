@@ -350,6 +350,43 @@ function textoBuscaVisual(valor = "") {
     .toLowerCase();
 }
 
+function textoComparacaoPessoa(valor = "") {
+  return textoBuscaVisual(valor)
+    .replace(/\b(prefeitura|municipal|municipio|camara|secretaria|departamento|ltda|eireli|mei|sa|s\/a|me|epp|comercio|servicos|engenharia)\b/g, " ")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tokensComparacao(valor = "") {
+  const stop = new Set(["de", "da", "do", "das", "dos", "para", "com", "sem", "por", "em"]);
+  return textoComparacaoPessoa(valor).split(/\s+/).filter((token) => token.length >= 3 && !stop.has(token));
+}
+
+function scoreClienteOrcamento(orc = {}, cliente = {}) {
+  const alvoOrc = textoComparacaoPessoa([orc.cliente, orc.destinatario, orc.descricaoArquivo].filter(Boolean).join(" "));
+  const alvoCliente = textoComparacaoPessoa([cliente.nome, cliente.empresa, cliente.documento, cliente.email, cliente.whatsapp, cliente.telefone].filter(Boolean).join(" "));
+  if (!alvoOrc || !alvoCliente) return 0;
+  if (alvoOrc === alvoCliente) return 96;
+  if (alvoOrc.length >= 8 && alvoCliente.length >= 8 && (alvoOrc.includes(alvoCliente) || alvoCliente.includes(alvoOrc))) return 86;
+
+  const tokensOrc = new Set(tokensComparacao(alvoOrc));
+  const tokensCliente = new Set(tokensComparacao(alvoCliente));
+  if (!tokensOrc.size || !tokensCliente.size) return 0;
+  let inter = 0;
+  for (const token of tokensOrc) if (tokensCliente.has(token)) inter += 1;
+  const score = Math.round((inter / Math.max(tokensOrc.size, tokensCliente.size)) * 78);
+  return score >= 38 ? score : 0;
+}
+
+function clientesCompativeisComOrcamento(orc = {}, clientes = [], limite = 4) {
+  return (Array.isArray(clientes) ? clientes : [])
+    .map((cliente) => ({ cliente, score: scoreClienteOrcamento(orc, cliente) }))
+    .filter(({ score }) => score >= 45)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limite);
+}
+
 function normalizarStatusOrcamento(itemOuStatus) {
   const bruto = typeof itemOuStatus === "string" ? itemOuStatus : itemOuStatus?.status;
   const status = textoBuscaVisual(clean(bruto || ""));
@@ -3338,7 +3375,7 @@ function avaliarPrioridadeOrcamento(item) {
   return { score, nivel: "Baixa", cor: BRAND.green, motivos, acao: "Acompanhar" };
 }
 
-function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], meta = {}, pushToast, usuarioAtual, setView, abrirOrcamentoSalvo, baixarOrcamento, onAnexar, naraConfig = DEFAULT_NARA_CONFIG, setNaraConfig, radarPendente, setRadarPendente, exportarBackup }) {
+function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setClientes, meta = {}, pushToast, usuarioAtual, setView, abrirOrcamentoSalvo, baixarOrcamento, onAnexar, naraConfig = DEFAULT_NARA_CONFIG, setNaraConfig, radarPendente, setRadarPendente, exportarBackup }) {
   const [busca, setBusca] = useState("");
   const [statusFiltro, setStatusFiltro] = useState("Todos");
   const [empresaFiltro, setEmpresaFiltro] = useState("Todas");
@@ -3357,9 +3394,11 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], meta = {},
   const [lixeiraAberta, setLixeiraAberta] = useState(false);
   const [auditoriaAcoes, setAuditoriaAcoes] = useState([]);
   const [auditoriaAcoesAberta, setAuditoriaAcoesAberta] = useState(false);
+  const [clienteLinkDrafts, setClienteLinkDrafts] = useState({});
 
   const isAdmin = usuarioAtual?.tipo === "admin";
   const base = isAdmin ? crm : crm.filter((o) => o.userId === usuarioAtual?.id);
+  const clientesVisiveis = isAdmin ? clientes : clientes.filter((item) => item.userId === usuarioAtual?.id);
 
   useEffect(() => {
     let ativo = true;
@@ -3547,6 +3586,131 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], meta = {},
   const salvarLixeira = (novaLista) => {
     setLixeiraOrcamentos(novaLista);
     store.set(KEY_CRM_TRASH, novaLista);
+  };
+
+  const salvarClientesCRM = (novaLista) => {
+    if (typeof setClientes === "function") setClientes(novaLista);
+    store.set(KEY_CLIENTES, novaLista);
+  };
+
+  const clienteVinculadoOrcamento = (item = {}) => {
+    const id = item.clienteVinculadoId || item.clienteCRMId || "";
+    return id ? clientesVisiveis.find((clienteItem) => clienteItem.id === id) || null : null;
+  };
+
+  const orcamentoParaVinculoCliente = (orc = {}, clienteItem = {}, registro = null) => ({
+    id: `ocli_${orc.id}`,
+    origem: orc.anexado ? (orc.origemImportacao || "anexo") : "sistema",
+    orcamentoId: orc.id,
+    numero: orc.numero || "",
+    titulo: orc.cliente || orc.numero || "Orcamento do sistema",
+    empresaNome: orc.empresaNome || orc.empresa || "",
+    valor: orc.valorGlobal ?? orc.valor ?? "",
+    status: orc.status || "Aberto",
+    resumo: clean(orc.lembreteIA || orc.descricaoArquivo || orc.resumoConversas || "", 2200),
+    arquivoNome: orc.arquivoNome || "",
+    arquivoTipo: orc.arquivoTipo || "",
+    arquivoTamanho: orc.arquivoTamanho || 0,
+    historico: registro ? [registro] : [],
+    userId: clienteItem.userId || orc.userId || usuarioAtual?.id || "admin",
+    criadoEm: orc.criadoEm || new Date().toISOString(),
+    anexadoEm: new Date().toISOString(),
+    atualizadoEm: new Date().toISOString(),
+  });
+
+  const criarRegistroVinculoCliente = (orc = {}, clienteItem = {}) => ({
+    id: `ct_link_${orc.id}_${Date.now()}`,
+    canal: "Sistema",
+    direcao: "Registro interno",
+    tipo: "Orcamento vinculado",
+    assunto: orc.numero || "Orcamento",
+    mensagem: `Orcamento ${orc.numero || orc.id || ""} vinculado manualmente ao perfil ${clienteItem.nome || clienteItem.empresa || ""}. Valor: ${brl(orc.valorGlobal ?? orc.valor)}.`,
+    orcamentoId: orc.id,
+    orcamentoNumero: orc.numero || "",
+    orcamentoTitulo: orc.cliente || "",
+    criadoEm: new Date().toISOString(),
+    userId: usuarioAtual?.id || "admin",
+    origem: "vinculo_manual_gestao",
+  });
+
+  const vincularOrcamentoAoCliente = (orc = {}, clienteId = "") => {
+    const clienteItem = clientes.find((item) => item.id === clienteId);
+    if (!orc?.id || !clienteItem) {
+      pushToast("Selecione um cliente valido para vincular.", "erro");
+      return;
+    }
+
+    const registro = criarRegistroVinculoCliente(orc, clienteItem);
+    const vinculo = orcamentoParaVinculoCliente(orc, clienteItem, registro);
+    const novaCRM = crm.map((item) => item.id === orc.id ? {
+      ...item,
+      clienteVinculadoId: clienteItem.id,
+      clienteVinculadoNome: clienteItem.nome || clienteItem.empresa || "",
+      clienteCRMId: clienteItem.id,
+      clienteSugeridoId: "",
+      clienteSugeridoNome: "",
+      clienteSugeridoScore: 0,
+      conversas: [
+        {
+          id: `conv_${registro.id}`,
+          followupId: registro.id,
+          canal: "Sistema",
+          direcao: "interna",
+          tipo: "Orcamento vinculado",
+          mensagem: registro.mensagem,
+          criadoEm: registro.criadoEm,
+          origem: "vinculo_manual_gestao",
+          usuarioNome: nomeUsuarioSistema(usuarioAtual),
+          clienteId: clienteItem.id,
+        },
+        ...(Array.isArray(item.conversas) ? item.conversas : []),
+      ].slice(0, 120),
+      atualizadoEm: new Date().toISOString(),
+    } : item);
+
+    const novaClientes = clientes.map((clienteAtual) => {
+      if (clienteAtual.id !== clienteItem.id) return clienteAtual;
+      const vinculados = Array.isArray(clienteAtual.orcamentosVinculados) ? clienteAtual.orcamentosVinculados : [];
+      const semDuplicar = vinculados.filter((item) => item.orcamentoId !== orc.id);
+      return {
+        ...clienteAtual,
+        valorPotencial: clienteAtual.valorPotencial || orc.valorGlobal || orc.valor || "",
+        proximoContato: clienteAtual.proximoContato || orc.proximoContato || "",
+        contatos: [registro, ...(Array.isArray(clienteAtual.contatos) ? clienteAtual.contatos : [])].slice(0, 160),
+        orcamentosVinculados: [vinculo, ...semDuplicar].slice(0, 80),
+        atualizadoEm: new Date().toISOString(),
+      };
+    });
+
+    salvarCRM(novaCRM);
+    salvarClientesCRM(novaClientes);
+    registrarAuditoriaAcao("VINCULAR_CLIENTE_ORCAMENTO", [orc], { clienteId: clienteItem.id, clienteNome: clienteItem.nome || clienteItem.empresa || "" });
+    setClienteLinkDrafts((atual) => ({ ...atual, [orc.id]: clienteItem.id }));
+    pushToast("Orcamento vinculado ao perfil do cliente.", "ok");
+  };
+
+  const desvincularOrcamentoCliente = (orc = {}) => {
+    const clienteId = orc.clienteVinculadoId || orc.clienteCRMId;
+    if (!orc?.id || !clienteId) return;
+    const clienteItem = clientes.find((item) => item.id === clienteId);
+    const ok = window.confirm(`Remover o vinculo deste orcamento com ${clienteItem?.nome || clienteItem?.empresa || "o cliente"}?`);
+    if (!ok) return;
+
+    salvarCRM(crm.map((item) => item.id === orc.id ? {
+      ...item,
+      clienteVinculadoId: "",
+      clienteVinculadoNome: "",
+      clienteCRMId: "",
+      atualizadoEm: new Date().toISOString(),
+    } : item));
+    salvarClientesCRM(clientes.map((clienteAtual) => clienteAtual.id === clienteId ? {
+      ...clienteAtual,
+      orcamentosVinculados: (Array.isArray(clienteAtual.orcamentosVinculados) ? clienteAtual.orcamentosVinculados : []).filter((v) => v.orcamentoId !== orc.id),
+      atualizadoEm: new Date().toISOString(),
+    } : clienteAtual));
+    registrarAuditoriaAcao("DESVINCULAR_CLIENTE_ORCAMENTO", [orc], { clienteId });
+    setClienteLinkDrafts((atual) => ({ ...atual, [orc.id]: "" }));
+    pushToast("Vinculo removido. O orcamento continua na Gestao, sem cliente CRM.", "aviso");
   };
 
   const registrarAuditoriaAcao = (acao, itens = [], extra = {}) => {
@@ -4505,6 +4669,9 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], meta = {},
                   const lembreteAtual = item.lembreteIA || item.lembrete || "";
                   const carregandoContato = String(gerandoContato || "").startsWith(`${item.id}_`);
                   const rascunhoConversa = draftConversa(item.id);
+                  const clienteVinculado = clienteVinculadoOrcamento(item);
+                  const sugestoesCliente = clienteVinculado ? [] : clientesCompativeisComOrcamento(item, clientesVisiveis, 3);
+                  const clienteDraft = clienteLinkDrafts[item.id] || item.clienteSugeridoId || "";
                   return (
                     <React.Fragment key={item.id}>
                       <tr style={{ borderTop: `1px solid ${BRAND.border}` }}>
@@ -4578,6 +4745,47 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], meta = {},
                               Último contato: {tsFmt(ultimoContato.criadoEm)}
                             </div>
                           )}
+                          <div style={{ marginTop: 10, borderTop: `1px solid ${BRAND.border2}`, paddingTop: 8 }}>
+                            {clienteVinculado ? (
+                              <div style={{ display: "grid", gap: 6 }}>
+                                <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                                  <span style={{ color: BRAND.green, fontSize: 10, fontWeight: 950 }}>Cliente CRM:</span>
+                                  <span style={{ color: BRAND.text, fontSize: 10.5, fontWeight: 850 }}>{clienteVinculado.nome || clienteVinculado.empresa}</span>
+                                </div>
+                                <button type="button" onClick={() => desvincularOrcamentoCliente(item)} style={{ ...btnMiniGestao, width: "fit-content", color: BRAND.danger, borderColor: `${BRAND.danger}55`, background: `${BRAND.danger}10` }}>
+                                  Desvincular cliente
+                                </button>
+                              </div>
+                            ) : (
+                              <div style={{ display: "grid", gap: 6 }}>
+                                <div style={{ color: BRAND.dim, fontSize: 10 }}>Sem cliente CRM vinculado</div>
+                                {sugestoesCliente[0] && (
+                                  <button
+                                    type="button"
+                                    onClick={() => vincularOrcamentoAoCliente(item, sugestoesCliente[0].cliente.id)}
+                                    style={{ ...btnMiniGestao, width: "fit-content", color: BRAND.warn, borderColor: `${BRAND.warn}55`, background: `${BRAND.warn}10` }}
+                                  >
+                                    Sugestao: {sugestoesCliente[0].cliente.nome || sugestoesCliente[0].cliente.empresa} ({sugestoesCliente[0].score}%)
+                                  </button>
+                                )}
+                                <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 6 }}>
+                                  <select
+                                    value={clienteDraft}
+                                    onChange={(e) => setClienteLinkDrafts((atual) => ({ ...atual, [item.id]: e.target.value }))}
+                                    style={{ ...inputGestao, padding: "7px 9px", fontSize: 10.5 }}
+                                  >
+                                    <option value="">Vincular cliente...</option>
+                                    {clientesVisiveis.map((clienteItem) => (
+                                      <option key={clienteItem.id} value={clienteItem.id}>{clienteItem.nome || clienteItem.empresa || clienteItem.email || "Cliente sem nome"}</option>
+                                    ))}
+                                  </select>
+                                  <button type="button" onClick={() => vincularOrcamentoAoCliente(item, clienteDraft)} style={{ ...btnMiniGestao, color: BRAND.green, borderColor: `${BRAND.green2}55`, background: `${BRAND.green2}10` }}>
+                                    Vincular
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
                         </td>
                         <td style={td}>{item.empresaNome || item.empresa || "—"}</td>
                         <td style={td}>
@@ -5727,116 +5935,35 @@ export default function App() {
     const itens = (Array.isArray(orcamentosNovos) ? orcamentosNovos : [orcamentosNovos]).filter(Boolean);
     if (!itens.length) return false;
 
-    const salvos = await store.get(KEY_CLIENTES);
-    let lista = Array.isArray(salvos) ? salvos : Array.isArray(clientesCRM) ? clientesCRM : [];
+    const listaClientes = Array.isArray(clientesCRM) ? clientesCRM : [];
+    const crmBase = (await store.get(KEY_CRM)) || crm;
     let alterou = false;
+    const idsNovos = new Set(itens.map((item) => item.id).filter(Boolean));
 
-    const clienteKey = (valor = "") => textoBuscaVisual(clean(valor, 180));
-    const acharCliente = (nomeCliente) => {
-      const alvo = clienteKey(nomeCliente);
-      if (!alvo) return -1;
-      return lista.findIndex((clienteItem) => {
-        const atual = clienteKey(clienteItem.nome || clienteItem.empresa || "");
-        if (!atual) return false;
-        return atual === alvo || (alvo.length >= 8 && atual.length >= 8 && (atual.includes(alvo) || alvo.includes(atual)));
-      });
-    };
-
-    for (const orc of itens) {
-      const nomeCliente = clean(orc.cliente || orc.orcamentoCompleto?.campos?.cliente || "", 180);
-      if (!nomeCliente || !orc.id) continue;
-
-      const registro = {
-        id: `ct_orc_${orc.id}`,
-        canal: "Sistema",
-        direcao: "Registro interno",
-        tipo: orc.anexado ? "Orcamento anexado/importado" : "Orcamento gerado",
-        assunto: orc.numero || "Orcamento",
-        mensagem: `${orc.anexado ? "Orcamento anexado/importado" : "Orcamento gerado"} no sistema: ${orc.numero || orc.id}. Valor: ${brl(orc.valorGlobal ?? orc.valor)}.`,
-        orcamentoId: orc.id,
-        orcamentoNumero: orc.numero || "",
-        orcamentoTitulo: nomeCliente,
-        criadoEm: orc.criadoEm || new Date().toISOString(),
-        userId: orc.userId || usuarioAtual?.id || "admin",
-        origem: orc.anexado ? (orc.origemImportacao || "anexo_orcamento") : "geracao_orcamento",
-      };
-
-      const vinculo = {
-        id: `ocli_${orc.id}`,
-        origem: orc.anexado ? (orc.origemImportacao || "anexo") : "sistema",
-        orcamentoId: orc.id,
-        numero: orc.numero || "",
-        titulo: nomeCliente,
-        empresaNome: orc.empresaNome || "",
-        valor: orc.valorGlobal ?? orc.valor ?? "",
-        status: orc.status || "Aberto",
-        resumo: clean(orc.lembreteIA || orc.descricaoArquivo || orc.resumoConversas || "", 2200),
-        arquivoNome: orc.arquivoNome || "",
-        arquivoTipo: orc.arquivoTipo || "",
-        arquivoTamanho: orc.arquivoTamanho || 0,
-        historico: [registro],
-        userId: orc.userId || usuarioAtual?.id || "admin",
-        criadoEm: orc.criadoEm || new Date().toISOString(),
-        anexadoEm: new Date().toISOString(),
-        atualizadoEm: new Date().toISOString(),
-      };
-
-      const idx = acharCliente(nomeCliente);
-      if (idx >= 0) {
-        const clienteAtual = lista[idx];
-        const vinculados = Array.isArray(clienteAtual.orcamentosVinculados) ? clienteAtual.orcamentosVinculados : [];
-        if (vinculados.some((item) => item.orcamentoId === orc.id)) continue;
-        const contatos = Array.isArray(clienteAtual.contatos) ? clienteAtual.contatos : [];
-        lista = lista.map((clienteItem, itemIdx) => itemIdx === idx ? {
-          ...clienteItem,
-          valorPotencial: clienteItem.valorPotencial || orc.valorGlobal || orc.valor || "",
-          proximoContato: clienteItem.proximoContato || orc.proximoContato || "",
-          proximoPasso: clienteItem.proximoPasso || "Acompanhar retorno do orcamento vinculado.",
-          contatos: [registro, ...contatos].slice(0, 160),
-          orcamentosVinculados: [vinculo, ...vinculados].slice(0, 80),
-          atualizadoEm: new Date().toISOString(),
-        } : clienteItem);
-        alterou = true;
-      } else {
-        lista = [{
-          id: `cli_orc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-          nome: nomeCliente,
-          empresa: nomeCliente,
-          cargo: "",
-          email: "",
-          email2: "",
-          telefone: "",
-          whatsapp: "",
-          telefone2: "",
-          documento: "",
-          endereco: "",
-          cidadeUf: "",
-          segmento: "",
-          decisor: "",
-          origem: `Orcamento ${orc.numero || ""}`.trim(),
-          perfil: "",
-          status: statusFunilOrcamento(orc),
-          temperatura: isAtrasadoOrcamento(orc) ? "Quente" : "Morno",
-          proximoContato: orc.proximoContato || "",
-          valorPotencial: orc.valorGlobal || orc.valor || "",
-          observacoes: clean(orc.lembreteIA || orc.descricaoArquivo || "", 1200),
-          proximoPasso: orc.proximoContato ? `Retomar contato em ${orc.proximoContato}` : "Acompanhar retorno do orcamento vinculado.",
-          lembreteJade: "",
-          jade: null,
-          contatos: [registro],
-          orcamentosVinculados: [vinculo],
-          userId: orc.userId || usuarioAtual?.id || "admin",
-          criadoEm: new Date().toISOString(),
-          atualizadoEm: new Date().toISOString(),
-        }, ...lista];
-        alterou = true;
-      }
-    }
+    const novaCRM = (Array.isArray(crmBase) ? crmBase : []).map((orc) => {
+      if (!idsNovos.has(orc.id) || orc.clienteVinculadoId) return orc;
+      const sugestao = clientesCompativeisComOrcamento(orc, listaClientes, 1)[0];
+      const patch = sugestao
+        ? {
+            clienteSugeridoId: sugestao.cliente.id,
+            clienteSugeridoNome: sugestao.cliente.nome || sugestao.cliente.empresa || "",
+            clienteSugeridoScore: sugestao.score,
+          }
+        : {
+            clienteSugeridoId: "",
+            clienteSugeridoNome: "",
+            clienteSugeridoScore: 0,
+          };
+      const igual = (orc.clienteSugeridoId || "") === (patch.clienteSugeridoId || "") && Number(orc.clienteSugeridoScore || 0) === Number(patch.clienteSugeridoScore || 0);
+      if (igual) return orc;
+      alterou = true;
+      return { ...orc, ...patch, atualizadoEm: new Date().toISOString() };
+    });
 
     if (!alterou) return false;
-    setClientesCRM(lista);
-    const ok = await store.set(KEY_CLIENTES, lista);
-    if (!ok) pushToast("Orcamento salvo, mas nao foi possivel sincronizar o perfil do cliente na nuvem.", "erro");
+    setCrm(novaCRM);
+    const ok = await store.set(KEY_CRM, novaCRM);
+    if (!ok) pushToast("Orcamento salvo, mas nao foi possivel salvar a sugestao de cliente na nuvem.", "erro");
     return ok;
   };
 
@@ -7308,6 +7435,7 @@ export default function App() {
           setCrm={setCrm}
           empresas={empresas}
           clientes={clientesCRM}
+          setClientes={setClientesCRM}
           meta={meta}
           pushToast={pushToast}
           usuarioAtual={usuarioAtual}
