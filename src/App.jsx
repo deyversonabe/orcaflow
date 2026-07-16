@@ -108,6 +108,27 @@ const ADMIN_PADRAO = {
   criadoEm: new Date().toISOString(),
 };
 
+const INTERNAL_LOGIN_DOMAIN = "usuarios.orcaflow.local";
+
+function slugLoginInterno(valor = "") {
+  return String(valor || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ".")
+    .replace(/\.+/g, ".")
+    .replace(/^\.|\.$/g, "")
+    .slice(0, 70);
+}
+
+function emailParaLoginOrcaflow(valor = "") {
+  const login = String(valor || "").trim().toLowerCase();
+  if (!login) return "";
+  if (login.includes("@")) return login;
+  const slug = slugLoginInterno(login);
+  return slug ? `${slug}@${INTERNAL_LOGIN_DOMAIN}` : "";
+}
+
 function nomeUsuarioSistema(usuario = {}) {
   return clean(usuario.nomeTratamento || usuario.displayName || usuario.nome || usuario.email || "responsavel", 80);
 }
@@ -1786,7 +1807,7 @@ function OrcaFlowLogo({ onClick }) {
         style={{
           height: 58,
           width: "auto",
-          maxWidth: 300,
+          maxWidth: 230,
           objectFit: "contain",
           display: "block",
           filter: "drop-shadow(0 8px 22px rgba(0, 176, 255, .28))",
@@ -3106,9 +3127,14 @@ function LoginScreen({ onLogin, pushToast }) {
 
     setEntrando(true);
     try {
-      const email = usuario.trim().toLowerCase();
+      const loginInformado = usuario.trim();
+      const email = emailParaLoginOrcaflow(loginInformado);
+      if (!email) throw new Error("Informe um usuario valido.");
+      if (criandoConta && !loginInformado.includes("@")) {
+        throw new Error("Cadastro por nome interno deve ser criado pelo administrador em Acessos.");
+      }
       try {
-        localStorage.setItem(KEY_LAST_LOGIN_USER, email);
+        localStorage.setItem(KEY_LAST_LOGIN_USER, loginInformado);
       } catch {
         // O sistema nunca grava senha; se o navegador bloquear localStorage, apenas nao lembra o e-mail.
       }
@@ -3161,7 +3187,7 @@ function LoginScreen({ onLogin, pushToast }) {
           <button className="of-neon-btn" disabled={entrando} onClick={entrar} style={{ marginTop: 10, padding: "14px 16px", borderRadius: 14, cursor: entrando ? "not-allowed" : "pointer", fontSize: 15 }}>{entrando ? "Aguarde..." : criandoConta ? "Criar conta" : "Entrar"}</button>
           <div style={{ display: "flex", justifyContent: "center", gap: 18, marginTop: 4 }}>
             <button onClick={() => setCriandoConta((v) => !v)} style={{ border: 0, background: "transparent", color: "#93C5FD", cursor: "pointer", fontSize: 12 }}>{criandoConta ? "Já tenho conta" : "Criar conta"}</button>
-            <button onClick={async () => { if (!usuario.trim()) return pushToast("Informe seu e-mail primeiro.", "erro"); const { error } = await supabase.auth.resetPasswordForEmail(usuario.trim(), { redirectTo: window.location.origin }); pushToast(error ? error.message : "Enviamos as instruções para seu e-mail.", error ? "erro" : "ok"); }} style={{ border: 0, background: "transparent", color: "#93C5FD", cursor: "pointer", fontSize: 12 }}>Esqueci a senha</button>
+            <button onClick={async () => { if (!usuario.trim()) return pushToast("Informe seu e-mail primeiro.", "erro"); if (!usuario.trim().includes("@")) return pushToast("Senha de usuario interno deve ser redefinida pelo administrador em Acessos.", "erro"); const { error } = await supabase.auth.resetPasswordForEmail(usuario.trim(), { redirectTo: window.location.origin }); pushToast(error ? error.message : "Enviamos as instruções para seu e-mail.", error ? "erro" : "ok"); }} style={{ border: 0, background: "transparent", color: "#93C5FD", cursor: "pointer", fontSize: 12 }}>Esqueci a senha</button>
           </div>
         </div>
       </div>
@@ -5272,6 +5298,7 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
   const [acessos, setAcessos] = useState([]);
   const [carregandoAcessos, setCarregandoAcessos] = useState(false);
   const [encerrandoSessoes, setEncerrandoSessoes] = useState(false);
+  const [ativandoPerfilId, setAtivandoPerfilId] = useState("");
   const [perfilForm, setPerfilForm] = useState({ displayName: "", signatureName: "", phone: "", cargo: "" });
   const [salvandoPerfil, setSalvandoPerfil] = useState(false);
   const [resumoUsuarios, setResumoUsuarios] = useState({});
@@ -5350,8 +5377,33 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
         p_phone: clean(perfilForm.phone, 40),
         p_cargo: clean(perfilForm.cargo, 90),
       };
-      const { data, error } = await supabase.rpc("update_my_app_profile", payload);
-      if (error) throw error;
+      const { data: dadosRpc, error: erroRpc } = await supabase.rpc("update_my_app_profile", payload);
+      let data = dadosRpc;
+
+      if (erroRpc) {
+        console.warn("RPC update_my_app_profile indisponivel, tentando update direto:", erroRpc);
+        const nomeTratamento = payload.p_display_name || usuarioAtual?.email || usuarioAtual?.nome || "";
+        const patchPerfil = {
+          display_name: nomeTratamento,
+          signature_name: payload.p_signature_name || nomeTratamento,
+          phone: payload.p_phone || null,
+          cargo: payload.p_cargo || null,
+          name: nomeTratamento,
+          updated_at: new Date().toISOString(),
+        };
+
+        const { data: dadosDiretos, error: erroDireto } = await supabase
+          .from("app_users")
+          .update(patchPerfil)
+          .eq("user_id", usuarioAtual?.id)
+          .select("*")
+          .maybeSingle();
+
+        if (erroDireto) {
+          throw new Error(`${erroRpc.message || "Funcao de perfil ausente"} | Fallback direto: ${erroDireto.message}`);
+        }
+        data = dadosDiretos || { ...patchPerfil, email: usuarioAtual?.email };
+      }
 
       const atualizado = {
         ...usuarioAtual,
@@ -5504,11 +5556,12 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
     store.set(KEY_RESET, nova);
   };
 
-  const gerarNovaSenha = (sol) => {
+  const gerarNovaSenha = async (sol) => {
     const novaSenha = String(Math.floor(100000 + Math.random() * 900000));
     const alvo = usuarios.find((u) => (u.nome || "").toLowerCase() === (sol.usuario || "").toLowerCase() || (u.email || "").toLowerCase() === (sol.usuario || "").toLowerCase());
     if (alvo) {
-      salvarUsuarios(usuarios.map((u) => (u.id === alvo.id ? { ...u, senha: novaSenha } : u)));
+      const atualizado = await ativarAcessoInterno({ ...alvo, senha: novaSenha }, novaSenha);
+      if (!atualizado) return;
     }
     salvarSolicitacoes(solicitacoes.map((s) => (s.id === sol.id ? { ...s, status: "resolvido", novaSenha, resolvidoEm: new Date().toISOString() } : s)));
     pushToast(`Nova senha gerada: ${novaSenha}`, "ok");
@@ -5542,7 +5595,74 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
     store.set(KEY_USERS, final);
   };
 
-  const criarUsuario = () => {
+  const ativarAcessoInterno = async (perfil, senhaInformada = "") => {
+    if (!perfil?.nome?.trim()) {
+      pushToast("Informe o nome do perfil para ativar o acesso.", "erro");
+      return null;
+    }
+
+    if (isAdminProtegido(perfil)) {
+      pushToast("O administrador protegido usa a conta mestre do Supabase.", "erro");
+      return null;
+    }
+
+    const senhaFinal = String(senhaInformada || perfil.senha || "").trim() || window.prompt(`Informe uma senha inicial para ${perfil.nome}:`, "");
+    if (!senhaFinal || senhaFinal.length < 6) {
+      pushToast("A senha do acesso precisa ter pelo menos 6 caracteres.", "erro");
+      return null;
+    }
+
+    const marcador = perfil.id || perfil.nome;
+    setAtivandoPerfilId(marcador);
+    try {
+      const response = await fetch("/api/create-auth-user", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(await authHeaders()),
+        },
+        body: JSON.stringify({
+          nome: perfil.nome,
+          senha: senhaFinal,
+          tipo: perfil.tipo || "usuario",
+          loginEmail: perfil.loginEmail || emailParaLoginOrcaflow(perfil.nome),
+          displayName: perfil.nomeTratamento || perfil.displayName || perfil.nome,
+          signatureName: perfil.nomeAssinatura || perfil.signatureName || perfil.nome,
+          phone: perfil.telefone || perfil.phone || "",
+          cargo: perfil.cargo || "",
+        }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Nao foi possivel ativar o acesso interno.");
+
+      const atualizado = {
+        ...perfil,
+        senha: senhaFinal,
+        tipo: data.user?.role || perfil.tipo || "usuario",
+        perfil: data.user?.role === "admin" ? "Administrador" : "Usuario",
+        ativo: true,
+        loginEmail: data.user?.email || perfil.loginEmail || emailParaLoginOrcaflow(perfil.nome),
+        supabaseUserId: data.user?.user_id || perfil.supabaseUserId || "",
+        loginAtivo: true,
+        atualizadoEm: new Date().toISOString(),
+      };
+
+      const existe = usuarios.some((u) => u.id === perfil.id);
+      salvarUsuarios(existe ? usuarios.map((u) => (u.id === perfil.id ? atualizado : u)) : [...usuarios, atualizado]);
+      pushToast(`Acesso real ativado. Login: ${perfil.nome}`, "ok");
+      await carregarAcessos();
+      return atualizado;
+    } catch (error) {
+      console.error("Erro ao ativar acesso interno:", error);
+      pushToast(error?.message || "Nao foi possivel ativar o acesso interno.", "erro");
+      return null;
+    } finally {
+      setAtivandoPerfilId("");
+    }
+  };
+
+  const criarUsuario = async () => {
     if (!nome.trim() || !senha.trim()) {
       pushToast("Informe nome e senha para criar o perfil.", "erro");
       return;
@@ -5563,10 +5683,11 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
       criadoEm: new Date().toISOString(),
     };
 
-    salvarUsuarios([...usuarios, novo]);
-    setNome("");
-    setSenha("");
-    pushToast("Perfil criado com sucesso.", "ok");
+    const criado = await ativarAcessoInterno(novo, senha);
+    if (criado) {
+      setNome("");
+      setSenha("");
+    }
   };
 
   const editarUsuario = (usuario) => {
@@ -5833,11 +5954,11 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
 
       <div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 16, padding: 14, marginBottom: 16 }}>
         <div style={{ fontSize: 14, fontWeight: 900, marginBottom: 10 }}>Perfis internos opcionais</div>
-        <div style={{ fontSize: 11, color: BRAND.dim, marginBottom: 10 }}>Use esta area apenas para alternar perfis operacionais dentro de uma conta ja aprovada.</div>
+        <div style={{ fontSize: 11, color: BRAND.dim, marginBottom: 10 }}>Crie perfis operacionais com login proprio. O usuario pode entrar digitando o nome cadastrado e a senha inicial.</div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8 }}>
           <input value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Nome do usuário" style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, borderRadius: 10, padding: "10px 12px", color: BRAND.text, fontSize: 12 }} />
           <input value={senha} onChange={(e) => setSenha(e.target.value)} placeholder="Senha criada por você" style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, borderRadius: 10, padding: "10px 12px", color: BRAND.text, fontSize: 12 }} />
-          <button onClick={criarUsuario} style={{ padding: "10px 14px", borderRadius: 10, border: 0, background: `linear-gradient(135deg, ${BRAND.green2}, ${BRAND.blue2})`, color: "#fff", fontWeight: 900, cursor: "pointer" }}>Criar</button>
+          <button onClick={criarUsuario} disabled={!!ativandoPerfilId} style={{ padding: "10px 14px", borderRadius: 10, border: 0, background: `linear-gradient(135deg, ${BRAND.green2}, ${BRAND.blue2})`, color: "#fff", fontWeight: 900, cursor: ativandoPerfilId ? "wait" : "pointer" }}>{ativandoPerfilId ? "Criando..." : "Criar"}</button>
         </div>
       </div>
 
@@ -5857,9 +5978,14 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
 
       <div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 16, overflow: "hidden" }}>
         {usuarios.map((u) => (
-          <div key={u.id} style={{ display: "grid", gridTemplateColumns: "1fr .7fr .7fr .7fr .55fr", gap: 8, alignItems: "center", padding: "11px 14px", borderBottom: `1px solid ${BRAND.border2}` }}>
+          <div key={u.id} style={{ display: "grid", gridTemplateColumns: "minmax(190px,1.2fr) .62fr .62fr .95fr .55fr", gap: 8, alignItems: "center", padding: "11px 14px", borderBottom: `1px solid ${BRAND.border2}` }}>
             <div>
               <div style={{ fontSize: 13, fontWeight: 900 }}>{u.nome}</div>
+              {!isAdminProtegido(u) && (
+                <div style={{ fontSize: 10, color: u.loginAtivo || u.supabaseUserId ? BRAND.green : BRAND.warn, marginTop: 3, overflowWrap: "anywhere" }}>
+                  {u.loginAtivo || u.supabaseUserId ? `Login ativo: ${u.nome}` : "Login ainda nao ativado"}{u.loginEmail ? ` | ${u.loginEmail}` : ""}
+                </div>
+              )}
               <div style={{ fontSize: 10, color: BRAND.dim }}>{u.perfil || u.tipo} · {u.ativo ? "ativo" : "cancelado"}</div>
             </div>
             <select value={u.tipo} disabled={isAdminProtegido(u)} onChange={(e) => alterar(u.id, "tipo", e.target.value)} style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, color: BRAND.text, borderRadius: 9, padding: 8, fontSize: 12 }}>
@@ -5867,7 +5993,14 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
               <option value="usuario">usuario</option>
             </select>
             <button disabled={isAdminProtegido(u)} onClick={() => alterar(u.id, "ativo", !u.ativo)} style={{ padding: 8, borderRadius: 9, border: `1px solid ${u.ativo ? BRAND.danger : BRAND.green2}55`, background: "transparent", color: u.ativo ? BRAND.danger : BRAND.green, fontWeight: 850, cursor: isAdminProtegido(u) ? "not-allowed" : "pointer" }}>{u.ativo ? "Cancelar" : "Ativar"}</button>
-            <button onClick={() => entrarComo(u)} style={{ padding: 8, borderRadius: 9, border: `1px solid ${BRAND.blue2}55`, background: `${BRAND.blue2}12`, color: "#93C5FD", fontWeight: 850, cursor: "pointer" }}>Usar perfil</button>
+            <div style={{ display: "grid", gap: 6 }}>
+              <button onClick={() => entrarComo(u)} style={{ padding: 8, borderRadius: 9, border: `1px solid ${BRAND.blue2}55`, background: `${BRAND.blue2}12`, color: "#93C5FD", fontWeight: 850, cursor: "pointer" }}>Usar perfil</button>
+              {!isAdminProtegido(u) && (
+                <button disabled={ativandoPerfilId === u.id} onClick={() => ativarAcessoInterno(u)} style={{ padding: 8, borderRadius: 9, border: `1px solid ${BRAND.green2}55`, background: `${BRAND.green2}14`, color: BRAND.green, fontWeight: 850, cursor: ativandoPerfilId === u.id ? "wait" : "pointer" }}>
+                  {ativandoPerfilId === u.id ? "Ativando..." : u.loginAtivo || u.supabaseUserId ? "Atualizar login" : "Ativar acesso"}
+                </button>
+              )}
+            </div>
             <button disabled={isAdminProtegido(u)} onClick={() => excluirUsuario(u.id)} style={{ padding: 8, borderRadius: 9, border: `1px solid ${BRAND.danger}55`, background: "transparent", color: BRAND.danger, fontWeight: 850, cursor: isAdminProtegido(u) ? "not-allowed" : "pointer" }}>Excluir</button>
           </div>
         ))}
@@ -7620,20 +7753,20 @@ export default function App() {
         onDispensar={dispensarRelatorioPendente}
       />
 
-      <div className="of-topbar" style={{ position: "relative", zIndex: 2, background: "rgba(10,20,32,.92)", backdropFilter: "blur(12px)", borderBottom: `1px solid ${BRAND.border}`, padding: "0 16px", height: 84, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-        <div className="of-topbar-identity" style={{ display: "flex", alignItems: "center", gap: 12 }}>
+      <div className="of-topbar" style={{ position: "relative", zIndex: 2, background: "rgba(10,20,32,.92)", backdropFilter: "blur(12px)", borderBottom: `1px solid ${BRAND.border}`, padding: "0 16px", height: 84, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, minWidth: 0 }}>
+        <div className="of-topbar-identity" style={{ display: "flex", alignItems: "center", gap: 12, flex: "0 1 auto", minWidth: 0 }}>
           <OrcaFlowLogo onClick={resetInicio} />
           <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "3px 9px", borderRadius: 20, background: status === "ok" ? `${BRAND.green2}14` : BRAND.border2, border: `1px solid ${status === "ok" ? `${BRAND.green2}33` : BRAND.border2}` }}>
             <span style={{ width: 6, height: 6, borderRadius: "50%", background: corDB[status] || BRAND.warn }} />
             <span style={{ fontSize: 10, color: corDB[status] || BRAND.warn, fontWeight: 850 }}>{status === "carregando" ? "DB…" : status === "ok" ? `${empresas.length} emp.` : "ERRO"}</span>
           </div>
-          <div style={{ fontSize: 10, color: BRAND.muted, border: `1px solid ${BRAND.border2}`, borderRadius: 20, padding: "4px 9px" }}>
+          <div style={{ fontSize: 10, color: BRAND.muted, border: `1px solid ${BRAND.border2}`, borderRadius: 20, padding: "4px 9px", maxWidth: 190, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {usuarioAtual?.tipo === "admin" ? "Admin" : "Usuário"}: {usuarioAtual?.nome || "—"}
           </div>
         </div>
 
-        <div className="of-topbar-actions" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div className="of-main-nav" style={{ display: "flex", gap: 3, background: BRAND.bg, borderRadius: 10, padding: 4, border: `1px solid ${BRAND.border2}` }}>
+        <div className="of-topbar-actions" style={{ display: "flex", alignItems: "center", gap: 8, flex: "1 1 auto", minWidth: 0, justifyContent: "flex-end" }}>
+          <div className="of-main-nav" style={{ display: "flex", gap: 3, background: BRAND.bg, borderRadius: 10, padding: 4, border: `1px solid ${BRAND.border2}`, flex: "1 1 auto", minWidth: 0, maxWidth: "min(780px, 100%)", overflowX: "auto", overflowY: "hidden", whiteSpace: "nowrap" }}>
             {[
               ["gestao", "📊 Gestão"],
               ["clientes", "👥 Clientes"],
@@ -7649,7 +7782,7 @@ export default function App() {
               <button key={v} onClick={() => setView(v)} style={{ padding: "7px 12px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 850, background: view === v ? `linear-gradient(135deg, ${BRAND.green2}, #15803D)` : "transparent", color: view === v ? "#fff" : BRAND.dim, transition: "all .22s ease" }}>{l}</button>
             ))}
           </div>
-          <button onClick={async () => { await supabase.auth.signOut({ scope: "local" }); setAutenticado(false); setUsuarioAtual(null); setAcessoPerfil(null); setClientesCRM([]); }} title="Sair" style={{ padding: "8px 10px", borderRadius: 10, border: `1px solid ${BRAND.border2}`, background: "transparent", color: BRAND.muted, cursor: "pointer", fontWeight: 900 }}>Sair</button>
+          <button onClick={async () => { await supabase.auth.signOut({ scope: "local" }); setAutenticado(false); setUsuarioAtual(null); setAcessoPerfil(null); setClientesCRM([]); }} title="Sair" style={{ padding: "8px 10px", borderRadius: 10, border: `1px solid ${BRAND.border2}`, background: "transparent", color: BRAND.muted, cursor: "pointer", fontWeight: 900, flex: "0 0 auto" }}>Sair</button>
         </div>
       </div>
 
