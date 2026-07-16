@@ -167,11 +167,12 @@ begin
 end;
 $$;
 
-create or replace function public.update_my_app_profile(
+drop function if exists public.update_my_app_profile(text, text, text, text);
+create function public.update_my_app_profile(
+  p_cargo text default null,
   p_display_name text default null,
-  p_signature_name text default null,
   p_phone text default null,
-  p_cargo text default null
+  p_signature_name text default null
 )
 returns public.app_users
 language plpgsql
@@ -209,6 +210,13 @@ on public.app_users for select
 to authenticated
 using (auth.uid() = user_id or public.is_app_admin(auth.uid()));
 
+drop policy if exists "app_users_update_own_profile" on public.app_users;
+create policy "app_users_update_own_profile"
+on public.app_users for update
+to authenticated
+using (auth.uid() = user_id)
+with check (auth.uid() = user_id);
+
 drop policy if exists "app_users_update_admin" on public.app_users;
 create policy "app_users_update_admin"
 on public.app_users for update
@@ -233,3 +241,4 @@ create index if not exists app_users_status_idx
   on public.app_users (status, requested_at desc);
 
 notify pgrst, 'reload schema';
+select pg_notify('pgrst', 'reload schema');
