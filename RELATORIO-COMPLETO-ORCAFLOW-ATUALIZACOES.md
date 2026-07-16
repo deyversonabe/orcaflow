@@ -1,7 +1,7 @@
 # OrcaFlow Studio AI - Relatorio completo de estrutura e atualizacoes
 
-Versao atual do projeto: 3.3.8  
-Data do registro: 15/07/2026  
+Versao atual do projeto: 3.3.10  
+Data do registro: 16/07/2026  
 Projeto: OrcaFlow Studio AI  
 Dominio em uso: orcaflow.ia.br  
 Hospedagem prevista: Vercel  
@@ -40,6 +40,9 @@ O sistema permite:
 - permitir reset controlado da base comercial, mantendo empresas e acessos.
 - usar favicon e logos otimizadas com fundo preto para melhorar a leitura na aba do navegador e no sistema.
 - corrigir erro de perfil comercial quando o Supabase ainda nao possui a funcao `update_my_app_profile`.
+- salvar perfil comercial com fallback direto na tabela `app_users` caso a RPC continue indisponivel.
+- manter o botao `Sair` sempre visivel no topo, mesmo com a nova logo/banner.
+- criar/ativar acesso real no Supabase Auth para perfis internos, permitindo login pelo nome cadastrado e senha inicial.
 
 ## 2. Estrutura atual de pastas
 
@@ -49,6 +52,7 @@ orcaflow-main/
     _security.js
     chat-assistant.js
     client-crm-assistant.js
+    create-auth-user.js
     generate-budget.js
     import-budget-file.js
     read-company-card.js
@@ -103,12 +107,12 @@ VITE_SUPABASE_URL=https://SEU-PROJETO.supabase.co
 VITE_SUPABASE_ANON_KEY=chave publica/publishable do Supabase
 SUPABASE_URL=https://SEU-PROJETO.supabase.co
 SUPABASE_ANON_KEY=chave publica/publishable do Supabase
+SUPABASE_SERVICE_ROLE_KEY=service role key do Supabase
 ```
 
 Quando usar webhook oficial do WhatsApp/Meta:
 
 ```text
-SUPABASE_SERVICE_ROLE_KEY=service role key do Supabase
 WHATSAPP_VERIFY_TOKEN=token criado por voce para verificar webhook
 ```
 
@@ -499,12 +503,14 @@ outputs/orcaflow-studio-ai-3.3.5-completo-crm-clientes-limpo.zip
 outputs/orcaflow-studio-ai-3.3.6-completo-reset-base-comercial.zip
 outputs/orcaflow-studio-ai-3.3.7-completo-logo-favicon-preto.zip
 outputs/orcaflow-studio-ai-3.3.8-completo-correcao-perfil-supabase.zip
+outputs/orcaflow-studio-ai-3.3.9-completo-perfil-fallback-supabase.zip
+outputs/orcaflow-studio-ai-3.3.10-completo-acesso-interno-sair.zip
 ```
 
 Versao recomendada para subir:
 
 ```text
-outputs/orcaflow-studio-ai-3.3.8-completo-correcao-perfil-supabase.zip
+outputs/orcaflow-studio-ai-3.3.10-completo-acesso-interno-sair.zip
 ```
 
 ## 15. Validacoes realizadas
@@ -513,14 +519,14 @@ Comandos executados:
 
 ```text
 npm run build
-npm run preview -- --host 127.0.0.1 --port 4177
+node --check api/create-auth-user.js
 ```
 
 Resultado:
 
 ```text
 Build: aprovado
-Preview local: HTTP 200
+Endpoint create-auth-user: sintaxe aprovada
 Zip: conferido
 Segredos no zip: nao encontrados
 Arquivos sensiveis no zip: nao encontrados
@@ -531,7 +537,7 @@ Arquivos sensiveis no zip: nao encontrados
 1. Usar o zip:
 
 ```text
-outputs/orcaflow-studio-ai-3.3.8-completo-correcao-perfil-supabase.zip
+outputs/orcaflow-studio-ai-3.3.10-completo-acesso-interno-sair.zip
 ```
 
 2. Enviar os arquivos para o GitHub.
@@ -732,4 +738,55 @@ CORRIGIR-ERRO-PERFIL-USUARIO.sql
 
 ```text
 outputs/orcaflow-studio-ai-3.3.8-completo-correcao-perfil-supabase.zip
+```
+
+---
+
+# Atualizacao 3.3.9 - fallback de salvamento do perfil
+
+## O que foi ajustado
+
+- O app agora tenta salvar o perfil comercial pela RPC `update_my_app_profile`.
+- Se o Supabase continuar retornando erro de funcao ausente/cache, o app tenta salvar direto na tabela `public.app_users`.
+- O SQL `CORRIGIR-ERRO-PERFIL-USUARIO.sql` foi reforcado com a policy `app_users_update_own_profile`.
+- A funcao `update_my_app_profile` foi recriada com a ordem de parametros que o erro do Supabase mostrou: `p_cargo`, `p_display_name`, `p_phone`, `p_signature_name`.
+- O SQL agora usa `notify` e `select pg_notify` para forcar o recarregamento do cache do PostgREST.
+
+## Acao obrigatoria
+
+Rodar novamente no Supabase SQL Editor:
+
+```text
+CORRIGIR-ERRO-PERFIL-USUARIO.sql
+```
+
+Depois subir o zip 3.3.9 no Vercel/GitHub para usar o fallback direto pelo app.
+
+## Arquivo final desta versao
+
+```text
+outputs/orcaflow-studio-ai-3.3.9-completo-perfil-fallback-supabase.zip
+```
+
+---
+
+# Atualizacao 3.3.10 - botao Sair e acesso interno real
+
+## O que foi ajustado
+
+- A logo do topo foi reduzida para nao ocupar a area do menu.
+- A area de identidade do usuario agora permite encurtamento com reticencias.
+- A navegacao principal agora possui rolagem horizontal interna quando nao houver espaco.
+- O botao `Sair` recebeu largura fixa de layout e nao e mais empurrado para fora da tela.
+- Foi criado o endpoint seguro `api/create-auth-user.js` para o administrador criar ou ativar usuarios internos reais no Supabase Auth.
+- A tela de login agora aceita nome de usuario interno, como `maicon silveira`, convertendo internamente para login tecnico do Supabase.
+- A area **Perfis internos opcionais** agora mostra status do login e possui botao `Ativar acesso` / `Atualizar login`.
+- A redefinicao de senha de perfil interno tambem atualiza o Supabase Auth, nao apenas o cadastro local.
+- A documentacao reforca que `SUPABASE_SERVICE_ROLE_KEY` deve ficar somente na Vercel/servidor.
+- Mantidas as melhorias anteriores de logo, favicon, reset comercial e fallback de perfil.
+
+## Arquivo final desta versao
+
+```text
+outputs/orcaflow-studio-ai-3.3.10-completo-acesso-interno-sair.zip
 ```

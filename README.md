@@ -31,6 +31,7 @@ Aplicacao React/Vite para gerar, revisar, salvar e exportar orcamentos comerciai
 - Reset seguro da base comercial pela aba Banco ou pelo SQL `LIMPAR-BASE-COMERCIAL-MANTER-EMPRESAS.sql`, mantendo empresas, usuarios e acessos.
 - Logo/favicons otimizados com fundo preto para aba do navegador, PWA no celular, login e topo interno.
 - Correcao rapida de perfil comercial pelo SQL `CORRIGIR-ERRO-PERFIL-USUARIO.sql` quando o Supabase acusar funcao ausente no cache.
+- Salvamento de perfil com fallback direto em `app_users` quando a RPC do Supabase estiver com cache atrasado.
 
 ## Variaveis de ambiente
 
@@ -50,6 +51,7 @@ VITE_SUPABASE_URL=https://SEU-PROJETO.supabase.co
 VITE_SUPABASE_ANON_KEY=
 SUPABASE_URL=https://SEU-PROJETO.supabase.co
 SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
 ```
 
 Importante:
@@ -57,6 +59,7 @@ Importante:
 - `SUPABASE_URL` deve ser a Project URL limpa, sem `/rest/v1`.
 - Use somente chave publica `anon`/`publishable` no frontend.
 - Nunca coloque `service_role` em variaveis `VITE_`.
+- `SUPABASE_SERVICE_ROLE_KEY` deve ficar apenas na Vercel/servidor e e necessaria para o admin criar acessos internos reais.
 - Nao publique `.env.local`.
 - Para reduzir custo/tempo, troque `OPENAI_BUDGET_REASONING_EFFORT` para `medium`. Para maxima qualidade, mantenha `high`.
 

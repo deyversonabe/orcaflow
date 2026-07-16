@@ -9,11 +9,13 @@ alter table public.app_users add column if not exists signature_name text;
 alter table public.app_users add column if not exists phone text;
 alter table public.app_users add column if not exists cargo text;
 
-create or replace function public.update_my_app_profile(
+drop function if exists public.update_my_app_profile(text, text, text, text);
+
+create function public.update_my_app_profile(
+  p_cargo text default null,
   p_display_name text default null,
-  p_signature_name text default null,
   p_phone text default null,
-  p_cargo text default null
+  p_signature_name text default null
 )
 returns public.app_users
 language plpgsql
@@ -45,8 +47,15 @@ begin
 end;
 $$;
 
+drop policy if exists "app_users_update_own_profile" on public.app_users;
+create policy "app_users_update_own_profile"
+on public.app_users for update
+to authenticated
+using (auth.uid() = user_id)
+with check (auth.uid() = user_id);
+
 grant execute on function public.update_my_app_profile(text, text, text, text) to authenticated;
 
 -- Forca o PostgREST/Supabase a recarregar o cache do schema.
 notify pgrst, 'reload schema';
-
+select pg_notify('pgrst', 'reload schema');

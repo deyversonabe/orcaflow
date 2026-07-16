@@ -30,9 +30,11 @@ VITE_SUPABASE_URL=https://SEU-PROJETO.supabase.co
 VITE_SUPABASE_ANON_KEY=sua-chave-publica
 SUPABASE_URL=https://SEU-PROJETO.supabase.co
 SUPABASE_ANON_KEY=sua-chave-publica
+SUPABASE_SERVICE_ROLE_KEY=sua-chave-service-role
 ```
 
 `SUPABASE_URL` nao deve ter `/rest/v1`.
+`SUPABASE_SERVICE_ROLE_KEY` fica somente na Vercel/servidor. Ela e necessaria para o administrador criar ou ativar acessos internos reais para novos usuarios.
 
 ## 3. Deploy
 
