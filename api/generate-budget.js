@@ -40,6 +40,18 @@ function limparTexto(valor, limite = 220) {
     .slice(0, limite);
 }
 
+function removerPrecosDoTexto(valor = "", limite = 20000) {
+  return String(valor || "")
+    .slice(0, limite)
+    .replace(/\|\s*(?:valor\s*(?:unit(?:ario)?\.?|un\.?)|pre[cç]o|custo|subtotal|total)\s*[:=]?\s*(?:R\$\s*)?[\d.,]+/gi, "")
+    .replace(/\b(?:valor\s*(?:unit(?:ario)?\.?|un\.?)|pre[cç]o|custo|subtotal|total)\s*[:=]\s*(?:R\$\s*)?[\d.,]+/gi, "")
+    .replace(/R\$\s*[\d.]+(?:,\d{1,2})?/gi, "[valor ignorado]")
+    .replace(/\bvalor\s+identificado\s+no\s+anexo\s*:\s*[^\n|]+/gi, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function parseNumero(valor) {
   if (valor === null || valor === undefined) return 0;
   if (typeof valor === "number") return Number.isFinite(valor) ? valor : 0;
@@ -106,35 +118,13 @@ function normalizarMateriaisTabela(orcamentoEmpresa = {}, valorGlobal) {
       const quantidade = normalizarQuantidade(item?.quantidade || item?.qtd || 1);
       const unidade = limparTexto(item?.unidade || item?.un || "un", 18) || "un";
 
-      let originalTotal =
-        parseNumero(item?.valorOriginalTotal) ||
-        parseNumero(item?.valorTotalOriginal) ||
-        parseNumero(item?.valorOriginal) ||
-        parseNumero(item?.custoOriginal) ||
-        parseNumero(item?.custoTotal);
-
-      const originalUnitario =
-        parseNumero(item?.valorUnitarioOriginal) ||
-        parseNumero(item?.custoUnitarioOriginal) ||
-        parseNumero(item?.custoUnitario);
-
-      if (!originalTotal && originalUnitario) {
-        originalTotal = originalUnitario * quantidade;
-      }
-
-      const subtotalIA =
-        parseNumero(item?.subtotal) ||
-        parseNumero(item?.valorProposto) ||
-        parseNumero(item?.valorFinal) ||
-        parseNumero(item?.total);
-
       return {
         descricao,
         unidade,
         quantidade,
         pesoPercentual: Math.max(0, parseNumero(item?.pesoPercentual || item?.peso || item?.percentual)),
-        valorOriginalCentavos: Math.max(0, paraCentavos(originalTotal)),
-        subtotalIACentavos: Math.max(0, paraCentavos(subtotalIA)),
+        valorOriginalCentavos: 0,
+        subtotalIACentavos: 0,
         observacao: limparTexto(item?.observacao || item?.obs || "", 180),
       };
     })
@@ -153,7 +143,6 @@ function normalizarMateriaisTabela(orcamentoEmpresa = {}, valorGlobal) {
   }
 
   const valorGlobalCentavos = Math.max(0, paraCentavos(valorGlobal));
-  const totalOriginalCentavos = itens.reduce((acc, item) => acc + item.valorOriginalCentavos, 0);
   const totalPeso = itens.reduce((acc, item) => acc + item.pesoPercentual, 0);
 
   let criterio = "sem_valor_global";
@@ -162,14 +151,8 @@ function normalizarMateriaisTabela(orcamentoEmpresa = {}, valorGlobal) {
   const tabela = itens.map((item, index) => {
     let subtotalCentavos = 0;
 
-    if (valorGlobalCentavos > 0 && totalOriginalCentavos > 0) {
-      criterio = "fechamento_proporcional_por_referencia";
-      subtotalCentavos =
-        index === itens.length - 1
-          ? valorGlobalCentavos - acumulado
-          : Math.round((item.valorOriginalCentavos / totalOriginalCentavos) * valorGlobalCentavos);
-    } else if (valorGlobalCentavos > 0 && totalPeso > 0) {
-      criterio = "rateio_por_peso_ia";
+    if (valorGlobalCentavos > 0 && totalPeso > 0) {
+      criterio = "rateio_por_peso_ia_sem_precos_de_origem";
       subtotalCentavos =
         index === itens.length - 1
           ? valorGlobalCentavos - acumulado
@@ -180,12 +163,6 @@ function normalizarMateriaisTabela(orcamentoEmpresa = {}, valorGlobal) {
         index === itens.length - 1
           ? valorGlobalCentavos - acumulado
           : Math.round(valorGlobalCentavos / itens.length);
-    } else if (item.subtotalIACentavos > 0) {
-      criterio = "subtotal_informado_pela_ia";
-      subtotalCentavos = item.subtotalIACentavos;
-    } else if (item.valorOriginalCentavos > 0) {
-      criterio = "valor_final_por_referencia";
-      subtotalCentavos = item.valorOriginalCentavos;
     }
 
     subtotalCentavos = Math.max(0, subtotalCentavos);
@@ -575,6 +552,9 @@ export default async function handler(req, res) {
       });
     }
 
+    const textoSemPrecos = removerPrecosDoTexto(texto, 20000);
+    const obsSemPrecos = removerPrecosDoTexto(obs || "", 10000);
+
     const prompt = `
 Voce e um especialista senior em orcamentos tecnicos, engenharia, construcao, servicos comerciais e automacao documental.
 
@@ -600,11 +580,14 @@ MATERIAIS E PRECIFICACAO
 - Gere "materiaisTabela" SOMENTE quando o usuario trouxer uma lista real de materiais, produtos ou itens, de preferencia com quantidade, unidade, custo de referencia ou descricao itemizada.
 - Se o usuario mencionar "materiais" de forma generica, sem lista, nao crie tabela, nao crie itens ficticios e deixe "materiaisTabela" vazio.
 - A tabela final visivel ao cliente deve conter somente descricao, quantidade, unidade, valorUnitario final e subtotal final.
-- valorOriginal, custo de referencia, margem e acrescimoPercentual podem ser usados apenas como referencia interna de calculo no JSON, mas NUNCA devem aparecer no texto da proposta, nos titulos, nas consideracoes, no fechamento ou na tabela final.
+- O texto do usuario e anexos podem conter precos, valor unitario, subtotal, total, orcamento de fornecedor, cotacao anterior ou valor identificado em PDF. Ignore completamente esses valores monetarios.
+- A unica fonte de preco permitida e o campo "valorGlobal" da empresa selecionada.
+- Nao use preco, valor unitario, total ou subtotal presente na descricao para calcular ou ponderar itens.
+- valorOriginal, custo de referencia, margem e acrescimoPercentual devem ficar zerados ou vazios no JSON e NUNCA devem aparecer no texto da proposta, nos titulos, nas consideracoes, no fechamento ou na tabela final.
 - Nao escreva "valor original", "acrescimo", "percentual", "margem", "ajuste proporcional" ou explicacao de rateio no documento do cliente.
 - Use o valor global informado da empresa como total final da tabela quando ele existir.
-- Distribua o valor global proporcionalmente aos custos de referencia para que a soma dos subtotais feche dentro do valor global.
-- Se houver materiais sem custo de referencia, use pesoPercentual para indicar a distribuicao sugerida; o servidor fara o fechamento matematico final.
+- Se houver lista real de itens, use apenas descricao, quantidade e unidade para montar a tabela. O servidor fara o fechamento matematico final dentro do valorGlobal.
+- Se quiser sugerir pesoPercentual, baseie somente na complexidade/representatividade do item, nunca em preco informado na descricao.
 - Nao invente materiais que nao estejam no resumo.
 - Nunca escreva frases como "materiais citados sem lista", "prestacao de mao de obra mencionada de forma geral", "natureza tecnica nao detalhada" ou qualquer observacao de falta de informacao.
 
@@ -625,10 +608,10 @@ CLIENTE / DESTINATARIO:
 ${cliente}
 
 DESCRICAO DO SERVICO INFORMADA PELO USUARIO:
-${texto}
+${textoSemPrecos || "Nao informado."}
 
 OBSERVACOES OPCIONAIS:
-${obs || "Nao informado."}
+${obsSemPrecos || "Nao informado."}
 
 COMANDOS AUTOMATICOS DA NARA ANTES DA GERACAO:
 ${JSON.stringify(automacaoNaraSegura, null, 2)}
