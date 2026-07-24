@@ -6,6 +6,7 @@ import { abrirWhatsRelatorio, gerarRelatorioSemanalNara, normalizarWhatsDestino,
 
 const KEY_CLIENTES = "orcaflow_clientes_crm";
 const KEY_ORCAMENTOS = "orcaflow_crm_orcamentos";
+const KEY_AGENDA = "orcaflow_agenda_clientes";
 
 const C = {
   bg: "#07111F",
@@ -317,6 +318,7 @@ function criarCliente(usuarioAtual, dados = {}) {
     jade: dados.jade || null,
     contatos: Array.isArray(dados.contatos) ? dados.contatos : [],
     orcamentosVinculados: Array.isArray(dados.orcamentosVinculados) ? dados.orcamentosVinculados : [],
+    acompanhamentoAtivo: Boolean(dados.acompanhamentoAtivo),
     userId: dados.userId || usuarioAtual?.id || "admin",
     criadoEm: dados.criadoEm || agora,
     atualizadoEm: agora,
@@ -663,7 +665,34 @@ function clienteCriadoApenasDeOrcamento(cliente = {}) {
 }
 
 function clienteVisivelNoCRM(cliente = {}) {
-  return clienteTemHistoricoHumano(cliente);
+  return Boolean(cliente.acompanhamentoAtivo) || clienteTemHistoricoHumano(cliente);
+}
+
+function contatoAgendaParaCliente(contato = {}, usuarioAtual, clienteAtual = {}) {
+  const telefone = formatTelefone(contato.whatsapp || contato.telefone || clienteAtual.whatsapp || clienteAtual.telefone || "");
+  return criarCliente(usuarioAtual, {
+    ...clienteAtual,
+    id: clienteAtual.id || contato.clienteId || `cli_ag_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    nome: clean(clienteAtual.nome || contato.nome || contato.empresa, 180),
+    empresa: clean(clienteAtual.empresa || contato.empresa || "", 180),
+    cargo: clean(clienteAtual.cargo || contato.cargo || "", 120),
+    decisor: clean(clienteAtual.decisor || contato.decisor || "", 120),
+    whatsapp: formatTelefone(contato.whatsapp || clienteAtual.whatsapp || telefone),
+    telefone: formatTelefone(contato.telefone || clienteAtual.telefone || telefone),
+    email: clean(clienteAtual.email || contato.email || "", 180),
+    endereco: clean(clienteAtual.endereco || contato.endereco || "", 240),
+    cidadeUf: clean(clienteAtual.cidadeUf || contato.cidadeUf || "", 120),
+    segmento: clean(clienteAtual.segmento || contato.segmento || "", 120),
+    origem: clean(clienteAtual.origem || contato.origem || "agenda_telefonica", 120),
+    canalPreferido: clienteAtual.canalPreferido || (telefone ? "WhatsApp" : contato.email ? "E-mail" : "WhatsApp"),
+    perfil: clean(clienteAtual.perfil || contato.observacoes || "", 3000),
+    observacoes: clean(clienteAtual.observacoes || contato.observacoes || "", 3000),
+    contatos: Array.isArray(clienteAtual.contatos) ? clienteAtual.contatos : [],
+    orcamentosVinculados: Array.isArray(clienteAtual.orcamentosVinculados) ? clienteAtual.orcamentosVinculados : [],
+    acompanhamentoAtivo: true,
+    userId: clienteAtual.userId || contato.userId || usuarioAtual?.id || "admin",
+    criadoEm: clienteAtual.criadoEm || contato.criadoEm,
+  });
 }
 
 function idsOrcamentosVinculados(cliente = {}) {
@@ -798,6 +827,10 @@ export function ClientesCRMPanel({
   const [jadeLoading, setJadeLoading] = useState(false);
   const [pedidoJade, setPedidoJade] = useState("Nara, leia este cliente e me diga o melhor proximo passo para aumentar a chance de fechamento.");
   const [whatsRelatorio, setWhatsRelatorio] = useState(WHATS_REPORT_NUMBER);
+  const [buscaAgendaAberta, setBuscaAgendaAberta] = useState(false);
+  const [buscaAgendaCRM, setBuscaAgendaCRM] = useState("");
+  const [contatosAgendaCRM, setContatosAgendaCRM] = useState([]);
+  const [lendoAgendaCRM, setLendoAgendaCRM] = useState(false);
   const [campanhaFiltro, setCampanhaFiltro] = useState("retomar-atrasados");
   const [campanhaPlaybook, setCampanhaPlaybook] = useState("cobrar-retorno");
   const [campanhaResultados, setCampanhaResultados] = useState([]);
@@ -865,6 +898,28 @@ export function ClientesCRMPanel({
     });
   }, [enriquecidos, busca, filtro, filtroEtiqueta]);
 
+  const agendaFiltradaCRM = useMemo(() => {
+    const q = textoBusca(buscaAgendaCRM);
+    return (Array.isArray(contatosAgendaCRM) ? contatosAgendaCRM : [])
+      .filter((item) => {
+        if (!isAdmin && item.userId && item.userId !== usuarioAtual?.id) return false;
+        const texto = textoBusca([
+          item.nome,
+          item.empresa,
+          item.cargo,
+          item.decisor,
+          item.whatsapp,
+          item.telefone,
+          item.email,
+          item.segmento,
+          item.observacoes,
+        ].filter(Boolean).join(" "));
+        return !q || texto.includes(q);
+      })
+      .sort((a, b) => (a.nome || a.empresa || "").localeCompare(b.nome || b.empresa || "", "pt-BR"))
+      .slice(0, 12);
+  }, [contatosAgendaCRM, buscaAgendaCRM, isAdmin, usuarioAtual?.id]);
+
   const etiquetasDisponiveis = useMemo(() => {
     const usadas = new Set(enriquecidos.flatMap((item) => item._tags || []));
     return ETIQUETAS_PADRAO.filter(([id]) => usadas.has(id));
@@ -928,6 +983,70 @@ export function ClientesCRMPanel({
     return ok;
   };
 
+  const salvarAgendaCRM = async (lista) => {
+    setContatosAgendaCRM(Array.isArray(lista) ? lista : []);
+    const ok = await store.set(KEY_AGENDA, Array.isArray(lista) ? lista : []);
+    if (!ok) pushToast("Nao foi possivel atualizar o vinculo da agenda na nuvem.", "erro");
+    return ok;
+  };
+
+  const carregarAgendaCRM = async () => {
+    setLendoAgendaCRM(true);
+    try {
+      const dados = await store.get(KEY_AGENDA);
+      setContatosAgendaCRM(Array.isArray(dados) ? dados : []);
+      return Array.isArray(dados) ? dados : [];
+    } finally {
+      setLendoAgendaCRM(false);
+    }
+  };
+
+  const abrirBuscaAgendaCRM = async () => {
+    setBuscaAgendaAberta(true);
+    await carregarAgendaCRM();
+  };
+
+  const criarAcompanhamentoComBusca = () => {
+    const nome = clean(buscaAgendaCRM || busca, 180);
+    setForm(criarCliente(usuarioAtual, {
+      nome,
+      origem: nome ? "crm_manual" : "",
+      acompanhamentoAtivo: true,
+    }));
+    setAtivoId("");
+    setEditando(true);
+    setBuscaAgendaAberta(false);
+  };
+
+  const iniciarAcompanhamentoDaAgenda = async (contatoAgenda) => {
+    if (!contatoAgenda) return;
+    const listaAgenda = contatosAgendaCRM.length ? contatosAgendaCRM : await carregarAgendaCRM();
+    const contatoNormalizado = { ...contatoAgenda };
+    const contatoTel = telefoneKey(contatoNormalizado.whatsapp || contatoNormalizado.telefone);
+    const contatoEmail = clean(contatoNormalizado.email || "").toLowerCase();
+    const contatoNome = textoBusca(contatoNormalizado.nome || contatoNormalizado.empresa || "");
+    const existente = (Array.isArray(clientes) ? clientes : []).find((cliente) => (
+      (contatoNormalizado.clienteId && cliente.id === contatoNormalizado.clienteId) ||
+      (contatoEmail && [cliente.email, cliente.email2].map((email) => clean(email).toLowerCase()).includes(contatoEmail)) ||
+      (contatoTel && [cliente.whatsapp, cliente.telefone, cliente.telefone2].map(telefoneKey).includes(contatoTel)) ||
+      (contatoNome && textoBusca(cliente.nome || cliente.empresa || "") === contatoNome)
+    )) || null;
+    const clienteFinal = contatoAgendaParaCliente(contatoNormalizado, usuarioAtual, existente || {});
+    const novaClientes = existente
+      ? clientes.map((item) => item.id === existente.id ? clienteFinal : item)
+      : [clienteFinal, ...(Array.isArray(clientes) ? clientes : [])];
+    await salvarLista(novaClientes);
+    const novaAgenda = (Array.isArray(listaAgenda) ? listaAgenda : []).map((item) => (
+      item.id === contatoNormalizado.id ? { ...item, clienteId: clienteFinal.id, atualizadoEm: new Date().toISOString() } : item
+    ));
+    if (novaAgenda.some((item) => item.id === contatoNormalizado.id)) await salvarAgendaCRM(novaAgenda);
+    setAtivoId(clienteFinal.id);
+    setForm(criarCliente(usuarioAtual, clienteFinal));
+    setEditando(false);
+    setBuscaAgendaAberta(false);
+    pushToast("Acompanhamento iniciado no CRM sem criar historico artificial.", "ok");
+  };
+
   const adicionarRegistrosHistoricoOrcamentos = async (pares = []) => {
     const validos = pares.filter((par) => par?.orcamentoId && par?.registro);
     if (!validos.length) return false;
@@ -983,7 +1102,7 @@ export function ClientesCRMPanel({
   };
 
   const novoCliente = () => {
-    setForm(criarCliente(usuarioAtual));
+    setForm(criarCliente(usuarioAtual, { acompanhamentoAtivo: true, origem: "crm_manual" }));
     setAtivoId("");
     setEditando(true);
   };
@@ -1008,7 +1127,7 @@ export function ClientesCRMPanel({
       pushToast("Informe ao menos o nome do contato ou empresa.", "erro");
       return;
     }
-    let pronto = criarCliente(usuarioAtual, { ...form, nome });
+    let pronto = criarCliente(usuarioAtual, { ...form, nome, acompanhamentoAtivo: true });
     const anterior = clientes.find((item) => item.id === pronto.id);
     const existe = Boolean(anterior);
     if (existe) {
@@ -1021,13 +1140,6 @@ export function ClientesCRMPanel({
         });
         pronto = { ...pronto, contatos: [registro, ...(Array.isArray(pronto.contatos) ? pronto.contatos : [])].slice(0, 160) };
       }
-    } else {
-      const registro = criarRegistroSistemaCliente(usuarioAtual, {
-        tipo: "Cliente criado",
-        assunto: "Novo cadastro CRM",
-        mensagem: `Cliente criado no CRM: ${nome}. Origem: ${clean(pronto.origem || "Cadastro manual", 120)}.`,
-      });
-      pronto = { ...pronto, contatos: [registro, ...(Array.isArray(pronto.contatos) ? pronto.contatos : [])].slice(0, 160) };
     }
     const nova = existe ? clientes.map((item) => (item.id === pronto.id ? pronto : item)) : [pronto, ...clientes];
     await salvarLista(nova);
@@ -1759,10 +1871,10 @@ export function ClientesCRMPanel({
                 <div style={{ color: C.dim, fontSize: 11, lineHeight: 1.35 }}>Area pronta para avatar e assistencia comercial contextual.</div>
                 <button
                   type="button"
-                  onClick={() => (typeof setView === "function" ? setView("agenda") : null)}
+                  onClick={abrirBuscaAgendaCRM}
                   style={{ marginTop: 8, border: `1px solid ${C.blue2}66`, background: `${C.blue2}14`, color: "#93C5FD", borderRadius: 9, padding: "7px 9px", cursor: "pointer", fontWeight: 900, fontSize: 11 }}
                 >
-                  Buscar contato na Agenda
+                  Pesquisar contato da Agenda
                 </button>
               </div>
             </div>
@@ -1783,9 +1895,70 @@ export function ClientesCRMPanel({
           </div>
         </section>
 
+        {buscaAgendaAberta && (
+          <section style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: 14, marginBottom: 14 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+              <div>
+                <div style={{ color: C.green, fontSize: 10, letterSpacing: 2, fontWeight: 950 }}>BUSCAR CONTATO DA AGENDA</div>
+                <div style={{ color: C.dim, fontSize: 12, marginTop: 3 }}>Pesquise sem sair do CRM. Ao vincular, a Nara inicia o acompanhamento sem criar conversa falsa.</div>
+              </div>
+              <button type="button" onClick={() => setBuscaAgendaAberta(false)} style={{ padding: "7px 10px", borderRadius: 9, border: `1px solid ${C.border2}`, background: "transparent", color: C.muted, cursor: "pointer", fontWeight: 850 }}>Fechar</button>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) auto auto", gap: 8, alignItems: "center", marginBottom: 10 }}>
+              <input value={buscaAgendaCRM} onChange={(e) => setBuscaAgendaCRM(e.target.value)} placeholder="Digite nome, empresa, telefone ou e-mail..." style={INP} autoFocus />
+              <button type="button" onClick={carregarAgendaCRM} disabled={lendoAgendaCRM} style={{ padding: "10px 12px", borderRadius: 10, border: `1px solid ${C.blue2}55`, background: `${C.blue2}12`, color: "#93C5FD", cursor: lendoAgendaCRM ? "not-allowed" : "pointer", fontWeight: 900 }}>{lendoAgendaCRM ? "Atualizando..." : "Atualizar"}</button>
+              <button type="button" onClick={criarAcompanhamentoComBusca} style={{ padding: "10px 12px", borderRadius: 10, border: "none", background: `linear-gradient(135deg, ${C.green2}, ${C.blue2})`, color: "#fff", cursor: "pointer", fontWeight: 950 }}>Novo acompanhamento</button>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(230px,1fr))", gap: 8 }}>
+              {agendaFiltradaCRM.map((contatoAgenda) => {
+                const titulo = contatoAgenda.nome || contatoAgenda.empresa || "Contato sem nome";
+                const detalhe = [contatoAgenda.empresa && contatoAgenda.empresa !== titulo ? contatoAgenda.empresa : "", contatoAgenda.whatsapp || contatoAgenda.telefone, contatoAgenda.email].filter(Boolean).join(" | ");
+                return (
+                  <button key={contatoAgenda.id} type="button" onClick={() => iniciarAcompanhamentoDaAgenda(contatoAgenda)} style={{ textAlign: "left", borderRadius: 12, padding: 11, border: `1px solid ${C.border2}`, background: C.panel2, color: C.text, cursor: "pointer" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+                      <strong style={{ fontSize: 12.5 }}>{titulo}</strong>
+                      <span style={{ color: contatoAgenda.clienteId ? C.green : C.warn, fontSize: 10, fontWeight: 950 }}>{contatoAgenda.clienteId ? "Ja vinculado" : "Agenda"}</span>
+                    </div>
+                    <div style={{ color: C.dim, fontSize: 10.5, marginTop: 5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{detalhe || "Sem telefone/e-mail informado"}</div>
+                    <div style={{ color: "#93C5FD", fontSize: 10, marginTop: 7, fontWeight: 850 }}>Iniciar acompanhamento no CRM</div>
+                  </button>
+                );
+              })}
+              {!agendaFiltradaCRM.length && (
+                <div style={{ border: `1px dashed ${C.border2}`, borderRadius: 12, padding: 14, color: C.dim, fontSize: 12, lineHeight: 1.5 }}>
+                  {lendoAgendaCRM ? "Lendo agenda..." : "Nenhum contato encontrado nesta busca. Voce pode criar um acompanhamento novo usando o nome pesquisado."}
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+
         {!ativo && !editando ? (
-          <div style={{ height: "100%", minHeight: 420, display: "grid", placeItems: "center", color: C.dim, textAlign: "center" }}>
-            <div><Users size={42} style={{ opacity: 0.55 }} /><div style={{ marginTop: 10, fontWeight: 900 }}>Crie um cliente para iniciar o acompanhamento.</div></div>
+          <div style={{ minHeight: 420, display: "grid", gridTemplateColumns: "minmax(280px, .85fr) minmax(320px, 1.15fr)", gap: 16, alignItems: "stretch" }}>
+            <section style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: 18, display: "grid", alignContent: "center", textAlign: "center", color: C.dim }}>
+              <Users size={42} style={{ opacity: 0.55, margin: "0 auto 10px" }} />
+              <div style={{ color: C.text, fontWeight: 950, fontSize: 18 }}>Inicie um acompanhamento real.</div>
+              <div style={{ marginTop: 8, lineHeight: 1.5, fontSize: 12 }}>Use um contato da Agenda ou cadastre um novo relacionamento. A primeira conversa fica registrada somente quando voce salvar uma tratativa.</div>
+              <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap", marginTop: 14 }}>
+                <button type="button" onClick={abrirBuscaAgendaCRM} style={{ padding: "10px 12px", borderRadius: 10, border: `1px solid ${C.blue2}55`, background: `${C.blue2}12`, color: "#93C5FD", cursor: "pointer", fontWeight: 900 }}>Pesquisar Agenda</button>
+                <button type="button" onClick={novoCliente} style={{ padding: "10px 12px", borderRadius: 10, border: "none", background: `linear-gradient(135deg, ${C.green2}, ${C.blue2})`, color: "#fff", cursor: "pointer", fontWeight: 950 }}>Novo acompanhamento</button>
+              </div>
+            </section>
+            <section style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: 18, color: C.muted }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 12 }}>
+                <div>
+                  <div style={{ color: C.green, fontSize: 10, letterSpacing: 2, fontWeight: 950 }}>NARA CRM</div>
+                  <div style={{ color: C.text, fontSize: 18, fontWeight: 950, marginTop: 4 }}>Acompanhamento comercial assistido</div>
+                </div>
+                <div className="crm-nara-orb">N</div>
+              </div>
+              <div style={{ lineHeight: 1.65, fontSize: 12 }}>
+                A Nara fica pronta para analisar historico real, anexos, orcamentos vinculados e proximos passos assim que voce selecionar ou criar um acompanhamento.
+              </div>
+              <div style={{ marginTop: 12, border: `1px solid ${C.border2}`, background: C.panel2, borderRadius: 12, padding: 12, fontSize: 12, lineHeight: 1.55 }}>
+                Sem cliente ativo, ela nao inventa empresa, conversa ou oportunidade. Primeiro escolha um contato real, depois registre a tratativa.
+              </div>
+            </section>
           </div>
         ) : (
           <>

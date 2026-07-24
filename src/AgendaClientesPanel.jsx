@@ -193,6 +193,9 @@ function contatoParaCliente(contato, clienteAtual = {}) {
     cidadeUf: clean(contato.cidadeUf || clienteAtual.cidadeUf || ""),
     segmento: clean(contato.segmento || clienteAtual.segmento || ""),
     perfil: clean(contato.observacoes || clienteAtual.perfil || "", 3000),
+    contatos: Array.isArray(clienteAtual.contatos) ? clienteAtual.contatos : [],
+    orcamentosVinculados: Array.isArray(clienteAtual.orcamentosVinculados) ? clienteAtual.orcamentosVinculados : [],
+    acompanhamentoAtivo: Boolean(clienteAtual.acompanhamentoAtivo) || Boolean(contato.acompanhamentoAtivo) || Boolean(contato.clienteId),
     userId: clienteAtual.userId || contato.userId,
     criadoEm: clienteAtual.criadoEm || contato.criadoEm || agora,
     atualizadoEm: agora,
@@ -456,6 +459,7 @@ export function AgendaClientesPanel({
       ...item,
       origem: item.origem || "agenda_telefonica",
       perfil: clean(item.observacoes || "", 3000),
+      acompanhamentoAtivo: true,
     });
     const clientesAtualizados = [novoCliente, ...(Array.isArray(clientes) ? clientes : [])];
     await salvarClientes(clientesAtualizados);
