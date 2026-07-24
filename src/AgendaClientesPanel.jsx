@@ -24,6 +24,8 @@ const C = {
   purple: "#A78BFA",
 };
 
+const ALFABETO_CONTATOS = ["Todos", "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "#"];
+
 function clean(valor = "", limite = 3000) {
   return String(valor || "").replace(/\s+/g, " ").trim().slice(0, limite);
 }
@@ -78,6 +80,12 @@ function inputStyle() {
     boxSizing: "border-box",
     fontFamily: "inherit",
   };
+}
+
+function inicialContato(contato = {}) {
+  const base = textoBusca(contato.nome || contato.empresa || contato.email || "");
+  const primeira = base.charAt(0).toUpperCase();
+  return /^[A-Z]$/.test(primeira) ? primeira : "#";
 }
 
 function contatoVazio(usuarioAtual) {
@@ -221,12 +229,10 @@ function telUrl(numero = "") {
 
 function orcamentosDoContato(contato = {}, crm = []) {
   const clienteId = contato.clienteId || "";
-  const nome = textoBusca(contato.empresa || contato.nome || "");
-  if (!clienteId && !nome) return [];
+  if (!clienteId) return [];
   return (Array.isArray(crm) ? crm : []).filter((orc) => {
     if (clienteId && (orc.clienteId === clienteId || orc.crmClienteId === clienteId)) return true;
-    const texto = textoBusca([orc.cliente, orc.empresaNome, orc.numero].filter(Boolean).join(" "));
-    return nome && (texto.includes(nome) || nome.includes(textoBusca(orc.cliente || "")));
+    return false;
   });
 }
 
@@ -301,6 +307,7 @@ export function AgendaClientesPanel({
   const [agenda, setAgenda] = useState([]);
   const [busca, setBusca] = useState("");
   const [filtro, setFiltro] = useState("todos");
+  const [letraAtiva, setLetraAtiva] = useState("Todos");
   const [selecionadoId, setSelecionadoId] = useState("");
   const [form, setForm] = useState(contatoVazio(usuarioAtual));
   const [editando, setEditando] = useState(false);
@@ -334,18 +341,11 @@ export function AgendaClientesPanel({
 
   const contatos = useMemo(() => {
     const agendaVisivel = agenda.filter((item) => isAdmin || item.userId === usuarioAtual?.id);
-    const clientesComContatoManual = new Set(agendaVisivel.map((item) => item.clienteId).filter(Boolean));
-    const base = [];
-    for (const item of agendaVisivel) {
+    return agendaVisivel.map((item) => {
       const cliente = clientes.find((c) => c.id === item.clienteId) || null;
-      base.push(normalizarContato(usuarioAtual, item, cliente));
-    }
-    for (const cliente of clientesVisiveis) {
-      if (clientesComContatoManual.has(cliente.id)) continue;
-      base.push(contatoFromCliente(cliente, usuarioAtual));
-    }
-    return base.sort((a, b) => (a.empresa || a.nome).localeCompare(b.empresa || b.nome, "pt-BR"));
-  }, [agenda, clientes, clientesVisiveis, isAdmin, usuarioAtual]);
+      return normalizarContato(usuarioAtual, item, cliente);
+    }).sort((a, b) => (a.nome || a.empresa).localeCompare(b.nome || b.empresa, "pt-BR"));
+  }, [agenda, clientes, isAdmin, usuarioAtual]);
 
   const filtrados = useMemo(() => {
     const q = textoBusca(busca);
@@ -359,9 +359,19 @@ export function AgendaClientesPanel({
         (filtro === "email" && temEmail) ||
         (filtro === "semTelefone" && !temTel) ||
         (filtro === "crm" && contato.clienteId);
-      return okFiltro && (!q || contatoTextoBusca(contato).includes(q));
+      const okLetra = letraAtiva === "Todos" || inicialContato(contato) === letraAtiva;
+      return okFiltro && okLetra && (!q || contatoTextoBusca(contato).includes(q));
     });
-  }, [busca, contatos, filtro]);
+  }, [busca, contatos, filtro, letraAtiva]);
+
+  const letrasDisponiveis = useMemo(() => {
+    const mapa = new Map(ALFABETO_CONTATOS.map((letra) => [letra, letra === "Todos" ? contatos.length : 0]));
+    for (const contato of contatos) {
+      const inicial = inicialContato(contato);
+      mapa.set(inicial, (mapa.get(inicial) || 0) + 1);
+    }
+    return mapa;
+  }, [contatos]);
 
   const selecionado = contatos.find((item) => item.id === selecionadoId) || filtrados[0] || null;
   const orcamentosSelecionado = useMemo(() => orcamentosDoContato(selecionado, crm).slice(0, 20), [selecionado, crm]);
@@ -375,7 +385,7 @@ export function AgendaClientesPanel({
     total: contatos.length,
     whatsapp: contatos.filter((item) => onlyDigits(item.whatsapp)).length,
     email: contatos.filter((item) => item.email).length,
-    semTelefone: contatos.filter((item) => !onlyDigits(item.whatsapp || item.telefone)).length,
+    vinculados: contatos.filter((item) => item.clienteId).length,
   }), [contatos]);
 
   const salvarAgenda = async (lista) => {
@@ -419,12 +429,6 @@ export function AgendaClientesPanel({
         cliente.id === clienteId ? contatoParaCliente({ ...item, clienteId }, cliente) : cliente
       ));
       await salvarClientes(clientesAtualizados);
-    } else {
-      const novoCliente = contatoParaCliente(item);
-      clienteId = novoCliente.id;
-      item.clienteId = clienteId;
-      clientesAtualizados = [novoCliente, ...clientesAtualizados];
-      await salvarClientes(clientesAtualizados);
     }
 
     const itemFinal = { ...item, clienteId, atualizadoEm: new Date().toISOString() };
@@ -438,6 +442,31 @@ export function AgendaClientesPanel({
     setForm(itemFinal);
     setEditando(true);
     notify(existe ? "Contato atualizado na agenda telefonica." : "Contato salvo na agenda telefonica.", "ok");
+  };
+
+  const vincularContatoAoCRM = async (contato) => {
+    if (!contato) return;
+    if (contato.clienteId) {
+      notify("Este contato ja esta vinculado ao CRM.", "aviso");
+      return;
+    }
+    const item = normalizarContato(usuarioAtual, contato);
+    const novoCliente = contatoParaCliente({
+      ...item,
+      origem: item.origem || "agenda_telefonica",
+      perfil: clean(item.observacoes || "", 3000),
+    });
+    const clientesAtualizados = [novoCliente, ...(Array.isArray(clientes) ? clientes : [])];
+    await salvarClientes(clientesAtualizados);
+    const itemFinal = { ...item, clienteId: novoCliente.id, origem: item.origem || "agenda_telefonica", atualizadoEm: new Date().toISOString() };
+    const novaAgenda = agenda.some((agendaItem) => agendaItem.id === itemFinal.id)
+      ? agenda.map((agendaItem) => agendaItem.id === itemFinal.id ? itemFinal : agendaItem)
+      : [itemFinal, ...agenda];
+    await salvarAgenda(novaAgenda);
+    setSelecionadoId(itemFinal.id);
+    setForm(itemFinal);
+    setEditando(true);
+    notify("Contato vinculado ao CRM. Agora ele pode receber historico e acompanhamento.", "ok");
   };
 
   const excluirContato = async (contato) => {
@@ -595,6 +624,13 @@ export function AgendaClientesPanel({
         .agenda-detail { padding-left: 0; }
         .agenda-card { background: ${C.panel}; border: 1px solid ${C.border}; border-radius: 16px; padding: 16px; }
         .agenda-btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; border-radius: 10px; padding: 9px 11px; font-size: 12px; font-weight: 900; cursor: pointer; border: 1px solid ${C.border2}; background: transparent; color: ${C.muted}; }
+        .agenda-contact-row { transition: transform .18s ease, border-color .18s ease, background .18s ease, box-shadow .18s ease; }
+        .agenda-contact-row:hover { transform: translateX(4px); border-color: ${C.blue2}; box-shadow: 0 10px 26px rgba(0,183,255,.08); }
+        .agenda-alpha { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; margin: 0 0 12px; }
+        .agenda-alpha button { border-radius: 9px; border: 1px solid ${C.border2}; background: rgba(15, 35, 62, .45); color: ${C.muted}; font-size: 10px; font-weight: 950; padding: 6px 0; cursor: pointer; transition: transform .16s ease, background .16s ease, color .16s ease; }
+        .agenda-alpha button:hover:not(:disabled) { transform: translateY(-1px); color: ${C.green}; border-color: ${C.green2}; }
+        .agenda-alpha button.active { background: linear-gradient(135deg, ${C.green2}, ${C.blue2}); border-color: transparent; color: #fff; }
+        .agenda-alpha button:disabled { opacity: .28; cursor: not-allowed; }
         @media (max-width: 1120px) {
           .agenda-phonebook { grid-template-columns: 320px 1fr; overflow-y: auto; }
           .agenda-side { min-height: 100%; }
@@ -611,7 +647,7 @@ export function AgendaClientesPanel({
         <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", marginBottom: 12 }}>
           <div>
             <div style={{ fontSize: 17, fontWeight: 950 }}>Agenda Telefonica</div>
-            <div style={{ color: C.dim, fontSize: 11 }}>Contatos, clientes e dados rapidos do CRM</div>
+            <div style={{ color: C.dim, fontSize: 11 }}>Lista premium de contatos. Sem cobranca automatica.</div>
           </div>
           <button onClick={carregar} className="agenda-btn" title="Recarregar agenda"><RefreshCw size={14} /></button>
         </div>
@@ -621,7 +657,7 @@ export function AgendaClientesPanel({
             ["Contatos", kpis.total, C.blue, "todos"],
             ["WhatsApp", kpis.whatsapp, C.green, "whatsapp"],
             ["E-mails", kpis.email, C.purple, "email"],
-            ["Sem telefone", kpis.semTelefone, C.warn, "semTelefone"],
+            ["No CRM", kpis.vinculados, C.warn, "crm"],
           ].map(([label, valor, cor, id]) => (
             <button key={label} onClick={() => setFiltro(id)} style={{ textAlign: "left", border: `1px solid ${cor}44`, borderRadius: 12, padding: 10, background: filtro === id ? `${cor}1f` : `${cor}10`, color: C.text, cursor: "pointer" }}>
               <div style={{ color: cor, fontSize: 20, fontWeight: 950 }}>{valor}</div>
@@ -650,6 +686,25 @@ export function AgendaClientesPanel({
           <input value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar nome, empresa, telefone, e-mail..." style={{ flex: 1, background: "transparent", border: "none", outline: "none", color: C.text, fontFamily: "inherit", fontSize: 12 }} />
         </div>
 
+        <div className="agenda-alpha" aria-label="Filtro alfabetico">
+          {ALFABETO_CONTATOS.map((letra) => {
+            const total = letrasDisponiveis.get(letra) || 0;
+            const disabled = letra !== "Todos" && total === 0;
+            return (
+              <button
+                key={letra}
+                type="button"
+                disabled={disabled}
+                className={letraAtiva === letra ? "active" : ""}
+                title={letra === "Todos" ? "Mostrar todos" : `${total} contato(s) com inicial ${letra}`}
+                onClick={() => setLetraAtiva(letra)}
+              >
+                {letra === "Todos" ? "Todos" : letra}
+              </button>
+            );
+          })}
+        </div>
+
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
           {[
             ["todos", "Todos"],
@@ -668,10 +723,10 @@ export function AgendaClientesPanel({
           {filtrados.map((contato) => {
             const selected = contato.id === selecionado?.id;
             return (
-              <button key={contato.id} onClick={() => setSelecionadoId(contato.id)} style={{ textAlign: "left", borderRadius: 12, padding: 11, border: `1px solid ${selected ? C.green2 : C.border2}`, background: selected ? `${C.green2}14` : C.panel2, color: C.text, cursor: "pointer" }}>
+              <button key={contato.id} className="agenda-contact-row" onClick={() => setSelecionadoId(contato.id)} style={{ textAlign: "left", borderRadius: 12, padding: 11, border: `1px solid ${selected ? C.green2 : C.border2}`, background: selected ? `${C.green2}14` : C.panel2, color: C.text, cursor: "pointer" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
                   <strong style={{ fontSize: 12.5, overflowWrap: "anywhere" }}>{contato.nome || contato.empresa || "Contato sem nome"}</strong>
-                  <span style={{ color: contato.origem === "crm" ? "#93C5FD" : C.green, fontSize: 9.5, fontWeight: 950 }}>{contato.origem === "crm" ? "CRM" : "Agenda"}</span>
+                  <span style={{ color: contato.clienteId ? "#93C5FD" : C.green, fontSize: 9.5, fontWeight: 950 }}>{contato.clienteId ? "CRM" : "Agenda"}</span>
                 </div>
                 <div style={{ color: C.dim, fontSize: 10.5, marginTop: 4, overflowWrap: "anywhere" }}>{contato.empresa || "Empresa nao informada"}</div>
                 <div style={{ color: C.muted, fontSize: 11, marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -691,16 +746,16 @@ export function AgendaClientesPanel({
           <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "start", marginBottom: 14 }}>
             <div>
               <div style={{ color: C.green, fontSize: 10, letterSpacing: 2, fontWeight: 950 }}>{editando ? "EDITAR CONTATO" : "NOVO CONTATO"}</div>
-              <div style={{ color: C.dim, fontSize: 12 }}>Cadastro telefonico vinculado ao CRM.</div>
+              <div style={{ color: C.dim, fontSize: 12 }}>Cadastro telefonico independente. Vire CRM somente quando houver relacionamento real.</div>
             </div>
             <UserRound size={20} color={C.green} />
           </div>
 
           <div style={{ display: "grid", gap: 10 }}>
             <div>
-              <div style={LBL}>VINCULAR AO CLIENTE CRM</div>
+              <div style={LBL}>VINCULO CRM (OPCIONAL)</div>
               <select value={form.clienteId} onChange={(e) => setForm((f) => ({ ...f, clienteId: e.target.value }))} style={INP}>
-                <option value="">Criar ou manter como novo cliente</option>
+                <option value="">Agenda apenas - sem acompanhamento</option>
                 {clientesVisiveis.map((cliente) => <option key={cliente.id} value={cliente.id}>{nomeCliente(cliente)}</option>)}
               </select>
             </div>
@@ -796,7 +851,7 @@ export function AgendaClientesPanel({
                   ["Cargo", selecionado.cargo],
                   ["Decisor", selecionado.decisor],
                   ["Segmento", selecionado.segmento],
-                  ["Origem", selecionado.origem === "crm" ? "CRM" : "Agenda"],
+                  ["Vinculo", selecionado.clienteId ? "CRM ativo" : "Agenda apenas"],
                 ].map(([label, valor]) => (
                   <div key={label} style={{ border: `1px solid ${C.border2}`, borderRadius: 11, padding: 10, background: C.panel2 }}>
                     <div style={{ color: C.dim, fontSize: 10 }}>{label}</div>
@@ -824,6 +879,7 @@ export function AgendaClientesPanel({
                 <button onClick={() => ligar(selecionado)} className="agenda-btn"><Phone size={14} /> Ligar</button>
                 <button onClick={() => enviarEmail(selecionado)} className="agenda-btn"><Mail size={14} /> E-mail</button>
                 <button onClick={() => copiarTexto([selecionado.nome, selecionado.empresa, selecionado.whatsapp || selecionado.telefone, selecionado.email].filter(Boolean).join(" | "))} className="agenda-btn"><Copy size={14} /> Copiar</button>
+                {!selecionado.clienteId && <button onClick={() => vincularContatoAoCRM(selecionado)} className="agenda-btn" style={{ color: C.warn, borderColor: `${C.warn}66`, background: `${C.warn}12` }}><Users size={14} /> Vincular CRM</button>}
                 <button onClick={() => pedirNara(selecionado)} disabled={loadingNara} className="agenda-btn" style={{ color: C.purple, borderColor: `${C.purple}66`, background: `${C.purple}12`, opacity: loadingNara ? 0.6 : 1 }}><Bot size={14} /> {loadingNara ? "Nara analisando..." : "Nara"}</button>
                 <button onClick={() => excluirContato(selecionado)} className="agenda-btn" style={{ color: C.danger, borderColor: `${C.danger}66` }}><Trash2 size={14} /></button>
               </div>

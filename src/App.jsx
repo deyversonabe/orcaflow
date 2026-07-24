@@ -129,6 +129,25 @@ function emailParaLoginOrcaflow(valor = "") {
   return slug ? `${slug}@${INTERNAL_LOGIN_DOMAIN}` : "";
 }
 
+function isEmailLoginInterno(email = "") {
+  return String(email || "").toLowerCase().endsWith(`@${INTERNAL_LOGIN_DOMAIN}`);
+}
+
+function rotuloUsuarioAcesso(acesso = {}) {
+  return clean(acesso.display_name || acesso.name || acesso.signature_name || acesso.nome || acesso.email || "Usuario", 90);
+}
+
+function detalheUsuarioAcesso(acesso = {}) {
+  if (!acesso.email) return acesso.user_id || "";
+  if (isEmailLoginInterno(acesso.email)) return acesso.cargo ? `Perfil interno - ${acesso.cargo}` : "Perfil interno";
+  return acesso.email;
+}
+
+function textoLoginUsuario(usuario = {}) {
+  if (!usuario.loginEmail || isEmailLoginInterno(usuario.loginEmail)) return usuario.nome || "usuario";
+  return usuario.loginEmail;
+}
+
 function nomeUsuarioSistema(usuario = {}) {
   return clean(usuario.nomeTratamento || usuario.displayName || usuario.nome || usuario.email || "responsavel", 80);
 }
@@ -5338,27 +5357,28 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
   };
 
   const carregarAcessos = useCallback(async () => {
-    if (usuarioAtual?.tipo !== "admin") return;
     setCarregandoAcessos(true);
-    const [{ data, error }, rowsEstado] = await Promise.all([
-      supabase
-        .from("app_users")
-        .select("*")
-        .order("requested_at", { ascending: false }),
-      store.getAllUserRows(USER_TRANSFER_KEYS),
-    ]);
+    const response = await fetch("/api/share-user-data", {
+      headers: await authHeaders(),
+    }).catch((error) => ({
+      ok: false,
+      json: async () => ({ error: error?.message || "Falha ao conectar no servidor." }),
+    }));
+    const data = await response.json().catch(() => ({}));
+    const error = !response.ok || !data.ok ? { message: data.error || "Nao foi possivel carregar os cadastros." } : null;
 
     if (error) {
       console.error("Erro ao carregar acessos:", error);
-      pushToast("Não foi possível carregar os cadastros. Rode o schema.sql atualizado.", "erro");
+      pushToast(error?.message || "Nao foi possivel carregar os cadastros de usuarios.", "erro");
     } else {
-      const lista = Array.isArray(data) ? data : [];
+      const lista = Array.isArray(data.acessos) ? data.acessos : [];
+      const aprovados = lista.filter((item) => item.status === "approved");
       setAcessos(lista);
-      setResumoUsuarios(resumirLinhasUsuario(rowsEstado));
+      setResumoUsuarios(data.resumoUsuarios || {});
       setTransferencia((atual) => ({
         ...atual,
-        origem: atual.origem || usuarioAtual?.id || lista[0]?.user_id || "",
-        destino: atual.destino || lista.find((item) => item.user_id !== usuarioAtual?.id)?.user_id || lista[0]?.user_id || "",
+        origem: usuarioAtual?.tipo === "admin" ? atual.origem || usuarioAtual?.id || aprovados[0]?.user_id || "" : usuarioAtual?.id || "",
+        destino: atual.destino || aprovados.find((item) => item.user_id !== (usuarioAtual?.id || atual.origem))?.user_id || "",
       }));
     }
     setCarregandoAcessos(false);
@@ -5445,8 +5465,8 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
   };
 
   const transferirDados = async () => {
-    if (usuarioAtual?.tipo !== "admin") return;
-    const origem = transferencia.origem;
+    const isAdminAtual = usuarioAtual?.tipo === "admin";
+    const origem = isAdminAtual ? transferencia.origem : usuarioAtual?.id;
     const destino = transferencia.destino;
     const opcao = USER_TRANSFER_OPTIONS.find((item) => item.id === transferencia.tipo) || USER_TRANSFER_OPTIONS[0];
 
@@ -5455,49 +5475,28 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
       return;
     }
 
-    const mover = transferencia.modo === "mover";
+    const mover = isAdminAtual && transferencia.modo === "mover";
     if (mover && !window.confirm("Mover dados remove esses registros da origem depois de copiar para o destino. Confirmar?")) return;
 
     setCarregandoAcessos(true);
     try {
-      const origemDados = await store.getManyForUser(origem, opcao.keys);
-      const destinoDados = await store.getManyForUser(destino, opcao.keys);
-      const payloadDestino = {};
-      const payloadOrigem = {};
-      let total = 0;
+      const response = await fetch("/api/share-user-data", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(await authHeaders()),
+        },
+        body: JSON.stringify({
+          origem,
+          destino,
+          tipo: transferencia.tipo,
+          modo: mover ? "mover" : "copiar",
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) throw new Error(data.error || "Nao foi possivel compartilhar dados.");
 
-      for (const key of opcao.keys) {
-        const valorOrigem = origemDados[key];
-        if (Array.isArray(valorOrigem)) {
-          const entrada = prepararValorTransferencia(key, valorOrigem, destino, origem);
-          payloadDestino[key] = mesclarLista(Array.isArray(destinoDados[key]) ? destinoDados[key] : [], entrada);
-          payloadOrigem[key] = [];
-          total += entrada.length;
-        } else if (valorOrigem && typeof valorOrigem === "object") {
-          payloadDestino[key] = { ...(destinoDados[key] || {}), ...valorOrigem, compartilhadoPor: usuarioAtual?.id || "", compartilhadoEm: new Date().toISOString() };
-          payloadOrigem[key] = {};
-          total += 1;
-        } else if (typeof valorOrigem === "string" && valorOrigem.trim()) {
-          payloadDestino[key] = valorOrigem;
-          payloadOrigem[key] = "";
-          total += 1;
-        }
-      }
-
-      if (!total) {
-        pushToast("Nao ha dados nesta origem para transferir.", "aviso");
-        return;
-      }
-
-      const okDestino = await store.setManyForUser(destino, payloadDestino);
-      if (!okDestino) throw new Error("Falha ao salvar dados no usuario destino.");
-
-      if (mover) {
-        const okOrigem = await store.setManyForUser(origem, payloadOrigem);
-        if (!okOrigem) throw new Error("Dados copiados, mas nao foi possivel limpar a origem.");
-      }
-
-      pushToast(`${mover ? "Movidos" : "Copiados"} ${total} registro(s) de ${opcao.label}.`, "ok");
+      pushToast(`${data.modo === "mover" ? "Movidos" : "Copiados"} ${data.total || 0} registro(s) de ${data.label || opcao.label}.`, "ok");
       await carregarAcessos();
     } catch (error) {
       console.error("Erro na transferencia:", error);
@@ -5747,6 +5746,9 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
     }
   };
 
+  const acessosAprovados = acessos.filter((item) => item.status === "approved");
+  const destinosCompartilhamento = acessosAprovados.filter((item) => item.user_id !== (usuarioAtual?.id || transferencia.origem));
+
   const perfilCard = (
     <div className="of-glass" style={{ borderRadius: 16, padding: 16, marginBottom: 16, maxWidth: usuarioAtual?.tipo === "admin" ? "none" : 720 }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", marginBottom: 12 }}>
@@ -5757,7 +5759,7 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
           </div>
         </div>
         <div style={{ fontSize: 10, color: BRAND.muted, padding: "5px 8px", borderRadius: 999, border: `1px solid ${BRAND.border2}` }}>
-          {usuarioAtual?.email || "Conta conectada"}
+          {usuarioAtual?.email && !isEmailLoginInterno(usuarioAtual.email) ? usuarioAtual.email : "Conta conectada"}
         </div>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(180px,1fr))", gap: 10 }}>
@@ -5789,10 +5791,48 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
     </div>
   );
 
+  const compartilhamentoUsuarioCard = (
+    <div className="of-glass" style={{ borderRadius: 16, padding: 16, marginBottom: 16, maxWidth: 720 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start", marginBottom: 12 }}>
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 950 }}>Compartilhar com outro usuario</div>
+          <div style={{ fontSize: 11, color: BRAND.dim, marginTop: 4 }}>
+            Copia dados seus para outro acesso aprovado. O destino recebe uma copia online; seus dados continuam no seu perfil.
+          </div>
+        </div>
+        <button onClick={carregarAcessos} disabled={carregandoAcessos} style={{ padding: "8px 10px", borderRadius: 9, border: `1px solid ${BRAND.blue2}55`, background: `${BRAND.blue2}12`, color: "#93C5FD", cursor: carregandoAcessos ? "wait" : "pointer", fontWeight: 850 }}>
+          Atualizar
+        </button>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(180px,1fr) minmax(180px,1fr) auto", gap: 8, alignItems: "end" }}>
+        <label style={{ display: "grid", gap: 5, fontSize: 10, color: BRAND.dim, fontWeight: 900, textTransform: "uppercase", letterSpacing: 1 }}>
+          Destino
+          <select value={transferencia.destino} onChange={(e) => setTransferencia((t) => ({ ...t, destino: e.target.value, modo: "copiar" }))} style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, color: BRAND.text, borderRadius: 9, padding: 9, fontSize: 12 }}>
+            <option value="">Selecione um usuario aprovado</option>
+            {destinosCompartilhamento.map((a) => <option key={a.user_id} value={a.user_id}>{rotuloUsuarioAcesso(a)}</option>)}
+          </select>
+        </label>
+        <label style={{ display: "grid", gap: 5, fontSize: 10, color: BRAND.dim, fontWeight: 900, textTransform: "uppercase", letterSpacing: 1 }}>
+          Conteudo
+          <select value={transferencia.tipo} onChange={(e) => setTransferencia((t) => ({ ...t, tipo: e.target.value, modo: "copiar" }))} style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, color: BRAND.text, borderRadius: 9, padding: 9, fontSize: 12 }}>
+            {USER_TRANSFER_OPTIONS.map((op) => <option key={op.id} value={op.id}>{op.label}</option>)}
+          </select>
+        </label>
+        <button onClick={transferirDados} disabled={carregandoAcessos || !transferencia.destino || destinosCompartilhamento.length === 0} style={{ padding: "10px 14px", borderRadius: 10, border: 0, background: `linear-gradient(135deg, ${BRAND.green2}, ${BRAND.blue2})`, color: "#fff", cursor: carregandoAcessos || !transferencia.destino || destinosCompartilhamento.length === 0 ? "not-allowed" : "pointer", fontWeight: 950 }}>
+          Compartilhar
+        </button>
+      </div>
+      <div style={{ fontSize: 10, color: BRAND.muted, marginTop: 10 }}>
+        Usuario comum nao move dados e nao consegue compartilhar arquivos de outros usuarios. Administrador tem controle geral na aba de acessos.
+      </div>
+    </div>
+  );
+
   if (usuarioAtual?.tipo !== "admin") {
     return (
       <div style={{ padding: 24 }}>
         {perfilCard}
+        {compartilhamentoUsuarioCard}
         <div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 16, padding: 20, maxWidth: 520 }}>
           <div style={{ fontSize: 16, fontWeight: 950, marginBottom: 6 }}>Perfil do usuário</div>
           <div style={{ fontSize: 12, color: BRAND.muted }}>Usuário atual: {usuarioAtual?.nome || "—"}</div>
@@ -5839,13 +5879,13 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
           <label style={{ display: "grid", gap: 5, fontSize: 10, color: BRAND.dim, fontWeight: 900, textTransform: "uppercase", letterSpacing: 1 }}>
             Origem
             <select value={transferencia.origem} onChange={(e) => setTransferencia((t) => ({ ...t, origem: e.target.value }))} style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, color: BRAND.text, borderRadius: 9, padding: 9, fontSize: 12 }}>
-              {acessos.map((a) => <option key={a.user_id} value={a.user_id}>{a.display_name || a.name || a.email || a.user_id}</option>)}
+              {acessosAprovados.map((a) => <option key={a.user_id} value={a.user_id}>{rotuloUsuarioAcesso(a)}</option>)}
             </select>
           </label>
           <label style={{ display: "grid", gap: 5, fontSize: 10, color: BRAND.dim, fontWeight: 900, textTransform: "uppercase", letterSpacing: 1 }}>
             Destino
             <select value={transferencia.destino} onChange={(e) => setTransferencia((t) => ({ ...t, destino: e.target.value }))} style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, color: BRAND.text, borderRadius: 9, padding: 9, fontSize: 12 }}>
-              {acessos.map((a) => <option key={a.user_id} value={a.user_id}>{a.display_name || a.name || a.email || a.user_id}</option>)}
+              {acessosAprovados.map((a) => <option key={a.user_id} value={a.user_id}>{rotuloUsuarioAcesso(a)}</option>)}
             </select>
           </label>
           <label style={{ display: "grid", gap: 5, fontSize: 10, color: BRAND.dim, fontWeight: 900, textTransform: "uppercase", letterSpacing: 1 }}>
@@ -5861,7 +5901,7 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
               <option value="mover">Mover</option>
             </select>
           </label>
-          <button onClick={transferirDados} disabled={carregandoAcessos || acessos.length < 2} style={{ padding: "10px 12px", borderRadius: 10, border: 0, background: `linear-gradient(135deg, ${BRAND.green2}, ${BRAND.blue2})`, color: "#fff", cursor: carregandoAcessos || acessos.length < 2 ? "not-allowed" : "pointer", fontWeight: 950 }}>
+          <button onClick={transferirDados} disabled={carregandoAcessos || acessosAprovados.length < 2} style={{ padding: "10px 12px", borderRadius: 10, border: 0, background: `linear-gradient(135deg, ${BRAND.green2}, ${BRAND.blue2})`, color: "#fff", cursor: carregandoAcessos || acessosAprovados.length < 2 ? "not-allowed" : "pointer", fontWeight: 950 }}>
             Aplicar
           </button>
         </div>
@@ -5870,8 +5910,8 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
             const r = resumoUsuarios[a.user_id] || {};
             return (
               <div key={`resumo_${a.user_id}`} style={{ border: `1px solid ${BRAND.border2}`, background: BRAND.panel2, borderRadius: 12, padding: 10 }}>
-                <div style={{ fontSize: 12, fontWeight: 950, overflowWrap: "anywhere" }}>{a.display_name || a.name || a.email || "Usuario"}</div>
-                <div style={{ fontSize: 10, color: BRAND.dim, marginTop: 3, overflowWrap: "anywhere" }}>{a.email || a.user_id}</div>
+                <div style={{ fontSize: 12, fontWeight: 950, overflowWrap: "anywhere" }}>{rotuloUsuarioAcesso(a)}</div>
+                <div style={{ fontSize: 10, color: BRAND.dim, marginTop: 3, overflowWrap: "anywhere" }}>{detalheUsuarioAcesso(a)}</div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 5, marginTop: 8, fontSize: 10, color: BRAND.muted }}>
                   <span>Emp.: <strong style={{ color: BRAND.green }}>{r.empresas || 0}</strong></span>
                   <span>Orc.: <strong style={{ color: BRAND.blue }}>{r.orcamentos || 0}</strong></span>
@@ -5907,9 +5947,12 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
               return (
                 <div key={a.user_id} style={{ display: "grid", gridTemplateColumns: "minmax(220px,1.5fr) 130px 110px auto", gap: 8, alignItems: "center", padding: 10, borderRadius: 12, background: BRAND.panel2, border: `1px solid ${BRAND.border2}` }}>
                   <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 900, overflowWrap: "anywhere" }}>{a.email || a.name || "Usuário sem e-mail"}</div>
+                    <div style={{ fontSize: 13, fontWeight: 900, overflowWrap: "anywhere" }}>{rotuloUsuarioAcesso(a)}</div>
                     <div style={{ fontSize: 10, color: BRAND.muted, marginTop: 3 }}>
                       Chamado: {a.display_name || a.name || "nao definido"} {a.signature_name ? ` | Assina: ${a.signature_name}` : ""}
+                    </div>
+                    <div style={{ fontSize: 10, color: BRAND.dim, marginTop: 3, overflowWrap: "anywhere" }}>
+                      {detalheUsuarioAcesso(a)}
                     </div>
                     <div style={{ fontSize: 10, color: BRAND.dim, marginTop: 3 }}>
                       Solicitado: {tsFmt(a.requested_at)} {isSelf ? "· você" : ""}
@@ -5953,8 +5996,8 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
       </div>
 
       <div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 16, padding: 14, marginBottom: 16 }}>
-        <div style={{ fontSize: 14, fontWeight: 900, marginBottom: 10 }}>Perfis internos opcionais</div>
-        <div style={{ fontSize: 11, color: BRAND.dim, marginBottom: 10 }}>Crie perfis operacionais com login proprio. O usuario pode entrar digitando o nome cadastrado e a senha inicial.</div>
+        <div style={{ fontSize: 14, fontWeight: 900, marginBottom: 10 }}>Criar usuário do sistema</div>
+        <div style={{ fontSize: 11, color: BRAND.dim, marginBottom: 10 }}>Crie acessos reais com nome e senha. O e-mail técnico exigido pela nuvem fica oculto no painel para evitar duplicidade visual.</div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8 }}>
           <input value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Nome do usuário" style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, borderRadius: 10, padding: "10px 12px", color: BRAND.text, fontSize: 12 }} />
           <input value={senha} onChange={(e) => setSenha(e.target.value)} placeholder="Senha criada por você" style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, borderRadius: 10, padding: "10px 12px", color: BRAND.text, fontSize: 12 }} />
@@ -5983,7 +6026,7 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
               <div style={{ fontSize: 13, fontWeight: 900 }}>{u.nome}</div>
               {!isAdminProtegido(u) && (
                 <div style={{ fontSize: 10, color: u.loginAtivo || u.supabaseUserId ? BRAND.green : BRAND.warn, marginTop: 3, overflowWrap: "anywhere" }}>
-                  {u.loginAtivo || u.supabaseUserId ? `Login ativo: ${u.nome}` : "Login ainda nao ativado"}{u.loginEmail ? ` | ${u.loginEmail}` : ""}
+                  {u.loginAtivo || u.supabaseUserId ? `Login ativo: ${textoLoginUsuario(u)}` : "Login ainda nao ativado"}{u.loginEmail && !isEmailLoginInterno(u.loginEmail) ? ` | ${u.loginEmail}` : ""}
                 </div>
               )}
               <div style={{ fontSize: 10, color: BRAND.dim }}>{u.perfil || u.tipo} · {u.ativo ? "ativo" : "cancelado"}</div>
@@ -6499,9 +6542,6 @@ export default function App() {
       const partes = [];
       if (dados.descricaoServico) partes.push(clean(dados.descricaoServico, 2200));
       if (dados.materiaisTexto) partes.push(`Itens/materiais identificados:\n${clean(dados.materiaisTexto, 2200)}`);
-      if (Number(dados.valorGlobalIdentificado || 0) > 0) {
-        partes.push(`Valor identificado no anexo: ${brl(dados.valorGlobalIdentificado)}`);
-      }
       if (dados.observacoes) partes.push(`Observacoes do anexo:\n${clean(dados.observacoes, 700)}`);
 
       const bloco = partes.filter(Boolean).join("\n\n").trim();
@@ -7769,7 +7809,7 @@ export default function App() {
           <div className="of-main-nav" style={{ display: "flex", gap: 3, background: BRAND.bg, borderRadius: 10, padding: 4, border: `1px solid ${BRAND.border2}`, flex: "1 1 auto", minWidth: 0, maxWidth: "min(780px, 100%)", overflowX: "auto", overflowY: "hidden", whiteSpace: "nowrap" }}>
             {[
               ["gestao", "📊 Gestão"],
-              ["clientes", "👥 Clientes"],
+              ["clientes", "👥 CRM"],
               ["orcamento", "✦ Orçamento"],
               ["agenda", "Agenda"],
               ["whatsapp", "WhatsApp"],

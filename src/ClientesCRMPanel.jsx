@@ -244,6 +244,32 @@ function montarMensagemAssistida({ cliente = {}, orcamento = null, playbookId = 
   return `Ola, ${nome}. Tudo bem?\n\nEstou confirmando se voce recebeu ${proposta} e se ficou alguma duvida para avaliacao. Se preferir, posso te ajudar com um resumo objetivo dos principais pontos.${assinatura}`;
 }
 
+function mensagemSugeridaParaOperador({ sugestao = "", cliente = {}, orcamento = null, playbookId = "confirmar-recebimento", usuarioNome = "" } = {}) {
+  const texto = clean(sugestao, 2200);
+  const textoNormalizado = textoBusca(texto);
+  const falaComoSistema = /nara|jade|orcaflow|assistente|inteligencia artificial|ia comercial|sistema/.test(textoNormalizado);
+  const citaEmpresaGenerica = /nossa empresa|a empresa|empresa especializada|departamento comercial/i.test(texto) && !clean(cliente.empresa) && !orcamento?.empresaNome;
+  if (!texto || falaComoSistema || citaEmpresaGenerica) {
+    return montarMensagemAssistida({ cliente, orcamento, playbookId, usuarioNome });
+  }
+
+  let final = texto
+    .replace(/aqui\s+e\s+a\s+nara[,.\s-]*/gi, "")
+    .replace(/aqui\s+e\s+o\s+orcaflow[,.\s-]*/gi, "")
+    .replace(/do\s+orcaflow\s+studio\s+ai/gi, "")
+    .replace(/or[cç]aflow/gi, "")
+    .replace(/nara/gi, "")
+    .replace(/jade/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
+  const assinatura = clean(usuarioNome, 80);
+  if (assinatura && !textoBusca(final).includes(textoBusca(assinatura))) {
+    final = `${final}\n\n${assinatura}`;
+  }
+  return clean(final || montarMensagemAssistida({ cliente, orcamento, playbookId, usuarioNome }), 2200);
+}
+
 function selecionarClientesCampanha(clientes = [], filtro = "retomar-atrasados", etiqueta = "") {
   const lista = Array.isArray(clientes) ? clientes : [];
   return lista.filter((cliente) => {
@@ -578,7 +604,28 @@ function clienteTemContatoReal(cliente = {}) {
   );
 }
 
+function contatoRegistradoPeloOperador(contato = {}) {
+  const canal = textoBusca(contato?.canal || "");
+  const direcao = textoBusca(contato?.direcao || "");
+  const tipo = textoBusca(contato?.tipo || "");
+  const origem = textoBusca(contato?.origem || "");
+  const assunto = clean(contato?.assunto || "", 500);
+  const mensagem = clean(contato?.mensagem || contato?.arquivoResumo || contato?.arquivoNome || "", 1000);
+  const temConteudoReal = Boolean(assunto || mensagem);
+  const ehCanalDeContato = /whatsapp|email|e-mail|telefone|ligacao|presencial|reuniao|visita/.test(canal);
+  const ehDirecaoOperador = /cliente respondeu|empresa enviou|entrada|saida|retorno|contato realizado/.test(direcao);
+  const ehTipoOperador = /conversa|follow|retorno|cobranca|duvida|reuniao|visita|ligacao|negociacao/.test(tipo);
+  const ehAutomatico = /nara|jade|ia|sistema|vinculo|orcamento|proposta|cotacao|assistido|auditoria|import|agenda/.test([origem, canal, direcao, tipo].join(" "));
+
+  if (!temConteudoReal || ehAutomatico) return false;
+  return ehCanalDeContato && (ehDirecaoOperador || ehTipoOperador);
+}
+
 function clienteTemHistoricoHumano(cliente = {}) {
+  return (Array.isArray(cliente.contatos) ? cliente.contatos : []).some(contatoRegistradoPeloOperador);
+}
+
+function clienteTemHistoricoHumanoLegado(cliente = {}) {
   return (Array.isArray(cliente.contatos) ? cliente.contatos : []).some((contato) => {
     const origem = textoBusca(contato?.origem || "");
     const canal = textoBusca(contato?.canal || "");
@@ -616,7 +663,7 @@ function clienteCriadoApenasDeOrcamento(cliente = {}) {
 }
 
 function clienteVisivelNoCRM(cliente = {}) {
-  return !clienteCriadoApenasDeOrcamento(cliente);
+  return clienteTemHistoricoHumano(cliente);
 }
 
 function idsOrcamentosVinculados(cliente = {}) {
@@ -753,6 +800,7 @@ export function ClientesCRMPanel({
   const [campanhaFiltro, setCampanhaFiltro] = useState("retomar-atrasados");
   const [campanhaPlaybook, setCampanhaPlaybook] = useState("cobrar-retorno");
   const [campanhaResultados, setCampanhaResultados] = useState([]);
+  const [playbookAtivoId, setPlaybookAtivoId] = useState("");
   const refArquivo = useRef(null);
   const refArquivoOrcamento = useRef(null);
   const refImportarContatos = useRef(null);
@@ -793,7 +841,10 @@ export function ClientesCRMPanel({
     const quentes = enriquecidos.filter((item) => item.temperatura === "Quente").length;
     const atrasados = enriquecidos.filter(isAtrasado).length;
     const semContato = enriquecidos.filter((item) => !item.proximoContato).length;
-    return { abertos, quentes, atrasados, semContato };
+    const comHistorico = enriquecidos.filter((item) => Array.isArray(item.contatos) && item.contatos.length > 0).length;
+    const comOrcamento = enriquecidos.filter((item) => Array.isArray(item.orcamentosVinculados) && item.orcamentosVinculados.length > 0).length;
+    const valorPotencial = enriquecidos.reduce((soma, item) => soma + valorOrcamento(item), 0);
+    return { abertos, quentes, atrasados, semContato, comHistorico, comOrcamento, valorPotencial };
   }, [enriquecidos]);
 
   const filtrados = useMemo(() => {
@@ -843,6 +894,10 @@ export function ClientesCRMPanel({
     () => selecionarClientesCampanha(filtrados, campanhaFiltro, filtroEtiqueta).slice(0, 25),
     [filtrados, campanhaFiltro, filtroEtiqueta]
   );
+
+  useEffect(() => {
+    setPlaybookAtivoId(ativo?._playbook || "");
+  }, [ativo?.id, ativo?._playbook]);
 
   useEffect(() => {
     if (!ativoId && filtrados[0]?.id) setAtivoId(filtrados[0].id);
@@ -1021,6 +1076,7 @@ export function ClientesCRMPanel({
   const prepararPlaybook = (playbookId = ativo?._playbook || "confirmar-recebimento") => {
     if (!ativo) return;
     const playbook = PLAYBOOKS_ASSISTIDOS.find((item) => item.id === playbookId) || PLAYBOOKS_ASSISTIDOS[0];
+    setPlaybookAtivoId(playbook.id);
     const orc = orcamentoAtivo || orcamentosVinculadosAtivo[0] || null;
     const mensagem = montarMensagemAssistida({
       cliente: ativo,
@@ -1048,7 +1104,7 @@ export function ClientesCRMPanel({
       canal: "Nara",
       direcao: "Registro interno",
       tipo: acao,
-      assunto: "Manychat assistido gratuito",
+      assunto: "Modo assistido",
       mensagem: `Acao assistida preparada. Texto:\n${clean(texto, 1800)}`,
       origem: "crm_manychat_assistido",
     });
@@ -1479,7 +1535,17 @@ export function ClientesCRMPanel({
       }
       if (!response.ok) throw new Error(data.error || "Erro ao consultar a Nara.");
 
-      const analise = data.analise || {};
+      const respostaNara = data.analise || {};
+      const analise = {
+        ...respostaNara,
+        mensagemSugerida: mensagemSugeridaParaOperador({
+          sugestao: respostaNara.mensagemSugerida,
+          cliente: ativo,
+          orcamento: orcamentoAtivo || orcamentosVinculadosAtivo[0] || null,
+          playbookId: playbookAtivoId || ativo?._playbook || "confirmar-recebimento",
+          usuarioNome: usuarioAtual?.nomeTratamento || usuarioAtual?.nome || usuarioAtual?.email || "",
+        }),
+      };
       const dataSugerida = /^\d{4}-\d{2}-\d{2}$/.test(String(analise.proximoContatoSugerido || ""))
         ? analise.proximoContatoSugerido
         : ativo.proximoContato;
@@ -1581,12 +1647,26 @@ export function ClientesCRMPanel({
   const LBL = { fontSize: 9, color: C.dim, letterSpacing: 1.4, fontWeight: 900, marginBottom: 5 };
 
   return (
-    <div style={{ flex: 1, display: "grid", gridTemplateColumns: "320px 1fr", minHeight: 0, overflow: "hidden" }}>
+    <div className="crm-premium-shell" style={{ flex: 1, display: "grid", gridTemplateColumns: "320px 1fr", minHeight: 0, overflow: "hidden" }}>
+      <style>{`
+        .crm-premium-shell .crm-list-card { transition: transform .18s ease, border-color .18s ease, background .18s ease, box-shadow .18s ease; }
+        .crm-premium-shell .crm-list-card:hover { transform: translateX(4px); border-color: ${C.blue2}; box-shadow: 0 10px 26px rgba(37,99,235,.10); }
+        .crm-hero { position: relative; overflow: hidden; border: 1px solid ${C.border}; border-radius: 18px; padding: 18px; margin-bottom: 14px; background: radial-gradient(circle at 12% 0%, rgba(0,255,136,.13), transparent 34%), radial-gradient(circle at 92% 15%, rgba(37,99,235,.18), transparent 30%), ${C.panel}; }
+        .crm-hero:after { content: ""; position: absolute; inset: auto -60px -90px auto; width: 220px; height: 220px; border-radius: 999px; background: radial-gradient(circle, rgba(0,183,255,.18), transparent 62%); pointer-events: none; }
+        .crm-dashboard-grid { display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)); gap: 8px; margin-top: 14px; }
+        .crm-metric-card { border: 1px solid ${C.border2}; border-radius: 14px; padding: 11px; background: rgba(7,18,32,.76); transition: transform .18s ease, border-color .18s ease; }
+        .crm-metric-card:hover { transform: translateY(-2px); border-color: ${C.green2}; }
+        .crm-nara-orb { width: 54px; height: 54px; border-radius: 18px; display: grid; place-items: center; background: radial-gradient(circle at 35% 20%, rgba(255,255,255,.38), transparent 22%), linear-gradient(135deg, ${C.green2}, ${C.blue2}); box-shadow: 0 0 34px rgba(0,183,255,.25); font-weight: 950; font-size: 22px; }
+        @media (max-width: 980px) {
+          .crm-premium-shell { display: block !important; overflow-y: auto !important; }
+          .crm-dashboard-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
+      `}</style>
       <aside style={{ borderRight: `1px solid ${C.border}`, background: "rgba(7,17,31,.72)", padding: 14, overflowY: "auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 12 }}>
           <div>
-            <div style={{ fontSize: 16, fontWeight: 950 }}>CRM de Clientes</div>
-            <div style={{ color: C.dim, fontSize: 11 }}>{base.length} cliente(s) em acompanhamento com Nara</div>
+            <div style={{ fontSize: 16, fontWeight: 950 }}>CRM</div>
+            <div style={{ color: C.dim, fontSize: 11 }}>Somente contatos com relacionamento real.</div>
           </div>
           <button onClick={novoCliente} style={{ border: "none", borderRadius: 10, padding: "9px 11px", background: `linear-gradient(135deg, ${C.green2}, ${C.blue2})`, color: "#fff", fontWeight: 900, cursor: "pointer" }}>Novo</button>
         </div>
@@ -1606,16 +1686,14 @@ export function ClientesCRMPanel({
         </div>
 
         <input value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar cliente, contato, empresa..." style={{ ...INP, marginBottom: 10 }} />
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7, marginBottom: 10 }}>
           {[
-            ["todos", "Todos"],
+            ["todos", "Radar"],
             ["quentes", "Quentes"],
-            ["atrasados", "Atrasados"],
+            ["atrasados", "Atrasos"],
             ["hoje", "Hoje"],
-            ["sem-contato", "Sem contato"],
-            ["sem-whatsapp", "Sem WhatsApp"],
           ].map(([id, label]) => (
-            <button key={id} onClick={() => setFiltro(id)} style={{ padding: "6px 9px", borderRadius: 999, border: `1px solid ${filtro === id ? C.green2 : C.border2}`, background: filtro === id ? `${C.green2}18` : "transparent", color: filtro === id ? C.green : C.muted, cursor: "pointer", fontSize: 10.5, fontWeight: 850 }}>{label}</button>
+            <button key={id} onClick={() => setFiltro(id)} style={{ padding: "8px 9px", borderRadius: 10, border: `1px solid ${filtro === id ? C.green2 : C.border2}`, background: filtro === id ? `${C.green2}18` : C.panel2, color: filtro === id ? C.green : C.muted, cursor: "pointer", fontSize: 11, fontWeight: 900 }}>{label}</button>
           ))}
         </div>
         <select value={filtroEtiqueta} onChange={(e) => setFiltroEtiqueta(e.target.value)} style={{ ...INP, marginBottom: 10 }}>
@@ -1625,10 +1703,9 @@ export function ClientesCRMPanel({
         <details style={{ marginBottom: 12 }}>
           <summary style={{ color: C.muted, cursor: "pointer", fontSize: 11, fontWeight: 900 }}>Ferramentas</summary>
           <div style={{ display: "grid", gap: 7, marginTop: 8 }}>
-            <input ref={refImportarContatos} type="file" accept=".vcf,.csv,.txt,text/vcard,text/csv,text/plain" style={{ display: "none" }} onChange={(e) => { const file = e.target.files?.[0]; e.target.value = ""; importarArquivoContatos(file); }} />
-            <button onClick={importarContatosDoAparelho} style={{ width: "100%", padding: "8px 10px", borderRadius: 10, border: `1px solid ${C.green2}66`, background: `${C.green2}16`, color: C.green, fontWeight: 900, cursor: "pointer" }}>Importar contatos do celular</button>
-            <button onClick={() => refImportarContatos.current?.click()} style={{ width: "100%", padding: "8px 10px", borderRadius: 10, border: `1px solid ${C.border2}`, background: C.panel2, color: C.muted, fontWeight: 850, cursor: "pointer" }}>Importar arquivo .vcf/.csv</button>
-            <div style={{ color: C.dim, fontSize: 10, lineHeight: 1.35 }}>No celular, use o navegador com permissao de contatos. Se nao aparecer a agenda, exporte contatos como .vcf ou .csv e importe aqui.</div>
+            <div style={{ border: `1px solid ${C.border2}`, borderRadius: 10, background: C.panel2, padding: 10, color: C.dim, fontSize: 10.5, lineHeight: 1.45 }}>
+              Contatos sem conversa ficam somente na Agenda. Importe celular, VCF ou CSV por la; quando registrar uma tratativa real, o contato passa a aparecer neste CRM.
+            </div>
             <button onClick={sincronizarOrcamentos} style={{ width: "100%", padding: "8px 10px", borderRadius: 10, border: `1px solid ${C.blue2}55`, background: `${C.blue2}12`, color: "#93C5FD", fontWeight: 850, cursor: "pointer" }}>Buscar orcamentos compativeis</button>
             <button onClick={abrirRelatorioSemanal} style={{ width: "100%", padding: "8px 10px", borderRadius: 10, border: `1px solid ${C.green2}66`, background: `${C.green2}16`, color: C.green, fontWeight: 900, cursor: "pointer" }}>Relatorio Nara</button>
             <button onClick={() => aplicarEtiquetasInteligentes(false)} style={{ width: "100%", padding: "8px 10px", borderRadius: 10, border: `1px solid ${C.warn}55`, background: `${C.warn}12`, color: C.warn, fontWeight: 850, cursor: "pointer" }}>Aplicar etiquetas nos filtrados</button>
@@ -1641,7 +1718,7 @@ export function ClientesCRMPanel({
             const secundario = item.empresa && item.empresa !== item.nome ? item.empresa : item.email || item.email2 || item.whatsapp || item.telefone || "Sem dados de contato";
             const sugestao = clean(item.proximoPasso || item.lembreteJade || "", 120);
             return (
-              <button key={item.id} onClick={() => { setAtivoId(item.id); setEditando(false); }} style={{ textAlign: "left", borderRadius: 12, padding: 11, border: `1px solid ${selected ? C.green2 : C.border2}`, background: selected ? `${C.green2}14` : C.panel2, color: C.text, cursor: "pointer", minHeight: 0 }}>
+              <button key={item.id} className="crm-list-card" onClick={() => { setAtivoId(item.id); setEditando(false); }} style={{ textAlign: "left", borderRadius: 12, padding: 11, border: `1px solid ${selected ? C.green2 : C.border2}`, background: selected ? `${C.green2}14` : C.panel2, color: C.text, cursor: "pointer", minHeight: 0 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
                   <strong style={{ fontSize: 12.5, lineHeight: 1.25 }}>{principal}</strong>
                   <span style={{ color: item.temperatura === "Quente" ? C.warn : C.green, fontSize: 10, fontWeight: 900 }}>{item.temperatura}</span>
@@ -1665,6 +1742,39 @@ export function ClientesCRMPanel({
       </aside>
 
       <main style={{ overflowY: "auto", padding: 18 }}>
+        <section className="crm-hero">
+          <div style={{ position: "relative", zIndex: 1, display: "flex", justifyContent: "space-between", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+            <div>
+              <div style={{ color: C.green, fontSize: 10, letterSpacing: 2.4, fontWeight: 950 }}>CRM COMERCIAL INTELIGENTE</div>
+              <div style={{ fontSize: 24, fontWeight: 950, marginTop: 6 }}>Relacionamentos reais, sem cadastro falso.</div>
+              <div style={{ color: C.muted, fontSize: 12, marginTop: 5, maxWidth: 620, lineHeight: 1.5 }}>
+                O CRM acompanha contatos que tiveram tratativa, historico ou vinculo manual. Orcamentos soltos ficam fora daqui ate voce relacionar com um cliente.
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 220 }}>
+              <div className="crm-nara-orb">N</div>
+              <div>
+                <div style={{ color: C.text, fontSize: 13, fontWeight: 950 }}>Nara</div>
+                <div style={{ color: C.dim, fontSize: 11, lineHeight: 1.35 }}>Area pronta para avatar e assistencia comercial contextual.</div>
+              </div>
+            </div>
+          </div>
+          <div className="crm-dashboard-grid" style={{ position: "relative", zIndex: 1 }}>
+            {[
+              ["Clientes CRM", base.length, C.blue2],
+              ["Quentes", kpis.quentes, C.warn],
+              ["Atrasados", kpis.atrasados, C.danger],
+              ["Com historico", kpis.comHistorico, C.green],
+              ["Potencial", brl(kpis.valorPotencial), C.green],
+            ].map(([label, valor, cor]) => (
+              <div key={label} className="crm-metric-card">
+                <div style={{ color: cor, fontSize: label === "Potencial" ? 15 : 20, fontWeight: 950 }}>{valor}</div>
+                <div style={{ color: C.dim, fontSize: 10, marginTop: 4 }}>{label}</div>
+              </div>
+            ))}
+          </div>
+        </section>
+
         {!ativo && !editando ? (
           <div style={{ height: "100%", minHeight: 420, display: "grid", placeItems: "center", color: C.dim, textAlign: "center" }}>
             <div><Users size={42} style={{ opacity: 0.55 }} /><div style={{ marginTop: 10, fontWeight: 900 }}>Crie um cliente para iniciar o acompanhamento.</div></div>
@@ -1830,24 +1940,29 @@ export function ClientesCRMPanel({
                       )) : <span style={{ color: C.dim, fontSize: 11 }}>Sem etiquetas sugeridas.</span>}
                     </div>
                   </div>
-                  <div><strong style={{ color: C.text }}>Empresa:</strong> {ativo.empresa || "Nao informado"}</div>
-                  <div><strong style={{ color: C.text }}>WhatsApp:</strong> {ativo.whatsapp || "Nao informado"}</div>
-                  <div><strong style={{ color: C.text }}>Contato:</strong> {[ativo.telefone, ativo.telefone2, ativo.email, ativo.email2].filter(Boolean).join(" | ") || "Nao informado"}</div>
-                  <div><strong style={{ color: C.text }}>Documento:</strong> {ativo.documento || "Nao informado"}</div>
-                  <div><strong style={{ color: C.text }}>Localizacao:</strong> {[ativo.endereco, ativo.cidadeUf].filter(Boolean).join(" - ") || "Nao informado"}</div>
-                  <div><strong style={{ color: C.text }}>Decisor:</strong> {ativo.decisor || ativo.cargo || "Nao informado"}</div>
-                  <div><strong style={{ color: C.text }}>Segmento:</strong> {ativo.segmento || "Nao informado"}</div>
-                  <div><strong style={{ color: C.text }}>Origem:</strong> {ativo.origem || "Nao informado"}</div>
-                  <div><strong style={{ color: C.text }}>Canal preferido:</strong> {ativo.canalPreferido || "WhatsApp"}</div>
-                  <div><strong style={{ color: C.text }}>Intencao:</strong> {ativo.intencao || "Nao informado"}</div>
-                  <div><strong style={{ color: C.text }}>Objecao:</strong> {ativo.objecao || "Nao informado"}</div>
-                  <div><strong style={{ color: C.text }}>Orcamentos no perfil:</strong> {orcamentosVinculadosAtivo.length ? `${orcamentosVinculadosAtivo.length} vinculado(s), cada um com historico proprio.` : "Nenhum orcamento vinculado"}</div>
-                  {!orcamentosVinculadosAtivo.length && Array.isArray(ativo._orcamentosSugeridos) && ativo._orcamentosSugeridos.length > 0 && (
-                    <div style={{ color: C.warn }}><strong>Sugestao:</strong> existem {ativo._orcamentosSugeridos.length} orcamento(s) com nome parecido. Eles nao entram no CRM deste cliente ate voce vincular manualmente.</div>
-                  )}
-                  <div><strong style={{ color: C.text }}>Perfil:</strong> {ativo.perfil || "Sem perfil detalhado"}</div>
-                  <div><strong style={{ color: C.text }}>Proximo passo:</strong> {ativo.proximoPasso || "Nara ainda nao analisou"}</div>
-                  <div><strong style={{ color: C.text }}>Lembrete Nara:</strong> {ativo.lembreteJade || "Sem lembrete"}</div>
+                  <details style={{ border: `1px solid ${C.border2}`, borderRadius: 12, padding: 10, background: C.panel2 }}>
+                    <summary style={{ color: C.text, cursor: "pointer", fontWeight: 950 }}>Ver dados completos do relacionamento</summary>
+                    <div style={{ display: "grid", gap: 7, marginTop: 10 }}>
+                      <div><strong style={{ color: C.text }}>Empresa:</strong> {ativo.empresa || "Nao informado"}</div>
+                      <div><strong style={{ color: C.text }}>WhatsApp:</strong> {ativo.whatsapp || "Nao informado"}</div>
+                      <div><strong style={{ color: C.text }}>Contato:</strong> {[ativo.telefone, ativo.telefone2, ativo.email, ativo.email2].filter(Boolean).join(" | ") || "Nao informado"}</div>
+                      <div><strong style={{ color: C.text }}>Documento:</strong> {ativo.documento || "Nao informado"}</div>
+                      <div><strong style={{ color: C.text }}>Localizacao:</strong> {[ativo.endereco, ativo.cidadeUf].filter(Boolean).join(" - ") || "Nao informado"}</div>
+                      <div><strong style={{ color: C.text }}>Decisor:</strong> {ativo.decisor || ativo.cargo || "Nao informado"}</div>
+                      <div><strong style={{ color: C.text }}>Segmento:</strong> {ativo.segmento || "Nao informado"}</div>
+                      <div><strong style={{ color: C.text }}>Origem:</strong> {ativo.origem || "Nao informado"}</div>
+                      <div><strong style={{ color: C.text }}>Canal preferido:</strong> {ativo.canalPreferido || "WhatsApp"}</div>
+                      <div><strong style={{ color: C.text }}>Intencao:</strong> {ativo.intencao || "Nao informado"}</div>
+                      <div><strong style={{ color: C.text }}>Objecao:</strong> {ativo.objecao || "Nao informado"}</div>
+                      <div><strong style={{ color: C.text }}>Orcamentos no perfil:</strong> {orcamentosVinculadosAtivo.length ? `${orcamentosVinculadosAtivo.length} vinculado(s), cada um com historico proprio.` : "Nenhum orcamento vinculado"}</div>
+                      {!orcamentosVinculadosAtivo.length && Array.isArray(ativo._orcamentosSugeridos) && ativo._orcamentosSugeridos.length > 0 && (
+                        <div style={{ color: C.warn }}><strong>Sugestao:</strong> existem {ativo._orcamentosSugeridos.length} orcamento(s) com nome parecido. Eles nao entram no CRM deste cliente ate voce vincular manualmente.</div>
+                      )}
+                      <div><strong style={{ color: C.text }}>Perfil:</strong> {ativo.perfil || "Sem perfil detalhado"}</div>
+                      <div><strong style={{ color: C.text }}>Proximo passo:</strong> {ativo.proximoPasso || "Nara ainda nao analisou"}</div>
+                      <div><strong style={{ color: C.text }}>Lembrete Nara:</strong> {ativo.lembreteJade || "Sem lembrete"}</div>
+                    </div>
+                  </details>
                 </div>
               )}
             </section>
@@ -1890,17 +2005,20 @@ export function ClientesCRMPanel({
               <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", marginBottom: 10 }}>
                   <div>
-                    <div style={{ color: C.green, fontSize: 10, letterSpacing: 2, fontWeight: 950 }}>MODO ASSISTIDO GRATUITO</div>
+                    <div style={{ color: C.green, fontSize: 10, letterSpacing: 2, fontWeight: 950 }}>MODO ASSISTIDO</div>
                     <div style={{ color: C.dim, fontSize: 12 }}>Playbooks estilo Manychat, mas com envio manual e historico fiel.</div>
                   </div>
                   {ativo?._playbook && <span style={{ border: `1px solid ${C.green2}55`, color: C.green, borderRadius: 999, padding: "5px 8px", fontSize: 10, fontWeight: 900 }}>Sugestao: {PLAYBOOKS_ASSISTIDOS.find((p) => p.id === ativo._playbook)?.label || ativo._playbook}</span>}
                 </div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  {PLAYBOOKS_ASSISTIDOS.map((playbook) => (
-                    <button key={playbook.id} onClick={() => prepararPlaybook(playbook.id)} disabled={!ativo} style={{ padding: "8px 10px", borderRadius: 10, border: `1px solid ${ativo?._playbook === playbook.id ? C.green2 : C.border2}`, background: ativo?._playbook === playbook.id ? `${C.green2}16` : C.panel2, color: ativo?._playbook === playbook.id ? C.green : C.muted, cursor: ativo ? "pointer" : "not-allowed", fontWeight: 850, fontSize: 11 }}>
-                      {playbook.label}
-                    </button>
-                  ))}
+                  {PLAYBOOKS_ASSISTIDOS.map((playbook) => {
+                    const selecionado = playbookAtivoId === playbook.id;
+                    return (
+                      <button key={playbook.id} onClick={() => prepararPlaybook(playbook.id)} disabled={!ativo} style={{ padding: "8px 10px", borderRadius: 10, border: `1px solid ${selecionado ? C.green2 : C.border2}`, background: selecionado ? `${C.green2}18` : C.panel2, color: selecionado ? C.green : C.muted, cursor: ativo ? "pointer" : "not-allowed", fontWeight: 850, fontSize: 11, boxShadow: selecionado ? "0 0 0 1px rgba(0,255,136,.12), 0 10px 24px rgba(22,163,74,.12)" : "none" }}>
+                        {playbook.label}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
