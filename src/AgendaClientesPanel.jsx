@@ -228,6 +228,7 @@ function telUrl(numero = "") {
 }
 
 function orcamentosDoContato(contato = {}, crm = []) {
+  contato = contato || {};
   const clienteId = contato.clienteId || "";
   if (!clienteId) return [];
   return (Array.isArray(crm) ? crm : []).filter((orc) => {

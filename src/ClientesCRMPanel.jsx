@@ -767,6 +767,7 @@ export function ClientesCRMPanel({
   usuarioAtual,
   lerTextoPDF,
   imagemParaLeitura,
+  setView,
 }) {
   const isAdmin = usuarioAtual?.tipo === "admin";
   const base = useMemo(
@@ -1746,9 +1747,9 @@ export function ClientesCRMPanel({
           <div style={{ position: "relative", zIndex: 1, display: "flex", justifyContent: "space-between", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
             <div>
               <div style={{ color: C.green, fontSize: 10, letterSpacing: 2.4, fontWeight: 950 }}>CRM COMERCIAL INTELIGENTE</div>
-              <div style={{ fontSize: 24, fontWeight: 950, marginTop: 6 }}>Relacionamentos reais, sem cadastro falso.</div>
+              <div style={{ fontSize: 24, fontWeight: 950, marginTop: 6 }}>Relacionamentos com historico real de atendimento.</div>
               <div style={{ color: C.muted, fontSize: 12, marginTop: 5, maxWidth: 620, lineHeight: 1.5 }}>
-                O CRM acompanha contatos que tiveram tratativa, historico ou vinculo manual. Orcamentos soltos ficam fora daqui ate voce relacionar com um cliente.
+                O CRM acompanha apenas clientes com conversa registrada. Contatos salvos sem tratativa ficam na Agenda ate voce iniciar o relacionamento.
               </div>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 220 }}>
@@ -1756,6 +1757,13 @@ export function ClientesCRMPanel({
               <div>
                 <div style={{ color: C.text, fontSize: 13, fontWeight: 950 }}>Nara</div>
                 <div style={{ color: C.dim, fontSize: 11, lineHeight: 1.35 }}>Area pronta para avatar e assistencia comercial contextual.</div>
+                <button
+                  type="button"
+                  onClick={() => (typeof setView === "function" ? setView("agenda") : null)}
+                  style={{ marginTop: 8, border: `1px solid ${C.blue2}66`, background: `${C.blue2}14`, color: "#93C5FD", borderRadius: 9, padding: "7px 9px", cursor: "pointer", fontWeight: 900, fontSize: 11 }}
+                >
+                  Buscar contato na Agenda
+                </button>
               </div>
             </div>
           </div>

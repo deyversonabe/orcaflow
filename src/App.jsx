@@ -7683,8 +7683,11 @@ export default function App() {
         img, canvas, svg, video { max-width: 100%; }
         .of-app-shell { min-height: 100vh; min-height: 100dvh; overflow-x: hidden; }
         .of-topbar { isolation: isolate; }
-        .of-main-nav { scrollbar-width: none; }
-        .of-main-nav::-webkit-scrollbar { display: none; }
+        .of-main-nav { scrollbar-width: thin; scrollbar-color: ${BRAND.blue2} transparent; }
+        .of-main-nav::-webkit-scrollbar { height: 7px; }
+        .of-main-nav::-webkit-scrollbar-track { background: transparent; }
+        .of-main-nav::-webkit-scrollbar-thumb { background: linear-gradient(90deg, ${BRAND.green2}, ${BRAND.blue2}); border-radius: 999px; }
+        .of-main-nav button { flex: 0 0 auto; white-space: nowrap; }
         @media (max-width: 1180px) {
           .of-app-shell [style*="repeat(4"] { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
           .of-app-shell [style*="repeat(5"] { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
@@ -7806,7 +7809,7 @@ export default function App() {
         </div>
 
         <div className="of-topbar-actions" style={{ display: "flex", alignItems: "center", gap: 8, flex: "1 1 auto", minWidth: 0, justifyContent: "flex-end" }}>
-          <div className="of-main-nav" style={{ display: "flex", gap: 3, background: BRAND.bg, borderRadius: 10, padding: 4, border: `1px solid ${BRAND.border2}`, flex: "1 1 auto", minWidth: 0, maxWidth: "min(780px, 100%)", overflowX: "auto", overflowY: "hidden", whiteSpace: "nowrap" }}>
+          <div className="of-main-nav" style={{ display: "flex", gap: 3, background: BRAND.bg, borderRadius: 10, padding: "4px 4px 8px", border: `1px solid ${BRAND.border2}`, flex: "1 1 auto", minWidth: 0, maxWidth: "min(920px, 100%)", overflowX: "auto", overflowY: "hidden", whiteSpace: "nowrap", justifyContent: "flex-start" }}>
             {[
               ["gestao", "📊 Gestão"],
               ["clientes", "👥 CRM"],
@@ -7859,6 +7862,7 @@ export default function App() {
           usuarioAtual={usuarioAtual}
           lerTextoPDF={lerTextoPDF}
           imagemParaLeitura={imagemParaLeitura}
+          setView={setView}
         />
       )}
 
