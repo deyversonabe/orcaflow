@@ -1,3 +1,24 @@
+-- ============================================================
+-- ORCAFLOW STUDIO AI - BASE COMPLETA SUPABASE
+-- Versao: 3.3.19
+--
+-- Como usar:
+-- 1. Abra Supabase > SQL Editor > New query.
+-- 2. Cole todo este arquivo.
+-- 3. Clique em Run.
+--
+-- Este script e idempotente: pode ser executado novamente para atualizar
+-- tabelas, funcoes, politicas e permissoes sem apagar empresas, usuarios,
+-- orcamentos, CRM, agenda ou historicos.
+--
+-- Estrutura:
+-- - public.user_state: armazenamento online por usuario.
+-- - public.app_users: controle de acesso e papeis.
+-- - admin: controle total.
+-- - gestor: supervisao dos usuarios simples, sem edicao operacional.
+-- - usuario: cria e ve somente os proprios dados.
+-- ============================================================
+
 create table if not exists public.user_state (
   user_id uuid not null references auth.users(id) on delete cascade,
   key text not null check (char_length(key) between 1 and 120),
