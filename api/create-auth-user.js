@@ -66,6 +66,11 @@ async function assertAdmin(supabase, userId) {
   return data?.role === "admin" && data?.status === "approved";
 }
 
+function normalizedRole(role = "") {
+  const value = String(role || "").toLowerCase();
+  return ["admin", "gestor", "usuario"].includes(value) ? value : "usuario";
+}
+
 async function findAuthUserByEmail(supabase, email) {
   const target = String(email || "").toLowerCase();
   for (let page = 1; page <= 5; page += 1) {
@@ -127,7 +132,7 @@ export default async function handler(req, res) {
     const body = parseBody(req);
     const nome = clean(body.nome || body.name, 90);
     const senha = String(body.senha || body.password || "");
-    const role = body.tipo === "admin" || body.role === "admin" ? "admin" : "usuario";
+    const role = normalizedRole(body.tipo || body.role);
     const displayName = clean(body.displayName || body.display_name || nome, 90);
     const signatureName = clean(body.signatureName || body.signature_name || displayName || nome, 120);
     const phone = clean(body.phone || body.telefone || "", 40);

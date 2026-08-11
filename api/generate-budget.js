@@ -216,6 +216,7 @@ function perfilDocumentoEmpresa(empresa = {}, indice = 0) {
       tituloDocumento: "Orcamento comercial",
       tom: "cotacao comercial objetiva de loja/distribuidora de materiais eletricos",
       ordemSecoes: ["intro", "materiais", "escopo", "fechamento"],
+      modeloTabela: "planilha de loja com codigo, descricao, quantidade e total final",
       rotulos: {
         intro: "Dados da cotacao",
         escopo: "Resumo do fornecimento",
@@ -232,6 +233,7 @@ function perfilDocumentoEmpresa(empresa = {}, indice = 0) {
       tituloDocumento: "Proposta de atendimento",
       tom: "institucional leve, voltado a producao, organizacao e experiencia do evento",
       ordemSecoes: ["intro", "escopo", "recursos", "fechamento"],
+      modeloTabela: "roteiro de producao por blocos visuais de atendimento",
       rotulos: {
         intro: "Apresentacao",
         escopo: "Servicos propostos",
@@ -247,7 +249,8 @@ function perfilDocumentoEmpresa(empresa = {}, indice = 0) {
       tipo: "modernizacao-infraestrutura",
       tituloDocumento: "Proposta comercial",
       tom: "executivo, corporativo e institucional para melhorias e conservacao de infraestrutura",
-      ordemSecoes: ["objetivo", "escopo", "consideracoes", "fechamento"],
+      ordemSecoes: ["objetivo", "materiais", "consideracoes", "escopo", "fechamento"],
+      modeloTabela: "matriz corporativa por frentes de melhoria, solucao e investimento",
       rotulos: {
         objetivo: "Objeto da contratacao",
         escopo: "Escopo de servicos",
@@ -263,7 +266,8 @@ function perfilDocumentoEmpresa(empresa = {}, indice = 0) {
       tipo: "consultoria-tecnica",
       tituloDocumento: "Proposta tecnica",
       tom: "consultivo, metodologico e documental, com foco em analise e tomada de decisao",
-      ordemSecoes: ["objetivo", "escopo", "consideracoes", "fechamento"],
+      ordemSecoes: ["objetivo", "consideracoes", "materiais", "escopo", "fechamento"],
+      modeloTabela: "quadro analitico de registros, atividade analisada, base e valor final",
       rotulos: {
         objetivo: "Finalidade tecnica",
         escopo: "Atividades previstas",
@@ -279,7 +283,8 @@ function perfilDocumentoEmpresa(empresa = {}, indice = 0) {
       tipo: "execucao-operacional",
       tituloDocumento: "Proposta operacional",
       tom: "direto, pratico e voltado a capacidade de mobilizacao e execucao",
-      ordemSecoes: ["objetivo", "escopo", "recursos", "materiais", "fechamento"],
+      ordemSecoes: ["recursos", "objetivo", "materiais", "escopo", "fechamento"],
+      modeloTabela: "pacotes operacionais com quantidade de base e valor final por entrega",
       rotulos: {
         objetivo: "Objetivo operacional",
         escopo: "Descricao dos servicos",
@@ -297,6 +302,7 @@ function perfilDocumentoEmpresa(empresa = {}, indice = 0) {
       tituloDocumento: "Proposta de solucao",
       tom: "comercial moderno, organizado e focado no resultado final da melhoria",
       ordemSecoes: ["intro", "escopo", "itens", "fechamento"],
+      modeloTabela: "etapas livres de obra, sem cara de planilha, com investimento por etapa",
       rotulos: {
         intro: "Visao geral",
         escopo: "Etapas de atendimento",
@@ -312,7 +318,8 @@ function perfilDocumentoEmpresa(empresa = {}, indice = 0) {
       tipo: "engenharia-tecnica",
       tituloDocumento: "Proposta tecnica comercial",
       tom: "tecnico, claro e confiavel, com foco em engenharia eletrica e infraestrutura",
-      ordemSecoes: ["intro", "objetivo", "escopo", "consideracoes", "fechamento"],
+      ordemSecoes: ["objetivo", "consideracoes", "materiais", "intro", "escopo", "fechamento"],
+      modeloTabela: "quadro tecnico por referencia, composicao, base e valor final",
       rotulos: {
         intro: "Apresentacao tecnica",
         objetivo: "Objetivo",
@@ -336,6 +343,7 @@ function perfilDocumentoEmpresa(empresa = {}, indice = 0) {
     tituloDocumento: variantes[indice % variantes.length],
     tom: "identidade documental propria e diferente das demais empresas selecionadas",
     ordemSecoes: ["intro", "objetivo", "escopo", "fechamento"],
+    modeloTabela: "modelo proprio diferente dos demais, evitando colunas e ordem repetidas",
     rotulos: {},
     proibicoes: "Nao repetir a estrutura, o fechamento ou os rotulos usados por outra empresa.",
   };
@@ -408,6 +416,7 @@ function normalizarIdentidadeDocumento(orcamentoEmpresa = {}, empresa = {}, indi
     tituloDocumento: limparTexto(identidade.tituloDocumento || orcamentoEmpresa.tituloDocumento || perfil.tituloDocumento || "Proposta Comercial", 80),
     subtitulo: limparTexto(identidade.subtitulo || "", 120),
     variante,
+    modeloTabela: limparTexto(identidade.modeloTabela || identidade.layoutTabela || perfil.modeloTabela || "", 90),
     assinaturaVisual: limparTexto(identidade.assinaturaVisual || empresa.nomeFantasia || empresa.nome || variante, 120),
     ordemSecoes: (ordemRecebida.length ? ordemRecebida : ordemPerfil).map((secao) => limparTexto(secao, 30)).filter(Boolean),
     rotulos: {
@@ -570,16 +579,20 @@ Os orcamentos NAO podem parecer copias entre si. Para cada empresa, crie uma ide
 - forma de apresentar escopo diferente;
 - sem misturar o DNA de uma empresa com outra.
 - use "perfilDocumento" de cada empresa como comando obrigatorio de linguagem, abertura, fechamento e rotulos.
+- use "perfilDocumento.modeloTabela" como comando obrigatorio para a apresentacao dos itens, quando houver lista real.
 - se duas empresas forem geradas na mesma rodada, compare uma com a outra e evite repetir a mesma abertura, mesmo fechamento, mesmo titulo e mesma sequencia de secoes.
 - nunca use o mesmo texto de introducao, o mesmo paragrafo final ou a mesma logica de apresentacao para empresas diferentes.
 - quando houver Power/operacional e AD/consultoria na mesma rodada, Power deve soar como execucao e mobilizacao; AD deve soar como analise, diagnostico e documentacao. Elas nao podem compartilhar a mesma estrutura narrativa.
 - se houver lista de itens, mantenha a mesma informacao factual, mas mude a forma textual de contextualizar a tabela conforme o DNA da empresa.
+- quando houver lista de itens para mais de uma empresa, varie a ordem de leitura dos itens conforme o perfil: valor/peso tecnico, ordem alfabetica, blocos, etapas, roteiro operacional ou planilha comercial. Nao preserve a mesma sequencia para todas se isso aumentar a semelhanca visual.
+- as colunas visiveis sao definidas pelo sistema; nao escreva no texto que a tabela tem valor unitario, preco original, margem, percentual ou acrescimo.
 - o fechamento de cada empresa deve ser exclusivo; nao use frases padrao como "colocamo-nos a disposicao" repetidas em todos os documentos.
 
 MATERIAIS E PRECIFICACAO
 - Gere "materiaisTabela" SOMENTE quando o usuario trouxer uma lista real de materiais, produtos ou itens, de preferencia com quantidade, unidade, custo de referencia ou descricao itemizada.
 - Se o usuario mencionar "materiais" de forma generica, sem lista, nao crie tabela, nao crie itens ficticios e deixe "materiaisTabela" vazio.
-- A tabela final visivel ao cliente deve conter somente descricao, quantidade, unidade, valorUnitario final e subtotal final.
+- A tabela final visivel ao cliente deve conter somente descricao/atividade, quantidade e unidade quando fizer sentido, e valor final da linha/subtotal final.
+- O campo valorUnitario pode existir no JSON apenas por compatibilidade matematica, mas nao deve ser citado no texto nem tratado como coluna obrigatoria visivel.
 - O texto do usuario e anexos podem conter precos, valor unitario, subtotal, total, orcamento de fornecedor, cotacao anterior ou valor identificado em PDF. Ignore completamente esses valores monetarios.
 - A unica fonte de preco permitida e o campo "valorGlobal" da empresa selecionada.
 - Nao use preco, valor unitario, total ou subtotal presente na descricao para calcular ou ponderar itens.
@@ -638,6 +651,7 @@ RETORNE SOMENTE JSON VALIDO, SEM MARKDOWN, NESTE FORMATO EXATO:
         "tituloDocumento": "titulo proprio da proposta",
         "subtitulo": "subtitulo opcional",
         "variante": "nome curto do modelo visual/documental",
+        "modeloTabela": "modelo de apresentacao dos itens conforme perfilDocumento.modeloTabela",
         "assinaturaVisual": "descricao curta da identidade visual aplicada",
         "ordemSecoes": ["intro", "escopo", "materiais", "objetivo", "consideracoes", "recursos", "itens", "fechamento"],
         "rotulos": {

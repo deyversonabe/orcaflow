@@ -71,6 +71,28 @@ function isInternalEmail(email = "") {
   return String(email || "").toLowerCase().endsWith(`@${INTERNAL_LOGIN_DOMAIN}`);
 }
 
+function normalizedRole(role = "") {
+  return ["admin", "gestor", "usuario"].includes(String(role || "").toLowerCase())
+    ? String(role || "").toLowerCase()
+    : "usuario";
+}
+
+function isApproved(access = {}) {
+  return access?.status === "approved";
+}
+
+function isAdminAccess(access = {}) {
+  return normalizedRole(access?.role) === "admin" && isApproved(access);
+}
+
+function isGestorAccess(access = {}) {
+  return normalizedRole(access?.role) === "gestor" && isApproved(access);
+}
+
+function canSupervise(access = {}) {
+  return isAdminAccess(access) || isGestorAccess(access);
+}
+
 function publicUser(row = {}) {
   const displayName = clean(row.display_name || row.name || row.signature_name || row.email || "Usuario", 90);
   return {
@@ -80,7 +102,7 @@ function publicUser(row = {}) {
     name: row.name || "",
     display_name: displayName,
     signature_name: row.signature_name || displayName,
-    role: row.role || "usuario",
+    role: normalizedRole(row.role),
     status: row.status || "pending",
     requested_at: row.requested_at || "",
     approved_at: row.approved_at || "",
@@ -235,8 +257,19 @@ async function upsertState(supabase, userId, values) {
   if (error) throw new Error(`Falha ao salvar dados na nuvem: ${error.message}`);
 }
 
+async function appendAudit(supabase, userId, record) {
+  if (!userId || !record) return;
+  const atual = await readRows(supabase, userId, [KEY_AUDITORIA]);
+  const listaAtual = Array.isArray(atual[KEY_AUDITORIA]) ? atual[KEY_AUDITORIA] : [];
+  await upsertState(supabase, userId, {
+    [KEY_AUDITORIA]: [record, ...listaAtual].slice(0, 500),
+  });
+}
+
 async function handleGet({ req, res, supabase, caller, callerAccess }) {
-  const isAdmin = callerAccess?.role === "admin" && callerAccess?.status === "approved";
+  const isAdmin = isAdminAccess(callerAccess);
+  const isGestor = isGestorAccess(callerAccess);
+  const includeData = String(req.query?.includeData || req.query?.dados || "") === "1" || req.query?.includeData === true;
   const { data: users, error: usersError } = await supabase
     .from("app_users")
     .select("*")
@@ -247,9 +280,15 @@ async function handleGet({ req, res, supabase, caller, callerAccess }) {
   const userRows = Array.isArray(users) ? users : [];
   const visibleUsers = isAdmin
     ? userRows
-    : userRows.filter((row) => row.status === "approved" || row.user_id === caller.id);
+    : isGestor
+      ? userRows.filter((row) => row.user_id === caller.id || (row.status === "approved" && normalizedRole(row.role) === "usuario"))
+      : userRows.filter((row) => row.status === "approved" || row.user_id === caller.id);
 
-  const userIdsForState = isAdmin ? userRows.map((row) => row.user_id).filter(Boolean) : [caller.id];
+  const userIdsForState = isAdmin
+    ? userRows.map((row) => row.user_id).filter(Boolean)
+    : isGestor
+      ? visibleUsers.filter((row) => row.user_id !== caller.id).map((row) => row.user_id).filter(Boolean)
+      : [caller.id];
   let stateRows = [];
   if (userIdsForState.length) {
     const { data, error } = await supabase
@@ -265,20 +304,28 @@ async function handleGet({ req, res, supabase, caller, callerAccess }) {
   return json(res, 200, {
     ok: true,
     isAdmin,
+    isGestor,
+    canSupervise: canSupervise(callerAccess),
     currentUserId: caller.id,
     acessos: visibleUsers.map(publicUser),
     resumoUsuarios: summarizeRows(stateRows),
+    dadosUsuarios: includeData && canSupervise(callerAccess) ? stateRows : [],
   });
 }
 
 async function handlePost({ req, res, supabase, caller, callerAccess }) {
   const body = parseBody(req);
-  const isAdmin = callerAccess?.role === "admin" && callerAccess?.status === "approved";
+  const isAdmin = isAdminAccess(callerAccess);
+  const isGestor = isGestorAccess(callerAccess);
   const option = USER_TRANSFER_OPTIONS[body.tipo] || USER_TRANSFER_OPTIONS.empresas;
 
   let origemId = clean(body.origem, 80);
   const destinoId = clean(body.destino, 80);
   let modo = body.modo === "mover" ? "mover" : "copiar";
+
+  if (isGestor) {
+    return json(res, 403, { ok: false, error: "Gestor possui acesso de supervisao e auditoria, sem compartilhamento ou edicao de dados." });
+  }
 
   if (!isAdmin) {
     origemId = caller.id;
@@ -341,6 +388,20 @@ async function handlePost({ req, res, supabase, caller, callerAccess }) {
 
   await upsertState(supabase, destinoId, payloadDestino);
   if (modo === "mover") await upsertState(supabase, origemId, payloadOrigem);
+
+  await appendAudit(supabase, caller.id, {
+    id: `aud_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    acao: "COMPARTILHAR_DADOS",
+    tipo: body.tipo || "empresas",
+    label: option.label,
+    modo,
+    quantidade: total,
+    origemUserId: origemId,
+    destinoUserId: destinoId,
+    usuarioId: caller.id,
+    usuarioNome: callerAccess?.display_name || callerAccess?.name || callerAccess?.email || "Usuario",
+    criadoEm: new Date().toISOString(),
+  });
 
   return json(res, 200, {
     ok: true,
