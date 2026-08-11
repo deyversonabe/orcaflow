@@ -148,6 +148,41 @@ function textoLoginUsuario(usuario = {}) {
   return usuario.loginEmail;
 }
 
+const ROLE_LABELS = {
+  admin: "Administrador",
+  gestor: "Gestor",
+  usuario: "Usuario",
+};
+
+function normalizarRole(role = "") {
+  const value = String(role || "").toLowerCase();
+  return ["admin", "gestor", "usuario"].includes(value) ? value : "usuario";
+}
+
+function labelRole(role = "") {
+  return ROLE_LABELS[normalizarRole(role)] || ROLE_LABELS.usuario;
+}
+
+function roleUsuario(usuario = {}) {
+  return normalizarRole(usuario?.tipo || usuario?.role);
+}
+
+function usuarioEhAdmin(usuario = {}) {
+  return roleUsuario(usuario) === "admin";
+}
+
+function usuarioEhGestor(usuario = {}) {
+  return roleUsuario(usuario) === "gestor";
+}
+
+function usuarioPodeSupervisionar(usuario = {}) {
+  return ["admin", "gestor"].includes(roleUsuario(usuario));
+}
+
+function usuarioPodeEditarOperacional(usuario = {}) {
+  return !usuarioEhGestor(usuario);
+}
+
 function nomeUsuarioSistema(usuario = {}) {
   return clean(usuario.nomeTratamento || usuario.displayName || usuario.nome || usuario.email || "responsavel", 80);
 }
@@ -206,6 +241,53 @@ function safeFileName(v = "arquivo") {
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "")
     .slice(0, 80) || "arquivo";
+}
+
+function limparMetadadosSupervisao(item = {}) {
+  const { ownerUserId, supervisaoOrigemUserId, supervisaoModo, ...rest } = item || {};
+  return rest;
+}
+
+function itensDeEstadoUsuarios(rows = [], key) {
+  const itens = [];
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (row?.key !== key || !Array.isArray(row.value)) continue;
+    for (const item of row.value) {
+      if (!item || typeof item !== "object") continue;
+      itens.push({
+        ...item,
+        userId: item.userId || row.user_id,
+        ownerUserId: row.user_id,
+        supervisaoOrigemUserId: row.user_id,
+        supervisaoModo: true,
+      });
+    }
+  }
+  return itens;
+}
+
+function dataUrlToBlob(dataUrl = "") {
+  const [header = "", payload = ""] = String(dataUrl || "").split(",");
+  if (!payload) return null;
+  const mime = (header.match(/data:([^;]+)/i) || [])[1] || "application/pdf";
+  const binary = atob(payload);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
+function abrirDataUrlEmAba(dataUrl, nomeArquivo = "orcamento.pdf") {
+  try {
+    const blob = dataUrlToBlob(dataUrl);
+    if (!blob) return false;
+    const url = URL.createObjectURL(blob);
+    const win = window.open(url, "_blank", "noopener,noreferrer");
+    setTimeout(() => URL.revokeObjectURL(url), 90_000);
+    if (!win) return false;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function imageTypeFromDataUrl(dataUrl = "") {
@@ -354,6 +436,35 @@ function materialTotal(rows = []) {
   return rows.reduce((acc, item) => acc + parseValorBR(item?.subtotal), 0);
 }
 
+function valorFinalMaterial(item = {}) {
+  return parseValorBR(item?.subtotal ?? item?.valorFinal ?? item?.valor ?? 0);
+}
+
+function quantidadeMaterial(item = {}) {
+  const qtd = parseValorBR(item?.quantidade || 1);
+  return qtd > 0 ? qtd : 1;
+}
+
+function quantidadeUnidadeMaterial(item = {}) {
+  const qtd = quantidadeMaterial(item);
+  const qtdTexto = Number.isInteger(qtd) ? String(qtd) : qtd.toLocaleString("pt-BR", { maximumFractionDigits: 3 });
+  return `${qtdTexto} ${clean(item?.unidade || "un") || "un"}`;
+}
+
+function numeroRomanoCurto(index = 0) {
+  return ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII"][index] || String(index + 1);
+}
+
+function ordenarMateriaisPerfil(rows = [], tipo = "") {
+  const base = Array.isArray(rows) ? [...rows] : [];
+  if (tipo === "consultoria") return base.sort((a, b) => clean(a.descricao).localeCompare(clean(b.descricao), "pt-BR"));
+  if (tipo === "engenharia") return base.sort((a, b) => valorFinalMaterial(b) - valorFinalMaterial(a));
+  if (tipo === "orlovic") return base.sort((a, b) => clean(a.unidade || "").localeCompare(clean(b.unidade || ""), "pt-BR") || clean(a.descricao).length - clean(b.descricao).length);
+  if (tipo === "construcao") return base.sort((a, b) => clean(a.descricao).length - clean(b.descricao).length);
+  if (tipo === "eventos") return base.sort((a, b) => quantidadeMaterial(b) - quantidadeMaterial(a));
+  return base;
+}
+
 function isEletroLiderProfile(perfil = {}) {
   return perfil?.tipo === "varejo-eletrico";
 }
@@ -473,13 +584,13 @@ function getSectionLabel(dados, key) {
 
 function getSectionOrder(dados, perfil = null) {
   const preferidasPorPerfil = {
-    "varejo-eletrico": ["materiais", "intro", "escopo", "fechamento"],
-    eventos: ["intro", "recursos", "materiais", "escopo", "fechamento"],
-    orlovic: ["objetivo", "escopo", "materiais", "consideracoes", "fechamento"],
-    consultoria: ["objetivo", "materiais", "consideracoes", "escopo", "fechamento"],
-    operacional: ["objetivo", "recursos", "escopo", "materiais", "fechamento"],
+    "varejo-eletrico": ["materiais", "intro", "fechamento", "escopo"],
+    eventos: ["intro", "recursos", "materiais", "fechamento", "escopo"],
+    orlovic: ["objetivo", "materiais", "consideracoes", "escopo", "fechamento"],
+    consultoria: ["objetivo", "consideracoes", "materiais", "escopo", "fechamento"],
+    operacional: ["recursos", "objetivo", "materiais", "escopo", "fechamento"],
     construcao: ["intro", "escopo", "itens", "materiais", "fechamento"],
-    engenharia: ["intro", "objetivo", "materiais", "escopo", "consideracoes", "fechamento"],
+    engenharia: ["objetivo", "consideracoes", "materiais", "intro", "escopo", "fechamento"],
   };
   const received = Array.isArray(dados?.identidadeDocumento?.ordemSecoes)
     ? dados.identidadeDocumento.ordemSecoes
@@ -734,6 +845,99 @@ function rodapeDocumento(emp = {}) {
     .map((p) => clean(p))
     .filter(Boolean)
     .join(" | ");
+}
+
+function modeloDocumentoEmpresa(emp = {}, dados = {}) {
+  const perfil = perfilVisualEmpresa(emp, dados);
+  const mapa = {
+    "varejo-eletrico": { nome: "cotacao de loja eletrica", tabela: "planilha comercial direta", visual: "catalogo/fornecedor", regra: "pode exibir numero interno da cotacao" },
+    eventos: { nome: "producao de evento", tabela: "blocos de atendimento", visual: "ordem de producao visual", regra: "sem numero de proposta visivel" },
+    orlovic: { nome: "matriz corporativa", tabela: "composicao por pacote", visual: "relatorio executivo de ativos", regra: "sem numero de proposta visivel" },
+    consultoria: { nome: "parecer consultivo", tabela: "quadro analitico", visual: "documento tecnico institucional", regra: "sem numero de proposta visivel" },
+    operacional: { nome: "ordem operacional", tabela: "cards de execucao", visual: "plano de mobilizacao", regra: "sem numero de proposta visivel" },
+    construcao: { nome: "processo de obra", tabela: "etapas e composicao", visual: "proposta de solucao completa", regra: "sem numero de proposta visivel" },
+    engenharia: { nome: "documento tecnico-comercial", tabela: "grade tecnica", visual: "engenharia institucional", regra: "sem numero de proposta visivel" },
+  };
+  const base = mapa[perfil.tipo] || mapa.engenharia;
+  return { tipo: perfil.tipo, ordem: getSectionOrder(dados, perfil).slice(0, 5), ...base };
+}
+
+function textoDocumentoParaValidacao(dados = {}, emp = {}) {
+  const perfil = perfilVisualEmpresa(emp, dados);
+  const partes = [
+    getDocTitle(dados, perfil),
+    dados?.identidadeDocumento?.subtitulo,
+    ...Object.values(dados?.identidadeDocumento?.rotulos || {}),
+    ...Object.values(dados?.campos || {}),
+    ...(Array.isArray(dados?.itensIA) ? dados.itensIA : []),
+    ...materialRows(dados).flatMap((item) => [item?.descricao, item?.observacao, brl(item?.subtotal)]),
+    brl(dados?.valorGlobal),
+    assinaturaDocumento(emp, perfil),
+    rodapeDocumento(emp),
+  ];
+  return partes.map((item) => clean(item)).filter(Boolean).join("\n");
+}
+
+function validarDocumentoNara(emp = {}, dados = {}, todosOrcamentos = {}) {
+  const perfil = perfilVisualEmpresa(emp, dados);
+  const modelo = modeloDocumentoEmpresa(emp, dados);
+  const texto = textoBuscaVisual(textoDocumentoParaValidacao(dados, emp));
+  const problemas = [];
+  const avisos = [];
+  const checks = [];
+
+  const bloquearTermo = (regex, mensagem) => {
+    if (regex.test(texto)) problemas.push(mensagem);
+  };
+  const alertarTermo = (regex, mensagem) => {
+    if (regex.test(texto)) avisos.push(mensagem);
+  };
+
+  bloquearTermo(/\bprazo\b|\bvalidade\b|\bgarantia\b|\bdias\s+uteis\b|\bcondicoes?\s+de\s+pagamento\b|\bcondicoes?\s+de\s+execucao\b|\bdata\s+de\s+execucao\b/, "Remover prazo, validade, garantia ou condicoes comerciais/execucao.");
+  bloquearTermo(/\bvalor\s+original\b|\bacresc|\bpercentual\b|ajuste\s+proporcional|margem\s+aplicad|valor\s+unitario\s+original|valor\s+unit\./, "Remover valor original, percentual ou acrescimo; o cliente deve ver somente valor final.");
+  bloquearTermo(/materiais\s+citados\s+sem\s+lista|sem\s+lista\s+de\s+itens|prestacao\s+de\s+mao\s+de\s+obra\s+mencionada\s+de\s+forma\s+geral|natureza\s+tecnica\s+especifica.*nao\s+detalhada/, "Remover texto generico de preenchimento; use apenas o escopo real informado.");
+
+  if (!documentoExibeCodigo(perfil) && /\borc[-\s]*\d+\b|\bcotacao\s*[-\s]*\d+\b/.test(texto)) {
+    problemas.push("Remover numero ORC/cotacao do documento; somente Eletro Lider pode exibir esse controle.");
+  }
+
+  const rows = materialRows(dados);
+  const valorGlobal = parseValorBR(dados?.valorGlobal);
+  if (rows.length && valorGlobal > 0) {
+    const totalItens = materialTotal(rows);
+    const diferenca = Math.abs(totalItens - valorGlobal);
+    if (diferenca > 0.05) {
+      problemas.push(`Tabela de itens nao fecha com o valor global. Diferenca: ${brl(diferenca)}.`);
+    } else {
+      checks.push("Tabela de itens fechando exatamente com o valor global.");
+    }
+  }
+
+  if (!rows.length) checks.push("Sem lista de itens: proposta mantida sem tabela artificial.");
+  checks.push(`Modelo aplicado: ${modelo.nome} / ${modelo.tabela}.`);
+
+  const outros = Object.entries(todosOrcamentos || {}).filter(([, item]) => item && item !== dados);
+  const assinaturaAtual = `${modelo.tipo}|${modelo.tabela}|${modelo.ordem.join(">")}`;
+  const similar = outros.some(([empId, item]) => {
+    const outroEmp = empId === emp.id ? emp : {};
+    const outroModelo = modeloDocumentoEmpresa(outroEmp, item);
+    const outroPerfil = perfilVisualEmpresa(outroEmp, item);
+    const assinaturaOutro = `${outroPerfil.tipo}|${outroModelo.tabela}|${getSectionOrder(item, outroPerfil).slice(0, 5).join(">")}`;
+    return assinaturaOutro === assinaturaAtual;
+  });
+  if (similar) avisos.push("Outro documento do lote usa assinatura estrutural parecida; revise o DNA proprio da empresa.");
+
+  alertarTermo(/\bnara\b|\borcaflow\b|\bgerado\s+por\s+ia\b|\bsistema\s+de\s+ia\b/, "Evitar marcas internas do sistema no texto final.");
+
+  const score = Math.max(0, 100 - problemas.length * 24 - avisos.length * 8);
+  return {
+    score,
+    status: problemas.length ? "critico" : avisos.length ? "aviso" : "ok",
+    modelo,
+    problemas: [...new Set(problemas)],
+    avisos: [...new Set(avisos)],
+    checks,
+  };
 }
 
 const tsFmt = (iso) => {
@@ -1770,7 +1974,7 @@ function useDB() {
     }
   };
 
-  return { empresas, status, meta, setMeta, toast, salvarEmpresa, excluirEmpresa, exportarBackup, importarBackup, incOrcamentos, kbUsados, pushToast };
+  return { empresas, setEmpresas, status, meta, setMeta, toast, salvarEmpresa, excluirEmpresa, exportarBackup, importarBackup, incOrcamentos, kbUsados, pushToast };
 }
 
 function Toast({ toast }) {
@@ -2123,6 +2327,7 @@ function ModalEmpresa({ empresa, onSave, onCancel, salvando, pushToast }) {
     transition: "all .22s ease",
   };
   const TXT = { ...INP, resize: "vertical", lineHeight: 1.65 };
+  const modeloForm = modeloDocumentoEmpresa(form, {});
 
 
   const ABAS = [
@@ -2302,6 +2507,25 @@ function ModalEmpresa({ empresa, onSave, onCancel, salvando, pushToast }) {
                 </div>
               </Sec>
 
+              <Sec t="MODELO AUTOMATICO DO DOCUMENTO">
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(4,minmax(0,1fr))", gap: 8 }}>
+                  {[
+                    ["Perfil", modeloForm.nome],
+                    ["Tabela", modeloForm.tabela],
+                    ["Visual", modeloForm.visual],
+                    ["Regra", modeloForm.regra],
+                  ].map(([label, value]) => (
+                    <div key={label} style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, borderRadius: 10, padding: 10 }}>
+                      <div style={{ color: BRAND.dim, fontSize: 9, letterSpacing: 1.4, fontWeight: 900, marginBottom: 4 }}>{label.toUpperCase()}</div>
+                      <div style={{ color: BRAND.muted, fontSize: 11, lineHeight: 1.4, fontWeight: 850 }}>{value}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ marginTop: 9, color: "#93C5FD", fontSize: 11, lineHeight: 1.55 }}>
+                  O OrcaFlow usa este perfil para mudar ordem das secoes, assinatura, rodape, tabela e exibicao de numero. Ajuste o DNA acima para tornar a empresa ainda mais unica.
+                </div>
+              </Sec>
+
               <Sec t="ESTRUTURA DO ORÇAMENTO">
                 <Lbl c="INSTRUÇÕES DE ESTRUTURA (opcional)" />
                 <textarea
@@ -2452,26 +2676,117 @@ function ModalEmpresa({ empresa, onSave, onCancel, salvando, pushToast }) {
 }
 
 function MateriaisTabela({ emp, dados, perfil }) {
-  const rows = materialRows(dados);
+  const tipo = perfil?.tipo || perfilVisualEmpresa(emp, dados).tipo;
+  const rows = ordenarMateriaisPerfil(materialRows(dados), tipo);
   if (!rows.length) return null;
 
   const total = materialTotal(rows);
-  const tipo = perfil?.tipo || perfilVisualEmpresa(emp, dados).tipo;
   const cor = corDocumento(emp, perfil, "primaria");
   const corSec = corDocumento(emp, perfil, "secundaria");
+  const bodyFont = emp.fonteCorpo;
+  const bodySize = Number(emp.tamanhoCorpo) || 12;
+
+  if (tipo === "engenharia") {
+    return (
+      <div style={{ marginTop: 12, borderTop: `2px solid ${cor}`, borderBottom: `1px solid ${cor}55` }}>
+        <div style={{ display: "grid", gridTemplateColumns: "86px 1fr 118px", gap: 12, padding: "8px 0", fontFamily: "sans-serif", fontSize: 8, color: cor, fontWeight: 950, letterSpacing: 1.1, textTransform: "uppercase" }}>
+          <div>Referencia</div>
+          <div>Composicao tecnica</div>
+          <div style={{ textAlign: "right" }}>Valor final</div>
+        </div>
+        {rows.map((item, i) => (
+          <div key={`${item.descricao}-${i}`} style={{ display: "grid", gridTemplateColumns: "86px 1fr 118px", gap: 12, alignItems: "start", padding: "10px 0", borderTop: "1px solid #CBD5E1" }}>
+            <div style={{ color: "#0F172A", fontSize: 10, fontWeight: 900, fontFamily: "monospace" }}>TEC-{String(i + 1).padStart(2, "0")}</div>
+            <div style={{ fontFamily: bodyFont, fontSize: bodySize, color: "#000", lineHeight: 1.45 }}>
+              {item.descricao}
+              <div style={{ marginTop: 3, fontFamily: "sans-serif", fontSize: 8.5, color: "#475569", letterSpacing: 0.4 }}>{quantidadeUnidadeMaterial(item)}</div>
+            </div>
+            <div style={{ textAlign: "right", color: "#000", fontSize: 12, fontWeight: 950 }}>{brl(item.subtotal)}</div>
+          </div>
+        ))}
+        <div style={{ display: "flex", justifyContent: "flex-end", padding: "11px 0 0", fontWeight: 950, color: "#000" }}>
+          <span style={{ minWidth: 220, borderTop: `2px solid ${cor}`, paddingTop: 7, textAlign: "right" }}>TOTAL TECNICO {brl(total)}</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (tipo === "orlovic") {
+    return (
+      <div style={{ marginTop: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1.2fr 2fr 128px", gap: 10, fontFamily: "sans-serif", fontSize: 8, color: "#334155", fontWeight: 950, letterSpacing: 1.2, textTransform: "uppercase", borderBottom: "1px solid #94A3B8", paddingBottom: 7 }}>
+          <div>Frente</div>
+          <div>Solucao contemplada</div>
+          <div style={{ textAlign: "right" }}>Investimento</div>
+        </div>
+        {rows.map((item, i) => (
+          <div key={`${item.descricao}-${i}`} style={{ display: "grid", gridTemplateColumns: "1.2fr 2fr 128px", gap: 10, alignItems: "stretch", padding: "10px 0", borderBottom: "1px solid #E2E8F0" }}>
+            <div style={{ borderLeft: `4px solid ${cor}`, paddingLeft: 9, fontSize: 10, fontWeight: 900, color: "#111827", fontFamily: "sans-serif" }}>
+              Bloco {numeroRomanoCurto(i)}
+              <div style={{ marginTop: 4, color: "#64748B", fontSize: 8.5, fontWeight: 700 }}>{quantidadeUnidadeMaterial(item)}</div>
+            </div>
+            <div style={{ fontFamily: bodyFont, fontSize: bodySize, color: "#000", lineHeight: 1.45 }}>{item.descricao}</div>
+            <div style={{ textAlign: "right", fontWeight: 950, color: "#000", alignSelf: "center" }}>{brl(item.subtotal)}</div>
+          </div>
+        ))}
+        <div style={{ marginTop: 10, textAlign: "right", color: "#111827", fontWeight: 950 }}>INVESTIMENTO DOS BLOCOS: {brl(total)}</div>
+      </div>
+    );
+  }
+
+  if (tipo === "construcao") {
+    return (
+      <div style={{ marginTop: 12, display: "grid", gap: 9 }}>
+        {rows.map((item, i) => (
+          <div key={`${item.descricao}-${i}`} style={{ display: "grid", gridTemplateColumns: "88px 1fr 120px", gap: 12, alignItems: "center", padding: "11px 13px", background: i % 2 === 0 ? "#FFF7ED" : "#FFFFFF", borderTop: `1px solid ${cor}44`, borderBottom: "1px solid #FED7AA" }}>
+            <div style={{ fontFamily: "sans-serif", fontSize: 9, color: corSec, fontWeight: 950, letterSpacing: 1 }}>ETAPA {String(i + 1).padStart(2, "0")}</div>
+            <div style={{ fontFamily: bodyFont, fontSize: bodySize, color: "#000", lineHeight: 1.45 }}>
+              {item.descricao}
+              <div style={{ marginTop: 3, fontSize: 8.5, color: "#7C2D12" }}>{quantidadeUnidadeMaterial(item)}</div>
+            </div>
+            <div style={{ textAlign: "right", color: "#000", fontWeight: 950 }}>{brl(item.subtotal)}</div>
+          </div>
+        ))}
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <div style={{ minWidth: 220, padding: "9px 0", borderTop: `3px solid ${corSec}`, textAlign: "right", fontWeight: 950, color: "#000" }}>INVESTIMENTO CONSOLIDADO: {brl(total)}</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (tipo === "eventos") {
+    return (
+      <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
+        {rows.map((item, i) => (
+          <div key={`${item.descricao}-${i}`} style={{ display: "grid", gridTemplateColumns: "42px 1fr 130px", gap: 12, alignItems: "center", padding: "10px 12px", border: `1px solid ${cor}44`, background: i % 2 === 0 ? "#FFF7ED" : "#FFFFFF" }}>
+            <div style={{ width: 30, height: 30, borderRadius: "50%", background: cor, color: "#fff", display: "grid", placeItems: "center", fontWeight: 950, fontSize: 10 }}>{String(i + 1).padStart(2, "0")}</div>
+            <div style={{ fontFamily: bodyFont, fontSize: bodySize, color: "#000", lineHeight: 1.45 }}>
+              {item.descricao}
+              <div style={{ marginTop: 3, fontSize: 8.5, color: "#7F1D1D", fontFamily: "sans-serif" }}>Recurso: {quantidadeUnidadeMaterial(item)}</div>
+            </div>
+            <div style={{ textAlign: "right", fontWeight: 950, color: "#000" }}>{brl(item.subtotal)}</div>
+          </div>
+        ))}
+        <div style={{ textAlign: "right", color: corSec, fontWeight: 950 }}>VALOR DO ATENDIMENTO: {brl(total)}</div>
+      </div>
+    );
+  }
 
   if (tipo === "operacional") {
     return (
       <div style={{ marginTop: 10 }}>
         <div style={{ display: "grid", gap: 8 }}>
           {rows.map((item, i) => (
-            <div key={`${item.descricao}-${i}`} style={{ display: "grid", gridTemplateColumns: "1fr 72px 110px", gap: 10, alignItems: "center", padding: "10px 12px", borderLeft: `5px solid ${cor}`, background: i % 2 === 0 ? "#F8FAFC" : "#FFFFFF", borderBottom: "1px solid #E2E8F0" }}>
-              <div style={{ fontFamily: emp.fonteCorpo, fontSize: Number(emp.tamanhoCorpo) || 12, color: "#000", lineHeight: 1.35 }}>
-                <strong>{String(i + 1).padStart(2, "0")}</strong> - {item.descricao}
+            <div key={`${item.descricao}-${i}`} style={{ display: "grid", gridTemplateColumns: "94px 1fr 122px", gap: 10, alignItems: "center", padding: "10px 12px", borderLeft: `5px solid ${cor}`, background: i % 2 === 0 ? "#F8FAFC" : "#FFFFFF", borderBottom: "1px solid #E2E8F0" }}>
+              <div style={{ fontFamily: "sans-serif", fontSize: 8.5, color: cor, fontWeight: 950, letterSpacing: 1 }}>PACOTE {String(i + 1).padStart(2, "0")}</div>
+              <div style={{ fontFamily: bodyFont, fontSize: bodySize, color: "#000", lineHeight: 1.35 }}>
+                {item.descricao}
                 {item.observacao && <div style={{ fontSize: 9, color: "#475569", marginTop: 2 }}>{item.observacao}</div>}
               </div>
-              <div style={{ textAlign: "center", color: "#000", fontSize: 10, fontWeight: 800 }}>{item.quantidade || 1} {item.unidade || "un"}</div>
-              <div style={{ textAlign: "right", color: "#000", fontSize: 12, fontWeight: 900 }}>{brl(item.subtotal)}</div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ color: "#475569", fontSize: 8.5, fontWeight: 850 }}>{quantidadeUnidadeMaterial(item)}</div>
+                <div style={{ color: "#000", fontSize: 12, fontWeight: 950 }}>{brl(item.subtotal)}</div>
+              </div>
             </div>
           ))}
         </div>
@@ -2488,25 +2803,24 @@ function MateriaisTabela({ emp, dados, perfil }) {
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 620, borderTop: "2px solid #111827", borderBottom: "1px solid #CBD5E1" }}>
           <thead>
             <tr>
-              {["DESCRICAO", "QTD", "UN", "VALOR UNIT.", "VALOR FINAL"].map((h, i) => (
-                <th key={h} style={{ padding: "8px 8px", color: "#111827", textAlign: i === 0 ? "left" : "right", fontFamily: "sans-serif", fontSize: 8, letterSpacing: 1.1, fontWeight: 900, borderBottom: "1px solid #CBD5E1" }}>{h}</th>
+              {["REGISTRO", "ATIVIDADE ANALISADA", "BASE", "VALOR FINAL"].map((h, i) => (
+                <th key={h} style={{ padding: "8px 8px", color: "#111827", textAlign: i === 1 ? "left" : "right", fontFamily: "sans-serif", fontSize: 8, letterSpacing: 1.1, fontWeight: 900, borderBottom: "1px solid #CBD5E1" }}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {rows.map((item, i) => (
               <tr key={`${item.descricao}-${i}`} style={{ borderBottom: "1px solid #E2E8F0" }}>
-                <td style={{ padding: "9px 8px", fontFamily: emp.fonteCorpo, fontSize: Number(emp.tamanhoCorpo) || 12, color: "#000", minWidth: 220 }}>{item.descricao}</td>
-                <td style={{ padding: "9px 8px", textAlign: "right", color: "#000", fontSize: 10 }}>{item.quantidade || 1}</td>
-                <td style={{ padding: "9px 8px", textAlign: "right", color: "#000", fontSize: 10 }}>{item.unidade || "un"}</td>
-                <td style={{ padding: "9px 8px", textAlign: "right", color: "#000", fontSize: 10 }}>{brl(item.valorUnitario)}</td>
+                <td style={{ padding: "9px 8px", textAlign: "right", color: "#000", fontSize: 10, fontWeight: 900 }}>{String(i + 1).padStart(2, "0")}</td>
+                <td style={{ padding: "9px 8px", fontFamily: bodyFont, fontSize: bodySize, color: "#000", minWidth: 260 }}>{item.descricao}</td>
+                <td style={{ padding: "9px 8px", textAlign: "right", color: "#000", fontSize: 10 }}>{quantidadeUnidadeMaterial(item)}</td>
                 <td style={{ padding: "9px 8px", textAlign: "right", color: "#000", fontSize: 11, fontWeight: 850 }}>{brl(item.subtotal)}</td>
               </tr>
             ))}
           </tbody>
           <tfoot>
             <tr>
-              <td colSpan={4} style={{ padding: "10px 8px", textAlign: "right", color: "#000", fontSize: 10, fontWeight: 850 }}>Valor consolidado dos itens</td>
+              <td colSpan={3} style={{ padding: "10px 8px", textAlign: "right", color: "#000", fontSize: 10, fontWeight: 850 }}>Valor consolidado dos itens</td>
               <td style={{ padding: "10px 8px", textAlign: "right", color: "#000", fontSize: 12, fontWeight: 950 }}>{brl(total)}</td>
             </tr>
           </tfoot>
@@ -2520,7 +2834,7 @@ function MateriaisTabela({ emp, dados, perfil }) {
       <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 620 }}>
         <thead>
           <tr style={{ background: cor }}>
-            {["ITEM", "QTD", "UN", "VALOR UNIT.", "VALOR FINAL"].map((h, i) => (
+            {["ITEM", "QTD / UN", "VALOR FINAL"].map((h, i) => (
               <th key={h} style={{ padding: "8px 10px", color: "#fff", textAlign: i === 0 ? "left" : "right", fontFamily: "sans-serif", fontSize: 8, letterSpacing: 1.2, fontWeight: 900 }}>{h}</th>
             ))}
           </tr>
@@ -2532,19 +2846,16 @@ function MateriaisTabela({ emp, dados, perfil }) {
                 {item.descricao}
                 {item.observacao && <div style={{ fontSize: 9, color: "#475569", marginTop: 2 }}>{item.observacao}</div>}
               </td>
-              <td style={{ padding: "9px 10px", textAlign: "right", color: "#000", fontSize: 11 }}>{item.quantidade || 1}</td>
-              <td style={{ padding: "9px 10px", textAlign: "right", color: "#000", fontSize: 11 }}>{item.unidade || "un"}</td>
-              <td style={{ padding: "9px 10px", textAlign: "right", color: "#000", fontSize: 11 }}>{brl(item.valorUnitario)}</td>
+              <td style={{ padding: "9px 10px", textAlign: "right", color: "#000", fontSize: 11 }}>{quantidadeUnidadeMaterial(item)}</td>
               <td style={{ padding: "9px 10px", textAlign: "right", color: "#000", fontSize: 11, fontWeight: 850 }}>{brl(item.subtotal)}</td>
             </tr>
           ))}
         </tbody>
         <tfoot>
           <tr>
-            <td colSpan={3} style={{ padding: "10px", textAlign: "right", color: "#000", fontSize: 10, fontWeight: 850 }}>
+            <td colSpan={2} style={{ padding: "10px", textAlign: "right", color: "#000", fontSize: 10, fontWeight: 850 }}>
               Total dos itens
             </td>
-            <td style={{ padding: "10px", textAlign: "right", color: "#000", fontSize: 11, fontWeight: 900 }}>TOTAL</td>
             <td style={{ padding: "10px", textAlign: "right", color: "#000", fontSize: 12, fontWeight: 950 }}>{brl(total)}</td>
           </tr>
         </tfoot>
@@ -2584,20 +2895,101 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
 
   const renderItens = () => {
     if (!dados.itensIA?.length) return null;
+
+    const itens = dados.itensIA.filter(Boolean);
+    const blocoBase = {
+      fontFamily: emp.fonteCorpo,
+      fontSize: Number(emp.tamanhoCorpo) || 12,
+      color: "#000000",
+      lineHeight: 1.55,
+    };
+
+    if (perfil.tipo === "construcao") {
+      return (
+        <div key="itens" style={{ marginBottom: 18 }}>
+          <span style={secLbl}>{getSectionLabel(dados, "itens")}</span>
+          <div style={{ display: "grid", gap: 8 }}>
+            {itens.map((it, i) => (
+              <div key={i} style={{ display: "grid", gridTemplateColumns: "78px 1fr", gap: 10, padding: "9px 11px", background: i % 2 === 0 ? "#FFF7ED" : "#FFFFFF", borderTop: `1px solid ${cor}44` }}>
+                <div style={{ fontFamily: "sans-serif", fontSize: 8.5, color: corSec, fontWeight: 950, letterSpacing: 1.1 }}>FASE {String(i + 1).padStart(2, "0")}</div>
+                <div style={blocoBase}>{it}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    if (perfil.tipo === "orlovic") {
+      return (
+        <div key="itens" style={{ marginBottom: 18 }}>
+          <span style={secLbl}>{getSectionLabel(dados, "itens")}</span>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9 }}>
+            {itens.map((it, i) => (
+              <div key={i} style={{ padding: "10px 12px", border: "1px solid #CBD5E1", borderLeft: `4px solid ${cor}`, background: "#F8FAFC" }}>
+                <div style={{ fontFamily: "sans-serif", fontSize: 8, color: "#64748B", fontWeight: 950, letterSpacing: 1.2, marginBottom: 5 }}>BLOCO {numeroRomanoCurto(i)}</div>
+                <div style={blocoBase}>{it}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    if (perfil.tipo === "engenharia") {
+      return (
+        <div key="itens" style={{ marginBottom: 18, borderTop: `2px solid ${cor}`, paddingTop: 8 }}>
+          <span style={secLbl}>{getSectionLabel(dados, "itens")}</span>
+          {itens.map((it, i) => (
+            <div key={i} style={{ display: "grid", gridTemplateColumns: "66px 1fr", gap: 10, padding: "8px 0", borderBottom: "1px solid #CBD5E1" }}>
+              <div style={{ fontFamily: "monospace", fontSize: 10, fontWeight: 900, color: cor }}>ENG-{String(i + 1).padStart(2, "0")}</div>
+              <div style={blocoBase}>{it}</div>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    if (perfil.tipo === "consultoria") {
+      return (
+        <div key="itens" style={{ marginBottom: 18 }}>
+          <span style={secLbl}>{getSectionLabel(dados, "itens")}</span>
+          <ol style={{ margin: 0, paddingLeft: 20, borderTop: "1px solid #111827" }}>
+            {itens.map((it, i) => (
+              <li key={i} style={{ ...blocoBase, padding: "8px 0", borderBottom: "1px solid #E2E8F0" }}>{it}</li>
+            ))}
+          </ol>
+        </div>
+      );
+    }
+
+    if (perfil.tipo === "eventos") {
+      return (
+        <div key="itens" style={{ marginBottom: 18 }}>
+          <span style={secLbl}>{getSectionLabel(dados, "itens")}</span>
+          <div style={{ display: "grid", gap: 7 }}>
+            {itens.map((it, i) => (
+              <div key={i} style={{ display: "grid", gridTemplateColumns: "38px 1fr", gap: 9, alignItems: "center", padding: "9px 10px", border: `1px solid ${cor}44`, background: i % 2 === 0 ? "#FFF7ED" : "#FFFFFF" }}>
+                <div style={{ width: 27, height: 27, borderRadius: "50%", background: cor, color: "#fff", display: "grid", placeItems: "center", fontSize: 9, fontWeight: 950 }}>{String(i + 1).padStart(2, "0")}</div>
+                <div style={blocoBase}>{it}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div key="itens" style={{ marginBottom: 18 }}>
         <span style={secLbl}>{getSectionLabel(dados, "itens")}</span>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead><tr style={{ background: cor }}><th style={{ padding: "9px 13px", color: "#fff", textAlign: "left", fontFamily: "sans-serif", fontSize: 8, letterSpacing: 1.5, fontWeight: 900 }}>DESCRICAO DA ETAPA / ITEM</th><th style={{ padding: "9px 13px", color: "#fff", textAlign: "center", fontFamily: "sans-serif", fontSize: 8, letterSpacing: 1.5, fontWeight: 900, width: 86 }}>STATUS</th></tr></thead>
-          <tbody>
-            {dados.itensIA.map((it, i) => (
-              <tr key={i} style={{ background: i % 2 === 0 ? `${cor}0a` : emp.corFundo || "#fff", borderBottom: `1px solid ${cor}18` }}>
-                <td style={{ padding: "10px 13px", fontFamily: emp.fonteCorpo, fontSize: Number(emp.tamanhoCorpo) || 12, color: "#000000" }}>{it}</td>
-                <td style={{ padding: "10px 13px", textAlign: "center" }}><span style={{ padding: "3px 9px", borderRadius: 12, background: `${cor}18`, color: corSec, fontSize: 8.5, fontWeight: 800 }}>Incluido</span></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div style={{ display: "grid", gap: 8 }}>
+          {itens.map((it, i) => (
+            <div key={i} style={{ display: "grid", gridTemplateColumns: "92px 1fr", gap: 10, padding: "9px 11px", borderLeft: `5px solid ${cor}`, background: i % 2 === 0 ? "#F8FAFC" : "#FFFFFF" }}>
+              <div style={{ fontFamily: "sans-serif", fontSize: 8.5, color: cor, fontWeight: 950, letterSpacing: 1 }}>PACOTE {String(i + 1).padStart(2, "0")}</div>
+              <div style={blocoBase}>{it}</div>
+            </div>
+          ))}
+        </div>
       </div>
     );
   };
@@ -2706,6 +3098,40 @@ function OrcamentoDoc({ emp, dados, editando, onChange }) {
     </div>
   );
 }
+
+function NaraQualityPanel({ emp, dados, todosOrcamentos = {} }) {
+  const revisado = normalizarDocumentoPublico(dados, emp);
+  const validacao = validarDocumentoNara(emp, revisado, todosOrcamentos);
+  const cor = validacao.status === "critico" ? BRAND.danger : validacao.status === "aviso" ? BRAND.warn : BRAND.green;
+  const titulo = validacao.status === "critico" ? "Revisao obrigatoria antes do PDF" : validacao.status === "aviso" ? "Aprovado com pontos de atencao" : "Pronto para PDF";
+  const itens = validacao.problemas.length ? validacao.problemas : validacao.avisos.length ? validacao.avisos : validacao.checks;
+
+  return (
+    <div style={{ border: `1px solid ${cor}55`, background: `${cor}10`, borderRadius: 14, padding: "12px 14px", marginBottom: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+        <div>
+          <div style={{ color: cor, fontSize: 10, letterSpacing: 2, fontWeight: 950 }}>CHECKLIST NARA</div>
+          <div style={{ color: BRAND.text, fontWeight: 950, marginTop: 4 }}>{titulo}</div>
+          <div style={{ color: BRAND.muted, fontSize: 11, marginTop: 4 }}>
+            Modelo: {validacao.modelo.nome} | Tabela: {validacao.modelo.tabela} | Visual: {validacao.modelo.visual}
+          </div>
+        </div>
+        <div style={{ textAlign: "right" }}>
+          <div style={{ color: cor, fontSize: 24, fontWeight: 950 }}>{validacao.score}</div>
+          <div style={{ color: BRAND.dim, fontSize: 10 }}>qualidade</div>
+        </div>
+      </div>
+      <div style={{ display: "grid", gap: 6, marginTop: 10 }}>
+        {itens.slice(0, 5).map((item, i) => (
+          <div key={`${item}-${i}`} style={{ color: validacao.problemas.length ? BRAND.danger : validacao.avisos.length ? "#FBBF24" : BRAND.muted, fontSize: 11, lineHeight: 1.45 }}>
+            {validacao.problemas.length ? "Bloqueio: " : validacao.avisos.length ? "Atencao: " : "OK: "}{item}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function textoCurto(valor, limite = 900) {
   return clean(valor || "").slice(0, limite);
 }
@@ -3021,8 +3447,9 @@ function ChatIAPanel({ empresas = [], crm = [], clientes = [], pushToast, usuari
 
 
 function DashboardPanel({ crm, empresas, meta, usuarioAtual, setView }) {
-  const isAdmin = usuarioAtual?.tipo === "admin";
-  const lista = isAdmin ? crm : crm.filter((o) => o.userId === usuarioAtual?.id);
+  const canSupervise = usuarioPodeSupervisionar(usuarioAtual);
+  const canMutate = usuarioPodeEditarOperacional(usuarioAtual);
+  const lista = canSupervise ? crm : crm.filter((o) => o.userId === usuarioAtual?.id);
   const abertos = lista.filter((o) => statusFunilOrcamento(o) === "Aberto").length;
   const andamento = lista.filter((o) => statusFunilOrcamento(o) === "Andamento").length;
   const finalizados = lista.filter((o) => statusFunilOrcamento(o) === "Finalizado").length;
@@ -3052,7 +3479,7 @@ function DashboardPanel({ crm, empresas, meta, usuarioAtual, setView }) {
           <h1 className="of-title-gradient" style={{ fontSize: 34, lineHeight: 1.1, margin: "8px 0 6px", fontWeight: 950 }}>Dashboard Inteligente</h1>
           <div style={{ fontSize: 13, color: BRAND.muted }}>Controle comercial, orçamentos, CRM e follow-up com IA integrada.</div>
         </div>
-        <button className="of-neon-btn" onClick={() => setView("orcamento")} style={{ padding: "12px 18px", borderRadius: 14, cursor: "pointer" }}>✨ Novo orçamento</button>
+        <button className="of-neon-btn" disabled={!canMutate} onClick={() => canMutate && setView("orcamento")} style={{ padding: "12px 18px", borderRadius: 14, cursor: canMutate ? "pointer" : "not-allowed", opacity: canMutate ? 1 : 0.55 }}>✨ Novo orçamento</button>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4,minmax(150px,1fr))", gap: 14, marginBottom: 18 }}>
@@ -3248,8 +3675,8 @@ function CRMPanel({ crm, setCrm, empresas, pushToast, usuarioAtual }) {
   const [empresaFiltro, setEmpresaFiltro] = useState("Todas");
   const [whats, setWhats] = useState("");
 
-  const isAdmin = usuarioAtual?.tipo === "admin";
-  const visiveisPorUsuario = isAdmin ? crm : crm.filter((o) => o.userId === usuarioAtual?.id);
+  const canSupervise = usuarioPodeSupervisionar(usuarioAtual);
+  const visiveisPorUsuario = canSupervise ? crm : crm.filter((o) => o.userId === usuarioAtual?.id);
   const lista = visiveisPorUsuario.filter((o) => {
     const alvo = `${o.cliente || ""} ${o.empresaNome || ""} ${o.numero || ""} ${o.status || ""} ${normalizarStatusOrcamento(o)}`.toLowerCase();
     const okBusca = !busca || alvo.includes(busca.toLowerCase());
@@ -3392,7 +3819,7 @@ function CRMPanel({ crm, setCrm, empresas, pushToast, usuarioAtual }) {
 
 // Editor manual de preço usado na tabela de Gestão. Aceita formato brasileiro
 // (3.500 / 3.500,00 / 3500) e salva o valor numérico correto.
-function ValorEditavel({ valor, onSalvar }) {
+function ValorEditavel({ valor, onSalvar, disabled = false }) {
   const [edit, setEdit] = useState(valor === "" || valor === null || valor === undefined ? "" : String(valor));
 
   useEffect(() => {
@@ -3400,6 +3827,7 @@ function ValorEditavel({ valor, onSalvar }) {
   }, [valor]);
 
   const commit = () => {
+    if (disabled) return;
     const n = parseValorBR(edit);
     onSalvar(n);
     setEdit(n ? String(n) : "");
@@ -3412,6 +3840,7 @@ function ValorEditavel({ valor, onSalvar }) {
         onChange={(e) => setEdit(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+        disabled={disabled}
         placeholder="0,00"
         title="Digite o valor (ex: 3.500 ou 3500,00) e pressione Enter"
         style={{
@@ -3425,6 +3854,8 @@ function ValorEditavel({ valor, onSalvar }) {
           fontWeight: 850,
           outline: "none",
           boxSizing: "border-box",
+          opacity: disabled ? 0.7 : 1,
+          cursor: disabled ? "not-allowed" : "text",
         }}
       />
       <div style={{ fontSize: 10, color: BRAND.green, marginTop: 3, fontWeight: 800 }}>
@@ -3567,9 +3998,12 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
   const [auditoriaAcoesAberta, setAuditoriaAcoesAberta] = useState(false);
   const [clienteLinkDrafts, setClienteLinkDrafts] = useState({});
 
-  const isAdmin = usuarioAtual?.tipo === "admin";
-  const base = isAdmin ? crm : crm.filter((o) => o.userId === usuarioAtual?.id);
-  const clientesVisiveis = isAdmin ? clientes : clientes.filter((item) => item.userId === usuarioAtual?.id);
+  const isAdmin = usuarioEhAdmin(usuarioAtual);
+  const isGestor = usuarioEhGestor(usuarioAtual);
+  const canSupervise = usuarioPodeSupervisionar(usuarioAtual);
+  const canMutate = usuarioPodeEditarOperacional(usuarioAtual);
+  const base = canSupervise ? crm : crm.filter((o) => o.userId === usuarioAtual?.id);
+  const clientesVisiveis = canSupervise ? clientes : clientes.filter((item) => item.userId === usuarioAtual?.id);
 
   useEffect(() => {
     let ativo = true;
@@ -3736,10 +4170,10 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
     .sort((a, b) => b.prioridade.score - a.prioridade.score)
     .slice(0, 6);
   const lixeiraVisivel = (Array.isArray(lixeiraOrcamentos) ? lixeiraOrcamentos : [])
-    .filter((item) => isAdmin || item.userId === usuarioAtual?.id || item.removidoPorId === usuarioAtual?.id)
+    .filter((item) => canSupervise || item.userId === usuarioAtual?.id || item.removidoPorId === usuarioAtual?.id)
     .slice(0, 80);
   const auditoriaVisivel = (Array.isArray(auditoriaAcoes) ? auditoriaAcoes : [])
-    .filter((item) => isAdmin || item.usuarioId === usuarioAtual?.id)
+    .filter((item) => canSupervise || item.usuarioId === usuarioAtual?.id)
     .slice(0, 40);
   const pipelineComercial = [
     { id: "total", label: "Total", qtd: total, valor: valorTotal, cor: BRAND.blue },
@@ -3749,20 +4183,59 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
     { id: "finalizado", label: "Finalizado", qtd: finalizados, valor: base.filter((o) => statusFunilOrcamento(o) === "Finalizado").reduce((s, o) => s + parseValorBR(o.valorGlobal ?? o.valor), 0), cor: BRAND.green },
   ];
 
-  const salvarCRM = (novaLista) => {
-    setCrm(novaLista);
-    store.set(KEY_CRM, novaLista);
+  const bloquearGestor = (acao = "alterar dados") => {
+    if (!isGestor) return false;
+    pushToast(`Gestor em modo supervisao: pode visualizar e auditar, mas nao pode ${acao}.`, "aviso");
+    registrarAuditoriaAcao("GESTOR_TENTOU_ALTERAR", [], { detalhe: acao, modo: "supervisao_gestor" });
+    return true;
   };
 
-  const salvarLixeira = (novaLista) => {
-    setLixeiraOrcamentos(novaLista);
-    store.set(KEY_CRM_TRASH, novaLista);
+  const ownerItemId = (item = {}) => item.ownerUserId || item.userId || item.removidoPorId || usuarioAtual?.id || "admin";
+
+  const salvarListaEstado = (key, novaLista, setLocal, listaAnterior = []) => {
+    if (bloquearGestor("editar registros operacionais")) return false;
+
+    const listaFinal = Array.isArray(novaLista) ? novaLista : [];
+    const listaAntes = Array.isArray(listaAnterior) ? listaAnterior : [];
+    setLocal?.(listaFinal);
+
+    if (isAdmin) {
+      const owners = new Set([...listaFinal, ...listaAntes].map(ownerItemId).filter(Boolean));
+      const tarefas = [];
+
+      for (const ownerId of owners) {
+        const itensDoOwner = listaFinal
+          .filter((item) => ownerItemId(item) === ownerId)
+          .map(limparMetadadosSupervisao);
+
+        tarefas.push(
+          ownerId === usuarioAtual?.id
+            ? store.set(key, itensDoOwner)
+            : store.setManyForUser(ownerId, { [key]: itensDoOwner })
+        );
+      }
+
+      Promise.all(tarefas).then((resultados) => {
+        if (!resultados.every(Boolean)) {
+          pushToast("Alguns dados nao foram salvos no usuario de destino.", "erro");
+        }
+      });
+      return true;
+    }
+
+    store.set(key, listaFinal.map(limparMetadadosSupervisao)).then((ok) => {
+      if (!ok) pushToast("Nao foi possivel salvar os dados na nuvem.", "erro");
+    });
+    return true;
   };
 
-  const salvarClientesCRM = (novaLista) => {
-    if (typeof setClientes === "function") setClientes(novaLista);
-    store.set(KEY_CLIENTES, novaLista);
-  };
+  const salvarCRM = (novaLista) => salvarListaEstado(KEY_CRM, novaLista, setCrm, crm);
+
+  const salvarLixeira = (novaLista) => salvarListaEstado(KEY_CRM_TRASH, novaLista, setLixeiraOrcamentos, lixeiraOrcamentos);
+
+  const salvarClientesCRM = (novaLista) => salvarListaEstado(KEY_CLIENTES, novaLista, (valor) => {
+    if (typeof setClientes === "function") setClientes(valor);
+  }, clientes);
 
   const clienteVinculadoOrcamento = (item = {}) => {
     const id = item.clienteVinculadoId || item.clienteCRMId || "";
@@ -3805,6 +4278,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
   });
 
   const vincularOrcamentoAoCliente = (orc = {}, clienteId = "") => {
+    if (bloquearGestor("vincular orcamento ao cliente")) return;
     const clienteItem = clientes.find((item) => item.id === clienteId);
     if (!orc?.id || !clienteItem) {
       pushToast("Selecione um cliente valido para vincular.", "erro");
@@ -3861,6 +4335,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
   };
 
   const desvincularOrcamentoCliente = (orc = {}) => {
+    if (bloquearGestor("desvincular orcamento do cliente")) return;
     const clienteId = orc.clienteVinculadoId || orc.clienteCRMId;
     if (!orc?.id || !clienteId) return;
     const clienteItem = clientes.find((item) => item.id === clienteId);
@@ -3907,6 +4382,26 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
     store.set(KEY_AUDITORIA, novaAuditoria);
   };
 
+  const abrirOrcamentoGestao = (item) => {
+    if (isGestor) {
+      registrarAuditoriaAcao("GESTOR_VISUALIZOU_ORCAMENTO", [item], {
+        modo: "supervisao_gestor",
+        ownerUserId: ownerItemId(item),
+      });
+    }
+    (abrirOrcamentoSalvo || baixarOrcamento)?.(item);
+  };
+
+  const baixarOrcamentoGestao = (item) => {
+    if (isGestor) {
+      registrarAuditoriaAcao("GESTOR_BAIXOU_ORCAMENTO", [item], {
+        modo: "supervisao_gestor",
+        ownerUserId: ownerItemId(item),
+      });
+    }
+    (baixarOrcamento || abrirOrcamentoSalvo)?.(item);
+  };
+
   const idsSelecionados = new Set(orcamentosSelecionados);
   const idsPagina = paginaItens.map((item) => item.id).filter(Boolean);
   const todosPaginaSelecionados = idsPagina.length > 0 && idsPagina.every((id) => idsSelecionados.has(id));
@@ -3936,6 +4431,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
   };
 
   const excluirOrcamentos = (ids = []) => {
+    if (bloquearGestor("apagar orcamentos")) return;
     const permitidos = new Set(base.map((item) => item.id));
     const idsParaExcluir = [...new Set(ids)].filter((id) => permitidos.has(id));
 
@@ -3972,6 +4468,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
   };
 
   const restaurarOrcamentos = (ids = []) => {
+    if (bloquearGestor("restaurar orcamentos")) return;
     const idsSet = new Set(ids);
     const restaurar = lixeiraOrcamentos.filter((item) => idsSet.has(item.id));
     if (!restaurar.length) {
@@ -3991,6 +4488,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
   };
 
   const excluirDefinitivoLixeira = (ids = []) => {
+    if (bloquearGestor("excluir definitivamente orcamentos")) return;
     const idsSet = new Set(ids);
     const remover = lixeiraOrcamentos.filter((item) => idsSet.has(item.id));
     if (!remover.length) {
@@ -4005,6 +4503,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
   };
 
   const updateItem = (id, campo, valor) => {
+    if (bloquearGestor("editar orcamento")) return;
     salvarCRM(
       crm.map((o) =>
         o.id === id
@@ -4019,6 +4518,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
   };
 
   const atualizarOrcamento = (id, mutator) => {
+    if (bloquearGestor("editar historico de orcamento")) return;
     const atualizada = crm.map((item) => {
       if (item.id !== id) return item;
       return { ...mutator(item), atualizadoEm: new Date().toISOString() };
@@ -4027,6 +4527,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
   };
 
   const registrarConversa = (item, dados = {}) => {
+    if (bloquearGestor("registrar conversa")) return null;
     const texto = clean(dados.mensagem || "", 6000);
 
     if (!texto) {
@@ -4070,6 +4571,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
   };
 
   const registrarContato = (item, tipo = "manual", conteudo = "") => {
+    if (bloquearGestor("registrar contato")) return null;
     const texto = clean(conteudo || item.lembreteIA || item.lembrete || `Contato registrado para acompanhar o orçamento ${item.numero || ""}.`);
     const criadoEm = new Date().toISOString();
     const contato = {
@@ -4113,17 +4615,28 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
   };
 
   const abrirWhatsItem = (item) => {
+    if (isGestor) {
+      registrarAuditoriaAcao("GESTOR_TENTOU_ABRIR_WHATSAPP", [item], { modo: "supervisao_gestor" });
+      pushToast("Gestor em modo supervisao nao envia follow-up externo pela plataforma.", "aviso");
+      return;
+    }
     const texto = item.lembreteIA || item.lembrete || `Olá, tudo bem? Gostaria de acompanhar o orçamento ${item.numero || ""}.`;
     window.open(`https://wa.me/?text=${encodeURIComponent(texto)}`, "_blank");
   };
 
   const abrirEmailItem = (item) => {
+    if (isGestor) {
+      registrarAuditoriaAcao("GESTOR_TENTOU_ABRIR_EMAIL", [item], { modo: "supervisao_gestor" });
+      pushToast("Gestor em modo supervisao nao envia e-mail externo pela plataforma.", "aviso");
+      return;
+    }
     const texto = item.lembreteIA || item.lembrete || `Olá,\n\nGostaria de acompanhar o orçamento ${item.numero || ""}.\n\nFico à disposição.`;
     const assunto = `Acompanhamento do orçamento ${item.numero || ""}`;
     window.location.href = `mailto:?subject=${encodeURIComponent(assunto)}&body=${encodeURIComponent(texto)}`;
   };
 
   const gerarMensagemIA = async (item, tipo = "cobranca") => {
+    if (bloquearGestor("gerar mensagens de follow-up")) return;
     if (gerandoContato) return;
     setGerandoContato(`${item.id}_${tipo}`);
     const emp = empresas.find((e) => e.id === item.empresaId);
@@ -4169,6 +4682,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
   };
 
   const gerarInsightConversa = async (item, tipo = "resumo") => {
+    if (bloquearGestor("salvar analise de conversa")) return;
     if (gerandoContato) return;
 
     const conversas = conversasDoOrcamento(item);
@@ -4257,6 +4771,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
   };
 
   const criarLembretesIA = () => {
+    if (bloquearGestor("criar lembretes nos orcamentos")) return;
     const pendentes = crm.filter((o) => !isFinalizadoOrcamento(o));
 
     if (!pendentes.length) {
@@ -4421,6 +4936,12 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
       return;
     }
 
+    if (isGestor) {
+      registrarAuditoriaAcao("GESTOR_GEROU_RELATORIO_PENDENTES", pendentesHoje, {
+        modo: "supervisao_gestor",
+      });
+    }
+
     const abriuWhats = abrirWhats(pendentesHoje);
     if (!abriuWhats) return;
 
@@ -4446,13 +4967,13 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
         </div>
 
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button className="of-neon-btn" onClick={() => setView("orcamento")} style={{ padding: "12px 18px", borderRadius: 14, cursor: "pointer" }}>
+          <button className="of-neon-btn" onClick={() => canMutate ? setView("orcamento") : bloquearGestor("criar orcamento")} style={{ padding: "12px 18px", borderRadius: 14, cursor: canMutate ? "pointer" : "not-allowed", opacity: canMutate ? 1 : 0.55 }}>
             ✨ Novo orçamento
           </button>
-          <button onClick={() => onAnexar?.()} style={{ padding: "12px 18px", borderRadius: 14, border: `1px solid ${BRAND.green2}66`, background: `${BRAND.green2}18`, color: BRAND.green, fontWeight: 900, cursor: "pointer" }}>
+          <button onClick={() => canMutate ? onAnexar?.() : bloquearGestor("anexar orcamento")} style={{ padding: "12px 18px", borderRadius: 14, border: `1px solid ${BRAND.green2}66`, background: `${BRAND.green2}18`, color: BRAND.green, fontWeight: 900, cursor: canMutate ? "pointer" : "not-allowed", opacity: canMutate ? 1 : 0.55 }}>
             📎 Anexar orçamento
           </button>
-          <button onClick={criarLembretesIA} style={{ padding: "12px 18px", borderRadius: 14, border: `1px solid ${BRAND.blue2}66`, background: `${BRAND.blue2}18`, color: "#93C5FD", fontWeight: 900, cursor: "pointer" }}>
+          <button onClick={criarLembretesIA} disabled={!canMutate} style={{ padding: "12px 18px", borderRadius: 14, border: `1px solid ${BRAND.blue2}66`, background: `${BRAND.blue2}18`, color: "#93C5FD", fontWeight: 900, cursor: canMutate ? "pointer" : "not-allowed", opacity: canMutate ? 1 : 0.55 }}>
             🤖 IA criar lembretes
           </button>
           <button onClick={notificarPendentes} style={{ padding: "12px 18px", borderRadius: 14, border: `1px solid ${BRAND.warn}66`, background: `${BRAND.warn}18`, color: "#FBBF24", fontWeight: 900, cursor: "pointer" }}>
@@ -4610,9 +5131,9 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
                         <div style={{ color: BRAND.muted, fontSize: 10, lineHeight: 1.4 }}>{prioridade.acao}</div>
                         <button
                           type="button"
-                          disabled={gerandoContato === chaveCarga}
+                          disabled={!canMutate || gerandoContato === chaveCarga}
                           onClick={() => gerarMensagemIA(item, "cobranca")}
-                          style={{ ...btnMiniGestao, color: "#93C5FD", borderColor: `${BRAND.blue2}66`, background: `${BRAND.blue2}12`, opacity: gerandoContato === chaveCarga ? 0.55 : 1 }}
+                          style={{ ...btnMiniGestao, color: "#93C5FD", borderColor: `${BRAND.blue2}66`, background: `${BRAND.blue2}12`, opacity: !canMutate || gerandoContato === chaveCarga ? 0.55 : 1, cursor: !canMutate || gerandoContato === chaveCarga ? "not-allowed" : "pointer" }}
                         >
                           {gerandoContato === chaveCarga ? "Gerando" : "IA cobrar"}
                         </button>
@@ -4689,13 +5210,13 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
               : "Marque os orcamentos na primeira coluna para apagar em bloco."}
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button type="button" onClick={alternarSelecaoPagina} disabled={!idsPagina.length} style={{ ...btnMiniGestao, opacity: idsPagina.length ? 1 : 0.45 }}>
+            <button type="button" onClick={alternarSelecaoPagina} disabled={!canMutate || !idsPagina.length} style={{ ...btnMiniGestao, opacity: canMutate && idsPagina.length ? 1 : 0.45, cursor: canMutate && idsPagina.length ? "pointer" : "not-allowed" }}>
               {todosPaginaSelecionados ? "Desmarcar pagina" : "Selecionar pagina"}
             </button>
-            <button type="button" onClick={limparSelecaoOrcamentos} disabled={!orcamentosSelecionados.length} style={{ ...btnMiniGestao, opacity: orcamentosSelecionados.length ? 1 : 0.45 }}>
+            <button type="button" onClick={limparSelecaoOrcamentos} disabled={!canMutate || !orcamentosSelecionados.length} style={{ ...btnMiniGestao, opacity: canMutate && orcamentosSelecionados.length ? 1 : 0.45, cursor: canMutate && orcamentosSelecionados.length ? "pointer" : "not-allowed" }}>
               Limpar selecao
             </button>
-            <button type="button" onClick={() => excluirOrcamentos(orcamentosSelecionados)} disabled={!orcamentosSelecionados.length} style={{ ...btnMiniGestao, color: BRAND.danger, borderColor: `${BRAND.danger}66`, background: `${BRAND.danger}12`, opacity: orcamentosSelecionados.length ? 1 : 0.45 }}>
+            <button type="button" onClick={() => excluirOrcamentos(orcamentosSelecionados)} disabled={!canMutate || !orcamentosSelecionados.length} style={{ ...btnMiniGestao, color: BRAND.danger, borderColor: `${BRAND.danger}66`, background: `${BRAND.danger}12`, opacity: canMutate && orcamentosSelecionados.length ? 1 : 0.45, cursor: canMutate && orcamentosSelecionados.length ? "pointer" : "not-allowed" }}>
               <Trash2 size={12} /> Mover p/ lixeira
             </button>
             <button type="button" onClick={() => setLixeiraAberta((v) => !v)} style={{ ...btnMiniGestao, color: lixeiraVisivel.length ? BRAND.warn : BRAND.muted, borderColor: lixeiraVisivel.length ? `${BRAND.warn}66` : BRAND.border2, background: lixeiraVisivel.length ? `${BRAND.warn}12` : "transparent" }}>
@@ -4716,10 +5237,10 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
               </div>
               {!!lixeiraVisivel.length && (
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  <button type="button" onClick={() => restaurarOrcamentos(lixeiraVisivel.map((item) => item.id))} style={{ ...btnMiniGestao, color: BRAND.green, borderColor: `${BRAND.green2}66`, background: `${BRAND.green2}12` }}>
+                  <button type="button" disabled={!canMutate} onClick={() => restaurarOrcamentos(lixeiraVisivel.map((item) => item.id))} style={{ ...btnMiniGestao, color: BRAND.green, borderColor: `${BRAND.green2}66`, background: `${BRAND.green2}12`, opacity: canMutate ? 1 : 0.45, cursor: canMutate ? "pointer" : "not-allowed" }}>
                     Restaurar todos
                   </button>
-                  <button type="button" onClick={() => excluirDefinitivoLixeira(lixeiraVisivel.map((item) => item.id))} style={{ ...btnMiniGestao, color: BRAND.danger, borderColor: `${BRAND.danger}66`, background: `${BRAND.danger}10` }}>
+                  <button type="button" disabled={!canMutate} onClick={() => excluirDefinitivoLixeira(lixeiraVisivel.map((item) => item.id))} style={{ ...btnMiniGestao, color: BRAND.danger, borderColor: `${BRAND.danger}66`, background: `${BRAND.danger}10`, opacity: canMutate ? 1 : 0.45, cursor: canMutate ? "pointer" : "not-allowed" }}>
                     Esvaziar
                   </button>
                 </div>
@@ -4736,8 +5257,8 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
                     </div>
                     <div style={{ fontSize: 12, color: BRAND.muted, fontWeight: 850 }}>{brl(item.valorGlobal ?? item.valor)}</div>
                     <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
-                      <button type="button" onClick={() => restaurarOrcamentos([item.id])} style={{ ...btnMiniGestao, color: BRAND.green, borderColor: `${BRAND.green2}66`, background: `${BRAND.green2}12` }}>Restaurar</button>
-                      <button type="button" onClick={() => excluirDefinitivoLixeira([item.id])} style={{ ...btnMiniGestao, color: BRAND.danger, borderColor: `${BRAND.danger}66` }}>Excluir</button>
+                      <button type="button" disabled={!canMutate} onClick={() => restaurarOrcamentos([item.id])} style={{ ...btnMiniGestao, color: BRAND.green, borderColor: `${BRAND.green2}66`, background: `${BRAND.green2}12`, opacity: canMutate ? 1 : 0.45, cursor: canMutate ? "pointer" : "not-allowed" }}>Restaurar</button>
+                      <button type="button" disabled={!canMutate} onClick={() => excluirDefinitivoLixeira([item.id])} style={{ ...btnMiniGestao, color: BRAND.danger, borderColor: `${BRAND.danger}66`, opacity: canMutate ? 1 : 0.45, cursor: canMutate ? "pointer" : "not-allowed" }}>Excluir</button>
                     </div>
                   </div>
                 ))}
@@ -4816,8 +5337,9 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
                     type="checkbox"
                     checked={todosPaginaSelecionados}
                     onChange={alternarSelecaoPagina}
+                    disabled={!canMutate}
                     title="Selecionar orcamentos desta pagina"
-                    style={{ width: 16, height: 16, accentColor: BRAND.green2, cursor: "pointer" }}
+                    style={{ width: 16, height: 16, accentColor: BRAND.green2, cursor: canMutate ? "pointer" : "not-allowed", opacity: canMutate ? 1 : 0.45 }}
                   />
                 </th>
                 <th style={th}>Cliente</th>
@@ -4859,8 +5381,9 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
                             type="checkbox"
                             checked={idsSelecionados.has(item.id)}
                             onChange={() => alternarSelecaoOrcamento(item.id)}
+                            disabled={!canMutate}
                             title="Selecionar este orcamento"
-                            style={{ width: 16, height: 16, accentColor: BRAND.green2, cursor: "pointer" }}
+                            style={{ width: 16, height: 16, accentColor: BRAND.green2, cursor: canMutate ? "pointer" : "not-allowed", opacity: canMutate ? 1 : 0.45 }}
                           />
                         </td>
                         <td style={td}>
@@ -4877,7 +5400,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
 
                           <button
                             type="button"
-                            onClick={() => (baixarOrcamento || abrirOrcamentoSalvo)?.(item)}
+                            onClick={() => abrirOrcamentoGestao(item)}
                             title="Abrir / baixar o orçamento"
                             style={{
                               background: "transparent",
@@ -4903,7 +5426,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
 
                           <button
                             type="button"
-                            onClick={() => (baixarOrcamento || abrirOrcamentoSalvo)?.(item)}
+                            onClick={() => abrirOrcamentoGestao(item)}
                             style={{
                               marginTop: 7,
                               padding: "5px 9px",
@@ -4916,7 +5439,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
                               fontWeight: 850,
                             }}
                           >
-                            {item.anexado ? "⬇ Baixar PDF" : "👁 Abrir orçamento"}
+                            {item.anexado ? "Abrir PDF" : "Abrir orcamento"}
                           </button>
 
                           {ultimoContato && (
@@ -4931,7 +5454,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
                                   <span style={{ color: BRAND.green, fontSize: 10, fontWeight: 950 }}>Cliente CRM:</span>
                                   <span style={{ color: BRAND.text, fontSize: 10.5, fontWeight: 850 }}>{clienteVinculado.nome || clienteVinculado.empresa}</span>
                                 </div>
-                                <button type="button" onClick={() => desvincularOrcamentoCliente(item)} style={{ ...btnMiniGestao, width: "fit-content", color: BRAND.danger, borderColor: `${BRAND.danger}55`, background: `${BRAND.danger}10` }}>
+                                <button type="button" disabled={!canMutate} onClick={() => desvincularOrcamentoCliente(item)} style={{ ...btnMiniGestao, width: "fit-content", color: BRAND.danger, borderColor: `${BRAND.danger}55`, background: `${BRAND.danger}10`, opacity: canMutate ? 1 : 0.45, cursor: canMutate ? "pointer" : "not-allowed" }}>
                                   Desvincular cliente
                                 </button>
                               </div>
@@ -4941,8 +5464,9 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
                                 {sugestoesCliente[0] && (
                                   <button
                                     type="button"
+                                    disabled={!canMutate}
                                     onClick={() => vincularOrcamentoAoCliente(item, sugestoesCliente[0].cliente.id)}
-                                    style={{ ...btnMiniGestao, width: "fit-content", color: BRAND.warn, borderColor: `${BRAND.warn}55`, background: `${BRAND.warn}10` }}
+                                    style={{ ...btnMiniGestao, width: "fit-content", color: BRAND.warn, borderColor: `${BRAND.warn}55`, background: `${BRAND.warn}10`, opacity: canMutate ? 1 : 0.45, cursor: canMutate ? "pointer" : "not-allowed" }}
                                   >
                                     Sugestao: {sugestoesCliente[0].cliente.nome || sugestoesCliente[0].cliente.empresa} ({sugestoesCliente[0].score}%)
                                   </button>
@@ -4951,14 +5475,15 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
                                   <select
                                     value={clienteDraft}
                                     onChange={(e) => setClienteLinkDrafts((atual) => ({ ...atual, [item.id]: e.target.value }))}
-                                    style={{ ...inputGestao, padding: "7px 9px", fontSize: 10.5 }}
+                                    disabled={!canMutate}
+                                    style={{ ...inputGestao, padding: "7px 9px", fontSize: 10.5, opacity: canMutate ? 1 : 0.7, cursor: canMutate ? "pointer" : "not-allowed" }}
                                   >
                                     <option value="">Vincular cliente...</option>
                                     {clientesVisiveis.map((clienteItem) => (
                                       <option key={clienteItem.id} value={clienteItem.id}>{clienteItem.nome || clienteItem.empresa || clienteItem.email || "Cliente sem nome"}</option>
                                     ))}
                                   </select>
-                                  <button type="button" onClick={() => vincularOrcamentoAoCliente(item, clienteDraft)} style={{ ...btnMiniGestao, color: BRAND.green, borderColor: `${BRAND.green2}55`, background: `${BRAND.green2}10` }}>
+                                  <button type="button" disabled={!canMutate || !clienteDraft} onClick={() => vincularOrcamentoAoCliente(item, clienteDraft)} style={{ ...btnMiniGestao, color: BRAND.green, borderColor: `${BRAND.green2}55`, background: `${BRAND.green2}10`, opacity: canMutate && clienteDraft ? 1 : 0.45, cursor: canMutate && clienteDraft ? "pointer" : "not-allowed" }}>
                                     Vincular
                                   </button>
                                 </div>
@@ -4971,6 +5496,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
                           <ValorEditavel
                             valor={item.valorGlobal ?? item.valor ?? ""}
                             onSalvar={(n) => updateItem(item.id, "valorGlobal", n)}
+                            disabled={!canMutate}
                           />
                         </td>
                         <td style={td}>
@@ -4987,6 +5513,7 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
                           <select
                             value={normalizarStatusOrcamento(item)}
                             onChange={(e) => updateItem(item.id, "status", e.target.value)}
+                            disabled={!canMutate}
                             style={{
                               padding: "7px 10px",
                               borderRadius: 999,
@@ -4995,6 +5522,8 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
                               background: BRAND.panel2,
                               fontWeight: 800,
                               outline: "none",
+                              opacity: canMutate ? 1 : 0.7,
+                              cursor: canMutate ? "pointer" : "not-allowed",
                             }}
                           >
                             <option>Aberto</option>
@@ -5008,26 +5537,28 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
                             type="date"
                             value={item.proximoContato || ""}
                             onChange={(e) => updateItem(item.id, "proximoContato", e.target.value)}
-                            style={{ ...inputGestao, padding: "8px 10px" }}
+                            disabled={!canMutate}
+                            style={{ ...inputGestao, padding: "8px 10px", opacity: canMutate ? 1 : 0.7, cursor: canMutate ? "text" : "not-allowed" }}
                           />
                         </td>
                         <td style={{ ...td, minWidth: 300 }}>
                           <textarea
                             value={lembreteAtual}
                             onChange={(e) => updateItem(item.id, "lembreteIA", e.target.value)}
+                            disabled={!canMutate}
                             placeholder="Lembrete de cobrança..."
                             rows={2}
-                            style={{ ...inputGestao, resize: "vertical", minHeight: 42 }}
+                            style={{ ...inputGestao, resize: "vertical", minHeight: 42, opacity: canMutate ? 1 : 0.7, cursor: canMutate ? "text" : "not-allowed" }}
                           />
 
                           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 6, marginTop: 8 }}>
-                            <button type="button" disabled={carregandoContato} onClick={() => gerarMensagemIA(item, "cobranca")} style={{ ...btnMiniGestao, color: BRAND.warn, borderColor: `${BRAND.warn}66`, background: `${BRAND.warn}12`, opacity: carregandoContato ? 0.55 : 1 }}>
+                            <button type="button" disabled={!canMutate || carregandoContato} onClick={() => gerarMensagemIA(item, "cobranca")} style={{ ...btnMiniGestao, color: BRAND.warn, borderColor: `${BRAND.warn}66`, background: `${BRAND.warn}12`, opacity: !canMutate || carregandoContato ? 0.55 : 1, cursor: !canMutate || carregandoContato ? "not-allowed" : "pointer" }}>
                               <Bot size={12} /> Cobrar
                             </button>
-                            <button type="button" disabled={carregandoContato} onClick={() => gerarMensagemIA(item, "email")} style={{ ...btnMiniGestao, color: "#93C5FD", borderColor: `${BRAND.blue2}66`, background: `${BRAND.blue2}12`, opacity: carregandoContato ? 0.55 : 1 }}>
+                            <button type="button" disabled={!canMutate || carregandoContato} onClick={() => gerarMensagemIA(item, "email")} style={{ ...btnMiniGestao, color: "#93C5FD", borderColor: `${BRAND.blue2}66`, background: `${BRAND.blue2}12`, opacity: !canMutate || carregandoContato ? 0.55 : 1, cursor: !canMutate || carregandoContato ? "not-allowed" : "pointer" }}>
                               <Mail size={12} /> E-mail
                             </button>
-                            <button type="button" disabled={carregandoContato} onClick={() => gerarMensagemIA(item, "whatsapp")} style={{ ...btnMiniGestao, color: BRAND.green, borderColor: `${BRAND.green2}66`, background: `${BRAND.green2}12`, opacity: carregandoContato ? 0.55 : 1 }}>
+                            <button type="button" disabled={!canMutate || carregandoContato} onClick={() => gerarMensagemIA(item, "whatsapp")} style={{ ...btnMiniGestao, color: BRAND.green, borderColor: `${BRAND.green2}66`, background: `${BRAND.green2}12`, opacity: !canMutate || carregandoContato ? 0.55 : 1, cursor: !canMutate || carregandoContato ? "not-allowed" : "pointer" }}>
                               <MessageSquareText size={12} /> Whats
                             </button>
                           </div>
@@ -5036,10 +5567,20 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
                             <button type="button" onClick={() => copiarTexto(lembreteAtual || `Acompanhar orçamento ${item.numero || ""}.`)} style={btnMiniGestao}>
                               <Copy size={12} /> Copiar
                             </button>
-                            <button type="button" onClick={() => abrirEmailItem(item)} style={btnMiniGestao}>
+                            <button
+                              type="button"
+                              onClick={() => abrirEmailItem(item)}
+                              disabled={!canMutate}
+                              style={{ ...btnMiniGestao, opacity: canMutate ? 1 : 0.45, cursor: canMutate ? "pointer" : "not-allowed" }}
+                            >
                               <Mail size={12} /> Abrir
                             </button>
-                            <button type="button" onClick={() => abrirWhatsItem(item)} style={btnMiniGestao}>
+                            <button
+                              type="button"
+                              onClick={() => abrirWhatsItem(item)}
+                              disabled={!canMutate}
+                              style={{ ...btnMiniGestao, opacity: canMutate ? 1 : 0.45, cursor: canMutate ? "pointer" : "not-allowed" }}
+                            >
                               <Send size={12} /> Enviar
                             </button>
                             <button type="button" onClick={() => setHistoricoAberto(historicoAberto === item.id ? null : item.id)} style={btnMiniGestao}>
@@ -5050,9 +5591,18 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
                         <td style={{ ...td, minWidth: 82, verticalAlign: "top" }}>
                           <button
                             type="button"
+                            onClick={() => baixarOrcamentoGestao(item)}
+                            title="Baixar uma copia do orcamento"
+                            style={{ ...btnMiniGestao, color: "#93C5FD", borderColor: `${BRAND.blue2}66`, background: `${BRAND.blue2}10`, width: "100%", marginBottom: 6 }}
+                          >
+                            Baixar
+                          </button>
+                          <button
+                            type="button"
                             onClick={() => excluirOrcamentos([item.id])}
+                            disabled={!canMutate}
                             title="Mover somente este orcamento para a lixeira"
-                            style={{ ...btnMiniGestao, color: BRAND.danger, borderColor: `${BRAND.danger}66`, background: `${BRAND.danger}10`, width: "100%" }}
+                            style={{ ...btnMiniGestao, color: BRAND.danger, borderColor: `${BRAND.danger}66`, background: `${BRAND.danger}10`, width: "100%", opacity: canMutate ? 1 : 0.45, cursor: canMutate ? "pointer" : "not-allowed" }}
                           >
                             <Trash2 size={12} /> Lixeira
                           </button>
@@ -5069,17 +5619,17 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
                                   <div style={{ fontSize: 10, color: BRAND.dim }}>{item.numero || "orçamento"} - {item.cliente || "cliente"}</div>
                                 </div>
                                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                                  <button type="button" disabled={carregandoContato} onClick={() => gerarInsightConversa(item, "resumo")} style={{ ...btnMiniGestao, color: "#93C5FD", borderColor: `${BRAND.blue2}66`, background: `${BRAND.blue2}12`, opacity: carregandoContato ? 0.55 : 1 }}>
+                                  <button type="button" disabled={!canMutate || carregandoContato} onClick={() => gerarInsightConversa(item, "resumo")} style={{ ...btnMiniGestao, color: "#93C5FD", borderColor: `${BRAND.blue2}66`, background: `${BRAND.blue2}12`, opacity: !canMutate || carregandoContato ? 0.55 : 1, cursor: !canMutate || carregandoContato ? "not-allowed" : "pointer" }}>
                                     <Bot size={12} /> Resumir IA
                                   </button>
-                                  <button type="button" disabled={carregandoContato} onClick={() => gerarInsightConversa(item, "resposta")} style={{ ...btnMiniGestao, color: BRAND.green, borderColor: `${BRAND.green2}66`, background: `${BRAND.green2}12`, opacity: carregandoContato ? 0.55 : 1 }}>
+                                  <button type="button" disabled={!canMutate || carregandoContato} onClick={() => gerarInsightConversa(item, "resposta")} style={{ ...btnMiniGestao, color: BRAND.green, borderColor: `${BRAND.green2}66`, background: `${BRAND.green2}12`, opacity: !canMutate || carregandoContato ? 0.55 : 1, cursor: !canMutate || carregandoContato ? "not-allowed" : "pointer" }}>
                                     <Bot size={12} /> Responder IA
                                   </button>
                                 </div>
                               </div>
 
                               <div style={{ display: "grid", gridTemplateColumns: "minmax(120px,.7fr) minmax(120px,.7fr) minmax(130px,.8fr) minmax(240px,2fr) auto", gap: 8, alignItems: "start", marginBottom: 12 }}>
-                                <select value={rascunhoConversa.canal} onChange={(e) => atualizarDraftConversa(item.id, { canal: e.target.value })} style={{ ...inputGestao, padding: "9px 10px" }}>
+                                <select value={rascunhoConversa.canal} disabled={!canMutate} onChange={(e) => atualizarDraftConversa(item.id, { canal: e.target.value })} style={{ ...inputGestao, padding: "9px 10px", opacity: canMutate ? 1 : 0.7, cursor: canMutate ? "pointer" : "not-allowed" }}>
                                   <option>WhatsApp</option>
                                   <option>E-mail</option>
                                   <option>Ligação</option>
@@ -5087,12 +5637,12 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
                                   <option>Presencial</option>
                                   <option>Observação</option>
                                 </select>
-                                <select value={rascunhoConversa.direcao} onChange={(e) => atualizarDraftConversa(item.id, { direcao: e.target.value })} style={{ ...inputGestao, padding: "9px 10px" }}>
+                                <select value={rascunhoConversa.direcao} disabled={!canMutate} onChange={(e) => atualizarDraftConversa(item.id, { direcao: e.target.value })} style={{ ...inputGestao, padding: "9px 10px", opacity: canMutate ? 1 : 0.7, cursor: canMutate ? "pointer" : "not-allowed" }}>
                                   <option value="entrada">Cliente respondeu</option>
                                   <option value="saida">Empresa enviou</option>
                                   <option value="interna">Nota interna</option>
                                 </select>
-                                <select value={rascunhoConversa.tipo} onChange={(e) => atualizarDraftConversa(item.id, { tipo: e.target.value })} style={{ ...inputGestao, padding: "9px 10px" }}>
+                                <select value={rascunhoConversa.tipo} disabled={!canMutate} onChange={(e) => atualizarDraftConversa(item.id, { tipo: e.target.value })} style={{ ...inputGestao, padding: "9px 10px", opacity: canMutate ? 1 : 0.7, cursor: canMutate ? "pointer" : "not-allowed" }}>
                                   <option>Follow-up</option>
                                   <option>Cobrança</option>
                                   <option>Resposta</option>
@@ -5105,11 +5655,12 @@ function GestaoPage({ crm = [], setCrm, empresas = [], clientes = [], setCliente
                                 <textarea
                                   value={rascunhoConversa.mensagem}
                                   onChange={(e) => atualizarDraftConversa(item.id, { mensagem: e.target.value })}
+                                  disabled={!canMutate}
                                   placeholder="Cole ou escreva a conversa feita com o cliente..."
                                   rows={3}
-                                  style={{ ...inputGestao, resize: "vertical", minHeight: 76 }}
+                                  style={{ ...inputGestao, resize: "vertical", minHeight: 76, opacity: canMutate ? 1 : 0.7, cursor: canMutate ? "text" : "not-allowed" }}
                                 />
-                                <button type="button" onClick={() => registrarConversa(item, rascunhoConversa)} style={{ ...btnMiniGestao, minHeight: 38, color: BRAND.green, borderColor: `${BRAND.green2}66`, background: `${BRAND.green2}12` }}>
+                                <button type="button" disabled={!canMutate} onClick={() => registrarConversa(item, rascunhoConversa)} style={{ ...btnMiniGestao, minHeight: 38, color: BRAND.green, borderColor: `${BRAND.green2}66`, background: `${BRAND.green2}12`, opacity: canMutate ? 1 : 0.45, cursor: canMutate ? "pointer" : "not-allowed" }}>
                                   Salvar conversa
                                 </button>
                               </div>
@@ -5375,9 +5926,10 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
       const aprovados = lista.filter((item) => item.status === "approved");
       setAcessos(lista);
       setResumoUsuarios(data.resumoUsuarios || {});
+      const isAdminAtual = usuarioEhAdmin(usuarioAtual);
       setTransferencia((atual) => ({
         ...atual,
-        origem: usuarioAtual?.tipo === "admin" ? atual.origem || usuarioAtual?.id || aprovados[0]?.user_id || "" : usuarioAtual?.id || "",
+        origem: isAdminAtual ? atual.origem || usuarioAtual?.id || aprovados[0]?.user_id || "" : usuarioAtual?.id || "",
         destino: atual.destino || aprovados.find((item) => item.user_id !== (usuarioAtual?.id || atual.origem))?.user_id || "",
       }));
     }
@@ -5465,7 +6017,7 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
   };
 
   const transferirDados = async () => {
-    const isAdminAtual = usuarioAtual?.tipo === "admin";
+    const isAdminAtual = usuarioEhAdmin(usuarioAtual);
     const origem = isAdminAtual ? transferencia.origem : usuarioAtual?.id;
     const destino = transferencia.destino;
     const opcao = USER_TRANSFER_OPTIONS.find((item) => item.id === transferencia.tipo) || USER_TRANSFER_OPTIONS[0];
@@ -5508,22 +6060,16 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
 
   const atualizarAcesso = async (userId, patch) => {
     const payload = {
-      ...patch,
-      updated_at: new Date().toISOString(),
+      p_user_id: userId,
+      p_role: Object.prototype.hasOwnProperty.call(patch, "role") ? patch.role : null,
+      p_status: Object.prototype.hasOwnProperty.call(patch, "status") ? patch.status : null,
+      p_display_name: Object.prototype.hasOwnProperty.call(patch, "display_name") ? patch.display_name : null,
+      p_signature_name: Object.prototype.hasOwnProperty.call(patch, "signature_name") ? patch.signature_name : null,
+      p_phone: Object.prototype.hasOwnProperty.call(patch, "phone") ? patch.phone : null,
+      p_cargo: Object.prototype.hasOwnProperty.call(patch, "cargo") ? patch.cargo : null,
     };
 
-    if (patch.status === "approved") {
-      payload.approved_at = new Date().toISOString();
-      payload.blocked_at = null;
-    }
-    if (patch.status === "blocked") {
-      payload.blocked_at = new Date().toISOString();
-    }
-
-    const { error } = await supabase
-      .from("app_users")
-      .update(payload)
-      .eq("user_id", userId);
+    const { error } = await supabase.rpc("admin_update_app_user", payload);
 
     if (error) {
       console.error("Erro ao atualizar acesso:", error);
@@ -5579,10 +6125,11 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
         };
       }
 
+      const tipo = normalizarRole(u.tipo);
       return {
         ...u,
-        tipo: u.tipo || "usuario",
-        perfil: u.perfil || "Usuário",
+        tipo,
+        perfil: labelRole(tipo),
         ativo: u.ativo !== false,
       };
     });
@@ -5635,11 +6182,12 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "Nao foi possivel ativar o acesso interno.");
 
+      const roleCriado = normalizarRole(data.user?.role || perfil.tipo || "usuario");
       const atualizado = {
         ...perfil,
         senha: senhaFinal,
-        tipo: data.user?.role || perfil.tipo || "usuario",
-        perfil: data.user?.role === "admin" ? "Administrador" : "Usuario",
+        tipo: roleCriado,
+        perfil: labelRole(roleCriado),
         ativo: true,
         loginEmail: data.user?.email || perfil.loginEmail || emailParaLoginOrcaflow(perfil.nome),
         supabaseUserId: data.user?.user_id || perfil.supabaseUserId || "",
@@ -5677,7 +6225,7 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
       nome: nome.trim(),
       senha,
       tipo: "usuario",
-      perfil: "Usuário",
+      perfil: labelRole("usuario"),
       ativo: true,
       criadoEm: new Date().toISOString(),
     };
@@ -5750,7 +6298,7 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
   const destinosCompartilhamento = acessosAprovados.filter((item) => item.user_id !== (usuarioAtual?.id || transferencia.origem));
 
   const perfilCard = (
-    <div className="of-glass" style={{ borderRadius: 16, padding: 16, marginBottom: 16, maxWidth: usuarioAtual?.tipo === "admin" ? "none" : 720 }}>
+    <div className="of-glass" style={{ borderRadius: 16, padding: 16, marginBottom: 16, maxWidth: usuarioEhAdmin(usuarioAtual) ? "none" : 720 }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", marginBottom: 12 }}>
         <div>
           <div style={{ fontSize: 16, fontWeight: 950 }}>Meu perfil comercial</div>
@@ -5828,11 +6376,20 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
     </div>
   );
 
-  if (usuarioAtual?.tipo !== "admin") {
+  const gestorSupervisaoCard = (
+    <div style={{ background: BRAND.panel, border: `1px solid ${BRAND.warn}55`, borderRadius: 16, padding: 20, maxWidth: 620, marginBottom: 16 }}>
+      <div style={{ fontSize: 16, fontWeight: 950, marginBottom: 6, color: BRAND.warn }}>Modo Gestor</div>
+      <div style={{ fontSize: 12, color: BRAND.muted, lineHeight: 1.65 }}>
+        Este perfil acompanha orcamentos e historicos dos usuarios simples em modo supervisao. Criacao, edicao, exclusao e compartilhamento operacional ficam bloqueados e as tentativas sao registradas na auditoria.
+      </div>
+    </div>
+  );
+
+  if (!usuarioEhAdmin(usuarioAtual)) {
     return (
       <div style={{ padding: 24 }}>
         {perfilCard}
-        {compartilhamentoUsuarioCard}
+        {usuarioEhGestor(usuarioAtual) ? gestorSupervisaoCard : compartilhamentoUsuarioCard}
         <div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 16, padding: 20, maxWidth: 520 }}>
           <div style={{ fontSize: 16, fontWeight: 950, marginBottom: 6 }}>Perfil do usuário</div>
           <div style={{ fontSize: 12, color: BRAND.muted }}>Usuário atual: {usuarioAtual?.nome || "—"}</div>
@@ -5928,7 +6485,7 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
         <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", marginBottom: 10 }}>
           <div>
             <div style={{ fontSize: 14, fontWeight: 900 }}>Controle de acesso ao sistema</div>
-            <div style={{ fontSize: 11, color: BRAND.dim, marginTop: 3 }}>Aprove quem pode entrar, bloqueie cadastros e defina admin ou usuario.</div>
+            <div style={{ fontSize: 11, color: BRAND.dim, marginTop: 3 }}>Aprove quem pode entrar, bloqueie cadastros e defina admin, gestor ou usuario.</div>
           </div>
           <button onClick={carregarAcessos} disabled={carregandoAcessos} style={{ padding: "8px 10px", borderRadius: 9, border: `1px solid ${BRAND.blue2}55`, background: `${BRAND.blue2}12`, color: "#93C5FD", cursor: carregandoAcessos ? "wait" : "pointer", fontWeight: 850 }}>
             {carregandoAcessos ? "Atualizando..." : "Atualizar"}
@@ -5965,6 +6522,7 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
                     style={{ background: BRAND.panel, border: `1px solid ${BRAND.border2}`, color: BRAND.text, borderRadius: 9, padding: 8, fontSize: 12 }}
                   >
                     <option value="admin">admin</option>
+                    <option value="gestor">gestor</option>
                     <option value="usuario">usuario</option>
                   </select>
                   <div style={{ color: statusCor, fontSize: 12, fontWeight: 950 }}>{a.status || "pending"}</div>
@@ -6033,6 +6591,7 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
             </div>
             <select value={u.tipo} disabled={isAdminProtegido(u)} onChange={(e) => alterar(u.id, "tipo", e.target.value)} style={{ background: BRAND.panel2, border: `1px solid ${BRAND.border2}`, color: BRAND.text, borderRadius: 9, padding: 8, fontSize: 12 }}>
               <option value="admin">admin</option>
+              <option value="gestor">gestor</option>
               <option value="usuario">usuario</option>
             </select>
             <button disabled={isAdminProtegido(u)} onClick={() => alterar(u.id, "ativo", !u.ativo)} style={{ padding: 8, borderRadius: 9, border: `1px solid ${u.ativo ? BRAND.danger : BRAND.green2}55`, background: "transparent", color: u.ativo ? BRAND.danger : BRAND.green, fontWeight: 850, cursor: isAdminProtegido(u) ? "not-allowed" : "pointer" }}>{u.ativo ? "Cancelar" : "Ativar"}</button>
@@ -6057,7 +6616,7 @@ function UsuariosPanel({ usuarios, setUsuarios, usuarioAtual, setUsuarioAtual, p
 }
 
 export default function App() {
-  const { empresas, status, meta, setMeta, toast, salvarEmpresa, excluirEmpresa, exportarBackup, importarBackup, incOrcamentos, kbUsados, pushToast } = useDB();
+  const { empresas, setEmpresas, status, meta, setMeta, toast, salvarEmpresa, excluirEmpresa, exportarBackup, importarBackup, incOrcamentos, kbUsados, pushToast } = useDB();
   const [view, setView] = useState("gestao");
   const [autenticado, setAutenticado] = useState(false);
   const [modal, setModal] = useState(null);
@@ -6131,7 +6690,8 @@ export default function App() {
       }
 
       setAcessoPerfil(null);
-      setUsuarioAtual({
+      const roleAcesso = normalizarRole(perfilAcesso?.role);
+      const usuarioLogado = {
         id: user.id,
         nome: perfilAcesso?.name || user.email || "Usuário",
         nomeTratamento: perfilAcesso?.display_name || perfilAcesso?.name || user.email || "Usuario",
@@ -6139,14 +6699,40 @@ export default function App() {
         cargo: perfilAcesso?.cargo || "",
         telefone: perfilAcesso?.phone || "",
         email: user.email,
-        tipo: perfilAcesso?.role === "admin" ? "admin" : "usuario",
-        perfil: perfilAcesso?.role === "admin" ? "Administrador" : "Usuário",
+        tipo: roleAcesso,
+        perfil: labelRole(roleAcesso),
         ativo: true,
-      });
+      };
+      setUsuarioAtual(usuarioLogado);
       setAutenticado(true);
       const dados = await store.getMany([KEY_EMP, KEY_LOG, KEY_META, KEY_CRM, KEY_CHAT, KEY_CLIENTES, KEY_AGENDA, KEY_WHATS_RELATORIO, KEY_WEEKLY_REPORT_PENDING, KEY_WHATSAPP_MONITOR, KEY_NARA_AUTO, KEY_NARA_RADAR, KEY_BACKUP_AUTO]);
-      setCrm(dados[KEY_CRM] || []);
-      setClientesCRM(dados[KEY_CLIENTES] || []);
+      if (usuarioPodeSupervisionar(usuarioLogado)) {
+        try {
+          const response = await fetch("/api/share-user-data?includeData=1", {
+            headers: await authHeaders(),
+          });
+          const visao = await response.json().catch(() => ({}));
+          if (response.ok && visao.ok && Array.isArray(visao.dadosUsuarios)) {
+            const linhas = visao.dadosUsuarios;
+            const empresasEquipe = itensDeEstadoUsuarios(linhas, KEY_EMP);
+            const crmEquipe = itensDeEstadoUsuarios(linhas, KEY_CRM);
+            const clientesEquipe = itensDeEstadoUsuarios(linhas, KEY_CLIENTES);
+            setEmpresas(empresasEquipe.length ? empresasEquipe : (dados[KEY_EMP] || []));
+            setCrm(crmEquipe.length ? crmEquipe : (dados[KEY_CRM] || []));
+            setClientesCRM(clientesEquipe.length ? clientesEquipe : (dados[KEY_CLIENTES] || []));
+          } else {
+            setCrm(dados[KEY_CRM] || []);
+            setClientesCRM(dados[KEY_CLIENTES] || []);
+          }
+        } catch (error) {
+          console.warn("Falha ao carregar visao de equipe:", error);
+          setCrm(dados[KEY_CRM] || []);
+          setClientesCRM(dados[KEY_CLIENTES] || []);
+        }
+      } else {
+        setCrm(dados[KEY_CRM] || []);
+        setClientesCRM(dados[KEY_CLIENTES] || []);
+      }
       const configNara = { ...DEFAULT_NARA_CONFIG, ...(dados[KEY_NARA_AUTO] || {}) };
       setNaraConfig(configNara);
       const radarSalvo = dados[KEY_NARA_RADAR];
@@ -6171,6 +6757,17 @@ export default function App() {
 
     return () => listener.subscription.unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (!autenticado || !usuarioAtual) return;
+    if (usuarioEhGestor(usuarioAtual) && !["gestao", "chat", "perfil"].includes(view)) {
+      setView("gestao");
+      return;
+    }
+    if (!usuarioEhAdmin(usuarioAtual) && ["usuarios", "banco"].includes(view)) {
+      setView("gestao");
+    }
+  }, [autenticado, usuarioAtual?.tipo, view]);
 
   useEffect(() => {
     if (!autenticado || !naraConfig?.radarDiarioAtivo) return;
@@ -6242,7 +6839,7 @@ export default function App() {
   };
 
   const limparBaseComercialMantendoEmpresas = async () => {
-    if (usuarioAtual?.tipo !== "admin") {
+    if (!usuarioEhAdmin(usuarioAtual)) {
       pushToast("Apenas administrador pode limpar a base comercial.", "erro");
       return;
     }
@@ -6743,6 +7340,14 @@ export default function App() {
 
     try {
       dados = normalizarDocumentoPublico(dados, emp);
+      const validacaoNara = validarDocumentoNara(emp, dados, orcamentos);
+      if (validacaoNara.problemas.length) {
+        pushToast(`Nara bloqueou o PDF: ${validacaoNara.problemas[0]}`, "erro");
+        return;
+      }
+      if (validacaoNara.avisos.length) {
+        pushToast(`Nara aprovou com aviso: ${validacaoNara.avisos[0]}`, "aviso");
+      }
 
       // Quando há timbrado, a PÁGINA do PDF é criada com as MESMAS dimensões
       // do arquivo enviado. Assim o timbrado entra inteiro (sem corte e sem
@@ -6906,7 +7511,7 @@ export default function App() {
       };
 
       const writeMaterialsTable = () => {
-        const rows = materialRows(dados);
+        const rows = ordenarMateriaisPerfil(materialRows(dados), perfil.tipo);
         if (!rows.length) return;
 
         ensure(100);
@@ -6982,9 +7587,9 @@ export default function App() {
         }
 
         if (perfil.tipo === "consultoria") {
-          const widths = [maxW - 208, 34, 30, 64, 80];
-          const labels = ["DESCRICAO", "QTD", "UN", "VALOR UNIT.", "VALOR FINAL"];
-          const aligns = ["left", "right", "right", "right", "right"];
+          const widths = [54, maxW - 216, 72, 90];
+          const labels = ["REG.", "ATIVIDADE ANALISADA", "BASE", "VALOR FINAL"];
+          const aligns = ["right", "left", "right", "right"];
 
           ensure(24);
           pdf.setDrawColor(17, 24, 39);
@@ -7002,8 +7607,8 @@ export default function App() {
           pdf.setDrawColor(203, 213, 225);
           pdf.line(marginX, y, marginX + maxW, y);
 
-          rows.forEach((item) => {
-            const descLines = pdf.splitTextToSize(String(item.descricao || ""), widths[0] - 6);
+          rows.forEach((item, index) => {
+            const descLines = pdf.splitTextToSize(String(item.descricao || ""), widths[1] - 6);
             const rowHeight = Math.max(22, descLines.length * 9 + 7);
             ensure(rowHeight + 8);
             y += 2;
@@ -7012,13 +7617,12 @@ export default function App() {
             x = marginX;
             pdf.setFont(bodyFont, "normal");
             pdf.setFontSize(7.4);
+            drawText(String(index + 1).padStart(2, "0"), x, widths[0], y + 11, "right", 7.1); x += widths[0];
             pdf.text(descLines, x + 3, y + 11);
-            x += widths[0];
-            drawText(item.quantidade || 1, x, widths[1], y + 11, "right", 7.1); x += widths[1];
-            drawText(item.unidade || "un", x, widths[2], y + 11, "right", 7.1); x += widths[2];
-            drawText(brl(item.valorUnitario), x, widths[3], y + 11, "right", 7.1); x += widths[3];
+            x = marginX + widths[0] + widths[1];
+            drawText(quantidadeUnidadeMaterial(item), x, widths[2], y + 11, "right", 7.1); x += widths[2];
             pdf.setFont(bodyFont, "bold");
-            drawText(brl(item.subtotal), x, widths[4], y + 11, "right", 7.1);
+            drawText(brl(item.subtotal), x, widths[3], y + 11, "right", 7.1);
 
             y += rowHeight;
             pdf.setDrawColor(226, 232, 240);
@@ -7030,7 +7634,7 @@ export default function App() {
           pdf.setFont("helvetica", "bold");
           pdf.setFontSize(8.2);
           pdf.setTextColor(0, 0, 0);
-          pdf.text("VALOR CONSOLIDADO DOS ITENS", marginX + maxW - 105, y + 14, { align: "right" });
+          pdf.text("VALOR CONSOLIDADO", marginX + maxW - 105, y + 14, { align: "right" });
           pdf.text(brl(materialTotal(rows)), marginX + maxW, y + 14, { align: "right" });
           y += 34;
           return;
@@ -7130,21 +7734,20 @@ export default function App() {
         }
 
         if (perfil.tipo === "orlovic") {
-          const widths = [42, maxW - 206, 42, 42, 80];
-          const labels = ["ITEM", "ESCOPO", "QTD", "UN", "VALOR"];
+          const widths = [maxW * 0.24, maxW * 0.54, maxW * 0.22];
+          const labels = ["FRENTE", "SOLUCAO CONTEMPLADA", "INVESTIMENTO"];
           ensure(26);
           pdf.setFont("helvetica", "bold");
           pdf.setFontSize(7.2);
           pdf.setTextColor(55, 65, 81);
           pdf.setDrawColor(148, 163, 184);
-          pdf.rect(marginX, y, maxW, 19);
+          pdf.line(marginX, y, marginX + maxW, y);
           let x = marginX;
           labels.forEach((label, i) => {
-            drawText(label, x, widths[i], y + 12, i <= 1 ? "left" : "right", 6.8);
-            if (i < labels.length - 1) pdf.line(x + widths[i], y, x + widths[i], y + 19);
+            drawText(label, x, widths[i], y + 12, i < 2 ? "left" : "right", 6.8);
             x += widths[i];
           });
-          y += 19;
+          y += 20;
 
           rows.forEach((item, index) => {
             const descLines = pdf.splitTextToSize(String(item.descricao || ""), widths[1] - 8);
@@ -7152,17 +7755,22 @@ export default function App() {
             ensure(rowHeight + 8);
             x = marginX;
             pdf.setDrawColor(226, 232, 240);
-            pdf.rect(marginX, y, maxW, rowHeight);
+            pdf.line(marginX, y + rowHeight, marginX + maxW, y + rowHeight);
             pdf.setFont(bodyFont, "bold");
             pdf.setFontSize(7.3);
             pdf.setTextColor(0, 0, 0);
-            drawText(String(index + 1).padStart(2, "0"), x, widths[0], y + 12, "left", 7.2); x += widths[0];
+            drawText(`BLOCO ${numeroRomanoCurto(index)}`, x, widths[0], y + 12, "left", 7.2);
+            pdf.setFont(bodyFont, "normal");
+            pdf.setFontSize(6.6);
+            pdf.setTextColor(100, 116, 139);
+            pdf.text(quantidadeUnidadeMaterial(item), x + 3, y + 22);
+            x += widths[0];
+            pdf.setTextColor(0, 0, 0);
+            pdf.setFontSize(7.4);
             pdf.setFont(bodyFont, "normal");
             pdf.text(descLines, x + 3, y + 12); x += widths[1];
-            drawText(item.quantidade || 1, x, widths[2], y + 12, "right", 7.2); x += widths[2];
-            drawText(item.unidade || "un", x, widths[3], y + 12, "right", 7.2); x += widths[3];
             pdf.setFont(bodyFont, "bold");
-            drawText(brl(item.subtotal), x, widths[4], y + 12, "right", 7.2);
+            drawText(brl(item.subtotal), x, widths[2], y + 12, "right", 7.2);
             y += rowHeight;
           });
 
@@ -7210,8 +7818,8 @@ export default function App() {
         }
 
         if (perfil.tipo === "engenharia") {
-          const widths = [maxW - 192, 36, 36, 56, 64];
-          const labels = ["DESCRICAO TECNICA", "QTD", "UN", "UNIT.", "TOTAL"];
+          const widths = [66, maxW - 184, 58, 60];
+          const labels = ["REF.", "COMPOSICAO TECNICA", "BASE", "VALOR"];
           const [tr, tg, tb] = hexToRgb(corPrimariaDoc);
           ensure(24);
           pdf.setDrawColor(tr, tg, tb);
@@ -7227,22 +7835,23 @@ export default function App() {
             x += widths[i];
           });
           y += 10;
-          rows.forEach((item) => {
-            const descLines = pdf.splitTextToSize(String(item.descricao || ""), widths[0] - 6);
-            const rowHeight = Math.max(22, descLines.length * 8.5 + 7);
+          rows.forEach((item, index) => {
+            const descLines = pdf.splitTextToSize(String(item.descricao || ""), widths[1] - 6);
+            const rowHeight = Math.max(24, descLines.length * 8.5 + 9);
             ensure(rowHeight + 6);
             x = marginX;
             pdf.setDrawColor(203, 213, 225);
             pdf.line(marginX, y + rowHeight, marginX + maxW, y + rowHeight);
-            pdf.setFont(bodyFont, "normal");
-            pdf.setFontSize(7.2);
-            pdf.setTextColor(0, 0, 0);
-            pdf.text(descLines, x + 3, y + 11); x += widths[0];
-            drawText(item.quantidade || 1, x, widths[1], y + 11, "right", 7.1); x += widths[1];
-            drawText(item.unidade || "un", x, widths[2], y + 11, "right", 7.1); x += widths[2];
-            drawText(brl(item.valorUnitario), x, widths[3], y + 11, "right", 7.1); x += widths[3];
             pdf.setFont(bodyFont, "bold");
-            drawText(brl(item.subtotal), x, widths[4], y + 11, "right", 7.1);
+            pdf.setFontSize(7.2);
+            pdf.setTextColor(tr, tg, tb);
+            drawText(`TEC-${String(index + 1).padStart(2, "0")}`, x, widths[0], y + 11, "left", 7.1); x += widths[0];
+            pdf.setFont(bodyFont, "normal");
+            pdf.setTextColor(0, 0, 0);
+            pdf.text(descLines, x + 3, y + 11); x += widths[1];
+            drawText(quantidadeUnidadeMaterial(item), x, widths[2], y + 11, "right", 7.0); x += widths[2];
+            pdf.setFont(bodyFont, "bold");
+            drawText(brl(item.subtotal), x, widths[3], y + 11, "right", 7.1);
             y += rowHeight;
           });
 
@@ -7250,15 +7859,15 @@ export default function App() {
           pdf.setFont("helvetica", "bold");
           pdf.setFontSize(8.4);
           pdf.setTextColor(0, 0, 0);
-          pdf.text("TOTAL TECNICO DOS ITENS", marginX + maxW - 106, y + 15, { align: "right" });
+          pdf.text("TOTAL TECNICO", marginX + maxW - 106, y + 15, { align: "right" });
           pdf.text(brl(materialTotal(rows)), marginX + maxW, y + 15, { align: "right" });
           y += 34;
           return;
         }
 
-        const widths = [maxW - 208, 34, 30, 64, 80];
-        const labels = ["ITEM", "QTD", "UN", "VALOR UNIT.", "VALOR FINAL"];
-        const aligns = ["left", "right", "right", "right", "right"];
+        const widths = [maxW - 128, 48, 80];
+        const labels = ["ITEM", "QTD / UN", "VALOR FINAL"];
+        const aligns = ["left", "right", "right"];
         const headerColor = perfil.tipo === "varejo-eletrico"
           ? [17, 24, 39]
           : perfil.tipo === "orlovic"
@@ -7306,11 +7915,9 @@ export default function App() {
           x += widths[0];
           pdf.setTextColor(0, 0, 0);
           pdf.setFontSize(7.2);
-          drawText(item.quantidade || 1, x, widths[1], y + 12, "right", 7.2); x += widths[1];
-          drawText(item.unidade || "un", x, widths[2], y + 12, "right", 7.2); x += widths[2];
-          drawText(brl(item.valorUnitario), x, widths[3], y + 12, "right", 7.2); x += widths[3];
+          drawText(quantidadeUnidadeMaterial(item), x, widths[1], y + 12, "right", 7.2); x += widths[1];
           pdf.setFont(bodyFont, "bold");
-          drawText(brl(item.subtotal), x, widths[4], y + 12, "right", 7.2);
+          drawText(brl(item.subtotal), x, widths[2], y + 12, "right", 7.2);
 
           y += rowHeight;
         });
@@ -7319,7 +7926,7 @@ export default function App() {
         pdf.setFont("helvetica", "bold");
         pdf.setFontSize(8.5);
         pdf.setTextColor(0, 0, 0);
-        pdf.text("TOTAL DA TABELA", marginX + maxW - 170, y + 14, { align: "right" });
+        pdf.text("TOTAL DA TABELA", marginX + maxW - 120, y + 14, { align: "right" });
         pdf.text(brl(materialTotal(rows)), marginX + maxW, y + 14, { align: "right" });
         y += 32;
       };
@@ -7332,7 +7939,17 @@ export default function App() {
         }
         if (key === "itens") {
           if (Array.isArray(dados.itensIA) && dados.itensIA.length) {
-            writeSection(getSectionLabel(dados, "itens"), dados.itensIA.map((item, i) => `${i + 1}. ${item}`).join("\n"));
+            const itens = dados.itensIA.filter(Boolean);
+            const prefixos = {
+              construcao: (i) => `FASE ${String(i + 1).padStart(2, "0")}`,
+              orlovic: (i) => `BLOCO ${numeroRomanoCurto(i)}`,
+              engenharia: (i) => `TEC-${String(i + 1).padStart(2, "0")}`,
+              consultoria: (i) => `REG. ${String(i + 1).padStart(2, "0")}`,
+              eventos: (i) => `PRODUCAO ${String(i + 1).padStart(2, "0")}`,
+              operacional: (i) => `PACOTE ${String(i + 1).padStart(2, "0")}`,
+            };
+            const prefixo = prefixos[perfil.tipo] || ((i) => `${i + 1}.`);
+            writeSection(getSectionLabel(dados, "itens"), itens.map((item, i) => `${prefixo(i)} - ${item}`).join("\n"));
           }
           return;
         }
@@ -7553,17 +8170,17 @@ export default function App() {
   const baixarOrcamento = (item) => {
     if (item?.anexado && item?.arquivoPdf) {
       const ok = baixarDataUrl(item.arquivoPdf, item.arquivoNome || `${safeFileName(item.cliente)}.pdf`);
-      pushToast(ok ? "PDF do orçamento anexado baixado." : "Não foi possível abrir o PDF anexado.", ok ? "ok" : "erro");
+      pushToast(ok ? "PDF do orcamento anexado baixado." : "Nao foi possivel baixar o PDF anexado.", ok ? "ok" : "erro");
       return;
     }
     abrirOrcamentoSalvo(item);
   };
 
   const abrirOrcamentoSalvo = (item) => {
-    // Orçamento anexado (PDF externo): baixa o arquivo salvo.
+    // Orcamento anexado (PDF externo): abre primeiro em nova aba, sem baixar no desktop.
     if (item?.anexado && item?.arquivoPdf) {
-      const ok = baixarDataUrl(item.arquivoPdf, item.arquivoNome || `${safeFileName(item.cliente)}.pdf`);
-      pushToast(ok ? "PDF do orçamento anexado baixado." : "Não foi possível abrir o PDF anexado.", ok ? "ok" : "erro");
+      const ok = abrirDataUrlEmAba(item.arquivoPdf, item.arquivoNome || `${safeFileName(item.cliente)}.pdf`);
+      pushToast(ok ? "PDF aberto para visualizacao." : "O navegador bloqueou a visualizacao. Use baixar PDF.", ok ? "ok" : "aviso");
       return;
     }
 
@@ -7804,7 +8421,7 @@ export default function App() {
             <span style={{ fontSize: 10, color: corDB[status] || BRAND.warn, fontWeight: 850 }}>{status === "carregando" ? "DB…" : status === "ok" ? `${empresas.length} emp.` : "ERRO"}</span>
           </div>
           <div style={{ fontSize: 10, color: BRAND.muted, border: `1px solid ${BRAND.border2}`, borderRadius: 20, padding: "4px 9px", maxWidth: 190, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {usuarioAtual?.tipo === "admin" ? "Admin" : "Usuário"}: {usuarioAtual?.nome || "—"}
+            {labelRole(roleUsuario(usuarioAtual))}: {usuarioAtual?.nome || "—"}
           </div>
         </div>
 
@@ -7812,15 +8429,16 @@ export default function App() {
           <div className="of-main-nav" style={{ display: "flex", gap: 3, background: BRAND.bg, borderRadius: 10, padding: "4px 4px 8px", border: `1px solid ${BRAND.border2}`, flex: "1 1 auto", minWidth: 0, maxWidth: "min(920px, 100%)", overflowX: "auto", overflowY: "hidden", whiteSpace: "nowrap", justifyContent: "flex-start" }}>
             {[
               ["gestao", "📊 Gestão"],
-              ["clientes", "👥 CRM"],
-              ["orcamento", "✦ Orçamento"],
-              ["agenda", "Agenda"],
-              ["whatsapp", "WhatsApp"],
+              ...(!usuarioEhGestor(usuarioAtual) ? [
+                ["clientes", "👥 CRM"],
+                ["orcamento", "✦ Orçamento"],
+                ["agenda", "Agenda"],
+                ["whatsapp", "WhatsApp"],
+              ] : []),
               ["chat", "Nara"],
               ["perfil", "Meu Perfil"],
-              ["empresas", "🏢 Empresas"],
-              ...(usuarioAtual?.tipo === "admin" ? [["usuarios", "🔐 Acessos"]] : []),
-              ["banco", "🗄 Banco"],
+              ...(!usuarioEhGestor(usuarioAtual) ? [["empresas", "🏢 Empresas"]] : []),
+              ...(usuarioEhAdmin(usuarioAtual) ? [["usuarios", "🔐 Acessos"], ["banco", "🗄 Banco"]] : []),
             ].map(([v, l]) => (
               <button key={v} onClick={() => setView(v)} style={{ padding: "7px 12px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 850, background: view === v ? `linear-gradient(135deg, ${BRAND.green2}, #15803D)` : "transparent", color: view === v ? "#fff" : BRAND.dim, transition: "all .22s ease" }}>{l}</button>
             ))}
@@ -7923,7 +8541,7 @@ export default function App() {
               <div key={c.label} style={{ background: BRAND.panel, border: `1px solid ${c.cor}24`, borderRadius: 14, padding: "15px 17px", animation: "ofCardIn .28s ease both" }}><div style={{ fontSize: 22, marginBottom: 6 }}>{c.icon}</div><div style={{ fontSize: 22, fontWeight: 900, color: c.cor, marginBottom: 2 }}>{c.valor}</div><div style={{ fontSize: 11, color: BRAND.dim }}>{c.label}</div></div>
             ))}
           </div>
-          {usuarioAtual?.tipo === "admin" && (
+          {usuarioEhAdmin(usuarioAtual) && (
             <div style={{ background: "rgba(127,29,29,.16)", border: `1px solid ${BRAND.danger}55`, borderRadius: 14, padding: 16, marginBottom: 18 }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
                 <div>
@@ -8059,7 +8677,7 @@ export default function App() {
             {step === "preview" && <div style={{ padding: "16px 18px" }}><div style={{ display: "flex", gap: 6, marginBottom: 13, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}><div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{empsSel.map((emp) => <button key={emp.id} onClick={() => setActiveTab(emp.id)} style={{ padding: "7px 14px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 850, border: `2px solid ${activeTab === emp.id ? emp.corPrimaria || BRAND.green2 : BRAND.border2}`, background: activeTab === emp.id ? `${emp.corPrimaria || BRAND.green2}1e` : BRAND.panel, color: activeTab === emp.id ? "#fff" : BRAND.dim }}>{emp.nome}</button>)}</div><div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               <button onClick={() => activeTab && baixarPDF(activeTab)} style={{ padding: "8px 14px", borderRadius: 9, cursor: "pointer", fontSize: 12, fontWeight: 900, border: `1px solid ${BRAND.green2}66`, background: `linear-gradient(135deg, ${BRAND.green2}, ${BRAND.blue2})`, color: "#fff", boxShadow: `0 8px 22px ${BRAND.green2}28` }}>⬇ Baixar PDF</button>
               <button onClick={() => setEditando((v) => !v)} style={{ padding: "7px 13px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 850, border: `1px solid ${editando ? BRAND.warn : BRAND.border2}`, background: editando ? `${BRAND.warn}14` : "transparent", color: editando ? "#FBBF24" : BRAND.dim }}>{editando ? "✏ Editando" : "✏ Editar"}</button>
-            </div></div>{activeTab && orcamentos[activeTab] && (() => { const emp = empresas.find((e) => e.id === activeTab); return emp ? <OrcamentoDoc emp={emp} dados={orcamentos[activeTab]} editando={editando} onChange={(c, v) => fieldChange(activeTab, c, v)} /> : null; })()}</div>}
+            </div></div>{activeTab && orcamentos[activeTab] && (() => { const emp = empresas.find((e) => e.id === activeTab); return emp ? <><NaraQualityPanel emp={emp} dados={orcamentos[activeTab]} todosOrcamentos={orcamentos} /><OrcamentoDoc emp={emp} dados={orcamentos[activeTab]} editando={editando} onChange={(c, v) => fieldChange(activeTab, c, v)} /></> : null; })()}</div>}
 
             {step === "exportacao" && <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "28px 16px" }}><div style={{ width: "100%", maxWidth: 540, textAlign: "center" }}><div style={{ fontSize: 48, marginBottom: 10 }}>✅</div><div style={{ fontSize: 19, fontWeight: 900, marginBottom: 5 }}>Propostas Aprovadas!</div><div style={{ fontSize: 12, color: BRAND.dim, marginBottom: 20 }}>{empsSel.length} proposta{empsSel.length !== 1 ? "s" : ""} pronta{empsSel.length !== 1 ? "s" : ""}</div><div style={{ background: BRAND.panel, border: `1px solid ${BRAND.border}`, borderRadius: 15, padding: 16, marginBottom: 15 }}>{empsSel.map((emp) => <div key={emp.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "10px 12px", background: BRAND.panel2, borderRadius: 10, border: `1px solid ${emp.corPrimaria || BRAND.green2}20`, marginBottom: 8 }}><div style={{ textAlign: "left", minWidth: 0 }}><div title={tituloCardExportacao(emp)} style={{ fontSize: 13, fontWeight: 850, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 330 }}>{tituloCardExportacao(emp)}</div><div style={{ fontSize: 10, color: BRAND.dim }}>{detalheCardExportacao(emp)}</div></div><button onClick={() => baixarPDF(emp.id)} style={{ padding: "6px 12px", borderRadius: 14, background: `linear-gradient(135deg, ${BRAND.green2}, ${BRAND.blue2})`, border: `1px solid ${BRAND.green2}66`, fontSize: 11, color: "#fff", fontWeight: 900, cursor: "pointer", whiteSpace: "nowrap" }}>Baixar PDF</button></div>)}</div><button onClick={baixarTodosPDF} style={{ width: "100%", padding: 11, borderRadius: 10, border: `1px solid ${BRAND.green2}66`, background: `linear-gradient(135deg, ${BRAND.green2}, ${BRAND.blue2})`, color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 900, marginBottom: 9 }}>⬇ Baixar todos os PDFs</button><button onClick={resetOrcamento} style={{ width: "100%", padding: 10, borderRadius: 10, border: `1px solid ${BRAND.border2}`, background: "transparent", color: BRAND.dim, cursor: "pointer", fontSize: 12 }}>← Criar nova proposta</button></div></div>}
           </div>

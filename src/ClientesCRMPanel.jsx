@@ -665,7 +665,7 @@ function clienteCriadoApenasDeOrcamento(cliente = {}) {
 }
 
 function clienteVisivelNoCRM(cliente = {}) {
-  return Boolean(cliente.acompanhamentoAtivo) || clienteTemHistoricoHumano(cliente);
+  return clienteTemHistoricoHumano(cliente);
 }
 
 function contatoAgendaParaCliente(contato = {}, usuarioAtual, clienteAtual = {}) {
@@ -693,6 +693,30 @@ function contatoAgendaParaCliente(contato = {}, usuarioAtual, clienteAtual = {})
     userId: clienteAtual.userId || contato.userId || usuarioAtual?.id || "admin",
     criadoEm: clienteAtual.criadoEm || contato.criadoEm,
   });
+}
+
+function contatoAgendaFromClienteCRM(cliente = {}, usuarioAtual) {
+  const agora = new Date().toISOString();
+  const telefone = formatTelefone(cliente.whatsapp || cliente.telefone || cliente.telefone2 || "");
+  return {
+    id: cliente.agendaId || `ag_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    clienteId: cliente.id || "",
+    nome: clean(cliente.nome || cliente.empresa || "", 180),
+    empresa: clean(cliente.empresa || "", 180),
+    cargo: clean(cliente.cargo || "", 120),
+    decisor: clean(cliente.decisor || "", 120),
+    whatsapp: formatTelefone(cliente.whatsapp || telefone),
+    telefone: formatTelefone(cliente.telefone || telefone),
+    email: clean(cliente.email || cliente.email2 || "", 180),
+    endereco: clean(cliente.endereco || "", 240),
+    cidadeUf: clean(cliente.cidadeUf || "", 120),
+    segmento: clean(cliente.segmento || "", 120),
+    observacoes: clean(cliente.observacoes || cliente.perfil || "", 3000),
+    origem: clean(cliente.origem || "crm_cadastro_sem_historico", 120),
+    userId: cliente.userId || usuarioAtual?.id || "admin",
+    criadoEm: cliente.criadoEm || agora,
+    atualizadoEm: agora,
+  };
 }
 
 function idsOrcamentosVinculados(cliente = {}) {
@@ -850,8 +874,7 @@ export function ClientesCRMPanel({
     };
   }, []);
 
-  const enriquecidos = useMemo(() => {
-    return base.map((item) => {
+  const enriquecerClienteCRM = (item) => {
       const sugestoesPorNome = orcamentosCompativeisCliente(item, crm);
       const vinculadosExplicitos = Array.isArray(item.orcamentosVinculados) ? item.orcamentosVinculados : [];
       const sugestoesNaoVinculadas = sugestoesPorNome.filter((orc) => !vinculadosExplicitos.some((v) => v.orcamentoId === orc.id));
@@ -867,7 +890,10 @@ export function ClientesCRMPanel({
         _tags: tags,
         _playbook: sugerirPlaybookCliente(item, baseOrcamentos),
       };
-    }).sort((a, b) => b._score - a._score);
+  };
+
+  const enriquecidos = useMemo(() => {
+    return base.map(enriquecerClienteCRM).sort((a, b) => b._score - a._score);
   }, [base, crm]);
 
   const kpis = useMemo(() => {
@@ -925,7 +951,14 @@ export function ClientesCRMPanel({
     return ETIQUETAS_PADRAO.filter(([id]) => usadas.has(id));
   }, [enriquecidos]);
 
-  const ativo = enriquecidos.find((item) => item.id === ativoId) || filtrados[0] || null;
+  const ativoAvulso = useMemo(() => {
+    if (!ativoId || enriquecidos.some((item) => item.id === ativoId)) return null;
+    const bruto = (Array.isArray(clientes) ? clientes : []).find((item) => item.id === ativoId);
+    if (!bruto || (!bruto.acompanhamentoAtivo && !editando)) return null;
+    return enriquecerClienteCRM(bruto);
+  }, [ativoId, enriquecidos, clientes, crm, editando]);
+
+  const ativo = enriquecidos.find((item) => item.id === ativoId) || ativoAvulso || filtrados[0] || null;
   const relacionados = useMemo(() => (ativo ? orcamentosDoCliente(ativo, crm) : []), [ativo, crm]);
   const contatosAtivo = Array.isArray(ativo?.contatos) ? ativo.contatos : [];
   const orcamentosVinculadosAtivo = useMemo(
@@ -1143,9 +1176,33 @@ export function ClientesCRMPanel({
     }
     const nova = existe ? clientes.map((item) => (item.id === pronto.id ? pronto : item)) : [pronto, ...clientes];
     await salvarLista(nova);
+
+    if (!clienteTemHistoricoHumano(pronto)) {
+      const agendaAtual = contatosAgendaCRM.length ? contatosAgendaCRM : await carregarAgendaCRM();
+      const contatoAgenda = contatoAgendaFromClienteCRM(pronto, usuarioAtual);
+      const tel = telefoneKey(contatoAgenda.whatsapp || contatoAgenda.telefone);
+      const email = clean(contatoAgenda.email || "").toLowerCase();
+      const nomeBusca = textoBusca(contatoAgenda.nome || contatoAgenda.empresa || "");
+      const idxAgenda = (Array.isArray(agendaAtual) ? agendaAtual : []).findIndex((item) => {
+        const itemTel = telefoneKey(item.whatsapp || item.telefone);
+        const itemEmail = clean(item.email || "").toLowerCase();
+        const itemNome = textoBusca(item.nome || item.empresa || "");
+        return (
+          (pronto.id && item.clienteId === pronto.id) ||
+          (email && itemEmail === email) ||
+          (tel && itemTel === tel) ||
+          (nomeBusca && itemNome === nomeBusca)
+        );
+      });
+      const novaAgenda = idxAgenda >= 0
+        ? agendaAtual.map((item, index) => (index === idxAgenda ? { ...item, ...contatoAgenda, id: item.id || contatoAgenda.id } : item))
+        : [contatoAgenda, ...(Array.isArray(agendaAtual) ? agendaAtual : [])];
+      await salvarAgendaCRM(novaAgenda);
+    }
+
     setAtivoId(pronto.id);
     setEditando(false);
-    pushToast("Cliente salvo no CRM.", "ok");
+    pushToast(clienteTemHistoricoHumano(pronto) ? "Cliente salvo no CRM." : "Contato salvo na Agenda. Registre uma conversa para entrar no CRM.", "ok");
   };
 
   const excluirCliente = async () => {
